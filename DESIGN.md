@@ -11,6 +11,7 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 ## Players & hosting
 - **4–8 player co-op**, friendly fire **off**.
 - **Dedicated server** on the owner's Raspberry Pi 5 (16 GB, 64-bit Raspberry Pi OS, mildly overclocked), running 24/7 off an **NVMe drive**.
+- The same Pi may also run the owner's **Minecraft server**. Memory is not a concern (Dead Blocks peaked at ~1 GB in the benchmark); CPU is shared, so Dead Blocks should not assume it has all 4 cores. Advice given for Minecraft: Java edition on Paper (or Fabric + Lithium/C2ME), world pre-generated with Chunky, view-distance ~8 / simulation-distance ~6. Bedrock's official server does not run natively on ARM.
 - Friends connect **over the internet**. All players are on **Windows**.
 - Joining: each player picks a name, the server has a password, characters are saved by name.
 - **Time stops when nobody is online.**
@@ -92,10 +93,26 @@ Reference machine: 4-core 2.1 GHz cloud Xeon (not the Pi).
 - Chunk tasks are low-priority pool tasks; `project.godot` sets `threading/worker_pool/low_priority_thread_ratio=0.5` so 2 run at once on a 4-core Pi (the default allowed only 1).
 - **Pi results: pending.** The Pi 5 is expected to be roughly 2× slower per core, which would put Jolt@30 combined above 100%. If so, the next step is making zombies cheaper before M1/M3: spatial-hash spacing instead of O(n²), spreading zombie work over the idle cores, skipping render meshes on the server.
 
+## Server multi-core plan
+A Pi 5 has 4 cores. Today the simulation runs on one main thread, with chunk generation and meshing on 2 worker threads. The server must be designed from M1 so that work can spread over all cores; adding this later would be a rewrite.
+
+Rules for the server design:
+- **The world is simulated in independent regions.** A region is a group of players close together plus the area and zombies around them. This matches the Blood Moon rule that hordes split per player and merge when players group up: **one horde = one region**.
+- **Regions never touch each other's state during a tick.** Anything that crosses regions (a player or zombie moving between them, chat, global time, saving) happens in a short single-threaded step between ticks. Regions merge when players come together and split when they separate.
+- **Block edits go through one queue per tick**, applied in a fixed order, so two zombies hitting the same block never race.
+
+Steps, in order of payoff:
+1. **Chunk generation and meshing on worker threads**: done (M0). The server should also skip building render meshes and only build collision.
+2. **Physics server on its own thread** (`physics/3d/run_on_separate_thread`): a project setting; measure it with the benchmark.
+3. **One region per core**: when players are spread out, each region's zombies and AI run on a separate worker thread (WorkerThreadPool group task), in parallel.
+4. **One big horde across cores**: for the worst case (all players at one base), split zombie *thinking* (target choice, spacing via a spatial hash, which block to hit) across threads, then apply moves in order. To also parallelise *movement*, replace `move_and_slide` with our own block-grid movement, because Godot's physics calls must stay on the main thread.
+
+Expected gain: about **2.5–3×** more zombies on the same Pi, never a full 4×, because some work stays sequential and the Pi may share cores with Minecraft. The Pi benchmark results decide how soon step 4 is needed. Each step is checked with `tools/run_bench.sh`.
+
 ## Milestone plan
 - **M0 — Setup & measurement** (benchmark done; waiting on Pi results): GitHub repo; headless stress test (120 zombies + simulated players), run both here and on the Pi.
-- **M1 — Multiplayer foundation**: server/client split, dedicated headless Pi server build (Linux ARM64) + Windows client build, join with name + password, server-side save/load with autosave, time pauses when empty. Clients generate terrain from the seed; the server only sends block edits.
+- **M1 — Multiplayer foundation**: server/client split, dedicated headless Pi server build (Linux ARM64) + Windows client build, join with name + password, server-side save/load with autosave, time pauses when empty. Clients generate terrain from the seed; the server only sends block edits. The server is built around independent regions (see "Server multi-core plan"), with physics on its own thread and no render meshes.
 - **M2 — Death & respawn**: backpack drop (10 min, anyone can loot), beds, random spawn points, 60 s logout linger.
-- **M3 — Zombie rework**: proximity-only aggression on normal days, Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot.
+- **M3 — Zombie rework**: proximity-only aggression on normal days, Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
 - **M4 — Exploration & loot**: distance-based danger scaling, ruins/POIs, chests, loot tables with rarity, 3-day refill, doors with locks/PIN.
 - **M5 — Smarter zombies**: pathfinding toward the weakest part of a base.
