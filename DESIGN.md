@@ -41,6 +41,7 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 
 ### Physics
 - Keep Godot's full physics for zombies for now. Verify with a 120-zombie stress test on the Pi; fall back to cheaper block-grid collision only if needed.
+- M0 results so far (see "Server performance" below): Godot's default physics cannot carry 120 zombies even on a desktop-class core. **Jolt Physics at 30 ticks/s** is the leading server setup.
 
 ## Death & respawn
 - On death you drop a **backpack containing everything** (hotbar included).
@@ -75,8 +76,24 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - Owner to check whether the home connection is behind CGNAT (router WAN IP vs. public IP). This decides port forwarding vs. a relay such as playit.gg or Tailscale.
 - World height is currently 64 blocks; may need raising for bunkers and multi-floor ruins.
 
+## Server performance (M0)
+Measured with `tools/run_bench.sh` (seed 4242, 60 s per scenario). "Load" is the share of one CPU core the game's main thread uses; the server falls behind above ~85%.
+
+Reference machine: 4-core 2.1 GHz cloud Xeon (not the Pi).
+
+| Setup | Explore: 7 players sprinting | Horde: 120 zombies | Combined |
+|---|---|---|---|
+| Godot physics, 60 ticks/s | 22% | 100% (only 45 of 60 ticks/s) | 99% |
+| Jolt, 60 ticks/s | 23% | 83% | 98% |
+| Jolt, 30 ticks/s | 17% | 43% | 58% |
+
+- Zombie cost per tick: ~0.18 ms each with Godot physics, ~0.11 ms with Jolt. Most of it is `move_and_slide`; the O(n²) zombie spacing check adds ~0.04 ms each.
+- Chunk cost: ~4.5 ms generate + ~8 ms mesh (worker threads) + ~2.5–3 ms upload on the main thread (mostly the collision shape). Chunk streaming kept up with 7 sprinting explorers in every setup (0% waiting).
+- Chunk tasks are low-priority pool tasks; `project.godot` sets `threading/worker_pool/low_priority_thread_ratio=0.5` so 2 run at once on a 4-core Pi (the default allowed only 1).
+- **Pi results: pending.** The Pi 5 is expected to be roughly 2× slower per core, which would put Jolt@30 combined above 100%. If so, the next step is making zombies cheaper before M1/M3: spatial-hash spacing instead of O(n²), spreading zombie work over the idle cores, skipping render meshes on the server.
+
 ## Milestone plan
-- **M0 — Setup & measurement**: GitHub repo; headless stress test (120 zombies + simulated players), run both here and on the Pi.
+- **M0 — Setup & measurement** (benchmark done; waiting on Pi results): GitHub repo; headless stress test (120 zombies + simulated players), run both here and on the Pi.
 - **M1 — Multiplayer foundation**: server/client split, dedicated headless Pi server build (Linux ARM64) + Windows client build, join with name + password, server-side save/load with autosave, time pauses when empty. Clients generate terrain from the seed; the server only sends block edits.
 - **M2 — Death & respawn**: backpack drop (10 min, anyone can loot), beds, random spawn points, 60 s logout linger.
 - **M3 — Zombie rework**: proximity-only aggression on normal days, Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot.
