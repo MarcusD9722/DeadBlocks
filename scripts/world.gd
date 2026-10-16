@@ -128,6 +128,8 @@ var crack_mats: Array[StandardMaterial3D] = []
 var crack_mesh: BoxMesh
 var gen_count := 0
 var mesh_count := 0
+## Set whenever chunk work may have become possible, so _schedule can skip its full scan otherwise.
+var sched_dirty := true
 
 
 func setup(s: int, tex) -> void:
@@ -201,18 +203,27 @@ func _rebuild_order() -> void:
 					var k := Vector2i(c.x + dx, c.y + dz)
 					if d2 < int(best.get(k, 1 << 30)):
 						best[k] = d2
-	var list := []
+	# Bucket by squared distance so nearer chunks come first.
+	var buckets := []
+	buckets.resize(r1 * r1 + 2)
+	for i in buckets.size():
+		buckets[i] = []
 	for k in best:
-		list.append([best[k], k])
-	list.sort_custom(func(a, b): return a[0] < b[0])
-	for e in list:
-		order.append(e[1])
-		if int(e[0]) <= render_radius * render_radius + 1:
-			mesh_set[e[1]] = true
+		buckets[best[k]].append(k)
+	var mesh_lim := render_radius * render_radius + 1
+	for d2 in buckets.size():
+		for k in buckets[d2]:
+			order.append(k)
+			if d2 <= mesh_lim:
+				mesh_set[k] = true
+	sched_dirty = true
 
 
-func _unload_far() -> void:
-	var lim := render_radius + 3
+## Free chunks farther than lim chunks from every center (default: render radius + 3).
+## Edited chunks keep their block data.
+func _unload_far(lim := -1) -> void:
+	if lim < 0:
+		lim = render_radius + 3
 	for key in chunks.keys():
 		if not _near_center(key, lim):
 			var c: Chunk = chunks[key]
@@ -243,6 +254,7 @@ func _reap() -> void:
 		if WorkerThreadPool.is_task_completed(tasks[i]):
 			WorkerThreadPool.wait_for_task_completion(tasks[i])
 			tasks.remove_at(i)
+			sched_dirty = true
 		i -= 1
 
 
@@ -256,8 +268,12 @@ func _schedule() -> void:
 			if c != null and c.meshing:
 				urgent.append(k)
 				break
+	if not sched_dirty:
+		return
+	sched_dirty = false
 	for k in order:
 		if tasks.size() >= max_tasks:
+			sched_dirty = true
 			return
 		var c: Chunk = chunks.get(k)
 		if c == null:
@@ -302,6 +318,7 @@ func _gen_done(k: Vector2i, d: PackedByteArray) -> void:
 	c.has_data = true
 	c.generating = false
 	gen_count += 1
+	sched_dirty = true
 
 
 func _task_mesh(k: Vector2i, ver: int, d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> void:
@@ -358,12 +375,17 @@ func _mesh_done(k: Vector2i, ver: int, buf: MeshBuf) -> void:
 	if c == null:
 		return
 	c.meshing = false
+	sched_dirty = true
 	if ver < c.built_ver:
+		return
+	if not _near_center(k, render_radius + 3):
+		# Out of range now: drop the result but keep the chunk marked as needing a mesh,
+		# so it is rebuilt if a player comes back before it is unloaded.
+		_free_visual(c)
+		c.built_ver = -1
 		return
 	c.built_ver = ver
 	mesh_count += 1
-	if not _near_center(k, render_radius + 3):
-		return
 	var origin := Vector3(k.x * CH, 0, k.y * CH)
 	if c.node == null:
 		c.node = MeshInstance3D.new()
@@ -482,6 +504,7 @@ func _dirty(k: Vector2i) -> void:
 	if c == null:
 		return
 	c.mesh_ver += 1
+	sched_dirty = true
 	if not urgent.has(k):
 		urgent.append(k)
 

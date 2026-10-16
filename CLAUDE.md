@@ -44,7 +44,7 @@ Replace `godot` with the path to the Godot 4.7.2 executable (on Windows, `Godot_
   `godot --headless --path . -- --autotest --seed=4242`
   It prints PASS/FAIL lines and ends with `AUTOTEST DONE fails=N`. Seed 4242 is the reference seed and should give `fails=0`. On some other seeds the "zombie damaged/broke the wall" checks fail because the zombie walks around the short test wall. That is a test limitation, not a game bug.
 - **Screenshots:** add `--shots=<absolute dir>` and run with a real renderer instead of `--headless`.
-- **Server benchmark:** `GODOT=<path to godot> ./tools/run_bench.sh` (about 13 minutes; add `--bench-secs=8` for a quick check). It runs `-- --bench` three times, with a temporary `override.cfg` choosing the physics engine and tick rate, and prints a results block. A single run: `godot --headless --path . -- --bench [--bench-secs=60] [--zombies=120] [--explorers=7] [--radius=6] [--only=horde]`.
+- **Server benchmark:** `GODOT=<path to godot> ./tools/run_bench.sh` (about 13 minutes; add `--bench-secs=8` for a quick check). It runs `-- --bench` three times on seed 4242, with a temporary `override.cfg` choosing the physics engine and tick rate. It prints a results block and saves it to `bench_results/summary.txt`. A single run: `godot --headless --path . -- --bench --seed=4242 [--bench-secs=60] [--zombies=120] [--explorers=7] [--radius=6] [--only=horde]`. Don't run two benchmarks or other heavy work at the same time, or the timings are meaningless.
 - **Windows export:** first install the 4.7.2 export templates (Editor → Manage Export Templates → Download). Then run:
   `godot --headless --path . --export-release "Windows Desktop" build/DeadBlocks.exe`
   The .pck is embedded, so the result is a single .exe.

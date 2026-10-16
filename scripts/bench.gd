@@ -17,7 +17,9 @@ var lines: PackedStringArray = PackedStringArray()
 var tick_ms := 1000.0 / 60.0
 
 var recording := false
-## Main-thread work per frame in ms, from the first callback of the frame to the end of its deferred calls.
+## Main-thread work per frame in ms: from this node's first callback in the frame (it runs first in
+## both physics and idle steps) to a deferred call queued twice, so it runs after the chunk results
+## that worker threads queued during the frame.
 var busy: PackedFloat32Array = PackedFloat32Array()
 var frame_start_us := 0
 var explorers: Array = []
@@ -28,6 +30,7 @@ var zombie_min := 0
 var zombie_max := 0
 var sample_i := 0
 var fort_cells: Array[Vector3i] = []
+var explore_ms := -1.0
 
 
 func _ready() -> void:
@@ -70,8 +73,7 @@ func _physics_process(_delta: float) -> void:
 func _process(delta: float) -> void:
 	if frame_start_us == 0:
 		frame_start_us = Time.get_ticks_usec()
-	# Deferred calls (finished chunk meshes etc.) run after every _process, in the order queued.
-	call_deferred("_frame_end")
+	call_deferred("_frame_end", false)
 	var p = G.player
 	if p != null:
 		p.health = p.max_health
@@ -96,7 +98,11 @@ func _process(delta: float) -> void:
 			_sample_counts()
 
 
-func _frame_end() -> void:
+func _frame_end(requeued: bool) -> void:
+	if not requeued:
+		# Re-queue once so this lands behind deferred calls queued during the process step.
+		call_deferred("_frame_end", true)
+		return
 	if recording and frame_start_us != 0:
 		busy.append((Time.get_ticks_usec() - frame_start_us) / 1000.0)
 	frame_start_us = 0
@@ -131,7 +137,8 @@ func _run() -> void:
 	var r := G.arg_value("--radius=")
 	if r != "":
 		w.render_radius = int(r)
-		w.centers.clear()
+		w._rebuild_order()
+		w._unload_far()
 	var t0 := Time.get_ticks_msec()
 	while w.load_progress() < 0.999 and Time.get_ticks_msec() - t0 < 60000:
 		await _wait(0.25)
@@ -143,7 +150,7 @@ func _run() -> void:
 		str(ProjectSettings.get_setting("physics/3d/physics_engine")), tps, w.render_radius, w.max_tasks, int(secs), g.seed_v])
 	_micro()
 	var idle_ms := await _scenario("idle", 10.0, 0, 0, 0.0)
-	await _scenario("explore", secs, 0, explorer_count, idle_ms)
+	explore_ms = await _scenario("explore", secs, 0, explorer_count, idle_ms)
 	await _scenario("horde", secs, zombie_target, 0, idle_ms)
 	await _scenario("combined", secs, zombie_target, explorer_count, idle_ms)
 	_out("memory: %.0f MB now, %.0f MB peak | chunks in memory: %d" % [
@@ -181,24 +188,45 @@ func _micro() -> void:
 		for j in 3:
 			datas[Vector2i(base + i, base + j)] = g.generate(base + i, base + j)
 	var gen_ms := (Time.get_ticks_usec() - t0) / 1000.0 / float((n + 2) * 3)
+	var bufs := []
 	t0 = Time.get_ticks_usec()
 	for i in range(1, n + 1):
 		var k := Vector2i(base + i, base + 1)
-		w._build(datas[k], datas[k + Vector2i(1, 0)], datas[k + Vector2i(-1, 0)], datas[k + Vector2i(0, 1)], datas[k + Vector2i(0, -1)])
+		bufs.append(w._build(datas[k], datas[k + Vector2i(1, 0)], datas[k + Vector2i(-1, 0)], datas[k + Vector2i(0, 1)], datas[k + Vector2i(0, -1)]))
 	var build_ms := (Time.get_ticks_usec() - t0) / 1000.0 / float(n)
-	_out("chunk cost (one thread): generate %.1f ms + mesh/collision %.1f ms = %.1f ms per chunk" % [gen_ms, build_ms, gen_ms + build_ms])
+	# The part world._mesh_done does on the main thread: mesh and collision shape creation.
+	t0 = Time.get_ticks_usec()
+	for buf in bufs:
+		var arr := []
+		arr.resize(Mesh.ARRAY_MAX)
+		arr[Mesh.ARRAY_VERTEX] = buf.verts
+		arr[Mesh.ARRAY_NORMAL] = buf.norms
+		arr[Mesh.ARRAY_TEX_UV] = buf.uvs
+		arr[Mesh.ARRAY_COLOR] = buf.cols
+		arr[Mesh.ARRAY_INDEX] = buf.idx
+		var am := ArrayMesh.new()
+		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		var sh := ConcavePolygonShape3D.new()
+		sh.set_faces(buf.faces)
+	var upload_ms := (Time.get_ticks_usec() - t0) / 1000.0 / float(n)
+	_out("chunk cost: generate %.1f ms + build mesh %.1f ms (worker threads) + upload %.1f ms (main thread) = %.1f ms per chunk" % [
+		gen_ms, build_ms, upload_ms, gen_ms + build_ms + upload_ms])
 
 
-## Runs one scenario and returns its average main-thread ms per tick.
+## Runs one scenario and returns its average main-thread ms per tick (-1 if skipped by --only).
 func _scenario(name: String, dur: float, zombies: int, n_expl: int, idle_ms: float) -> float:
 	if not only.is_empty() and not only.has(name) and name != "idle":
-		return 0.0
+		return -1.0
 	var g = G.game
 	var w = G.world
 	_clear_mobs()
 	explorers.clear()
 	g.extra_stream_points = []
 	await _wait(2.0)
+	# Drop terrain an earlier scenario's explorers loaded, so this one streams fresh land.
+	w._unload_far(w.render_radius + 1)
+	await _wait(1.0)
+	w._unload_far(w.render_radius + 1)
 	if zombies > 0:
 		_build_fort()
 		g.day = 7
@@ -235,6 +263,7 @@ func _scenario(name: String, dur: float, zombies: int, n_expl: int, idle_ms: flo
 		await _wait(1.0)
 		elapsed = (Time.get_ticks_usec() - t0) / 1000000.0
 		if zombies > 0:
+			g.time = 20.5  # keep the Blood Moon going however long the run is
 			_top_up(zombies)
 	recording = false
 	var wall := (Time.get_ticks_usec() - t0) / 1000000.0
@@ -260,8 +289,15 @@ func _scenario(name: String, dur: float, zombies: int, n_expl: int, idle_ms: flo
 		for c in fort_cells:
 			if w.get_blockv(c) == Blocks.AIR:
 				broken += 1
-		_out("  zombies alive: %d-%d (about %.3f ms each per tick) | base wall blocks smashed: %d of %d" % [
-			zombie_min, zombie_max, maxf(0.0, per_tick - idle_ms) / maxf(1.0, float(zombie_max)), broken, fort_cells.size()])
+		# Per-zombie cost = extra time over the same run without zombies (idle, or explore for combined).
+		var base_ms := idle_ms
+		if n_expl > 0:
+			base_ms = explore_ms
+		var each := ""
+		if base_ms >= 0.0:
+			each = " (about %.3f ms each per tick)" % (maxf(0.0, per_tick - base_ms) / maxf(1.0, float(zombie_max)))
+		_out("  zombies alive: %d-%d%s | base wall blocks smashed: %d of %d" % [
+			zombie_min, zombie_max, each, broken, fort_cells.size()])
 	if n_expl > 0:
 		var dist := 0.0
 		for e in explorers:

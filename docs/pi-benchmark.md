@@ -5,7 +5,7 @@ This measures whether the Pi can run the Dead Blocks server. It simulates:
 - 7 players sprinting into new land in different directions,
 - both at the same time.
 
-It runs three times, once per physics setup, and takes about **13 minutes** in total. Nothing is installed system-wide except a few standard packages.
+It runs three times, once per physics setup, and takes about **13 minutes** in total. Every run uses the same world (seed 4242), so the numbers can be compared with other machines.
 
 ## What you need
 - Raspberry Pi 5 with **64-bit** Raspberry Pi OS.
@@ -17,23 +17,31 @@ You can type these commands on the Pi directly or over SSH.
 ## 1. Install the tools
 ```bash
 sudo apt update
-sudo apt install -y git unzip wget gh tmux
+sudo apt install -y git unzip wget tmux
 ```
 
-## 2. Sign in to GitHub
-The repository is private, so the Pi needs to sign in once:
+## 2. Download the game code
+**If the GitHub repository is public**, this is all you need:
 ```bash
+git clone --branch m0-stress-test https://github.com/MarcusD9722/deadblocks ~/deadblocks
+```
+
+**If the repository is private**, the Pi has to sign in to GitHub once first:
+```bash
+sudo apt install -y gh
 gh auth login
 ```
-Pick **GitHub.com**, then **HTTPS**, then answer **Yes** to "authenticate Git", then **Login with a web browser**. It shows an 8-character code. On your phone or PC, open https://github.com/login/device, sign in, and enter the code.
-
-## 3. Download the game code
+Pick **GitHub.com**, then **HTTPS**, then answer **Yes** to "authenticate Git", then **Login with a web browser**.
+1. It shows an 8-character code and says *Press Enter to open github.com in your browser*. Press **Enter** on the Pi.
+2. If it then says it **failed to open a web browser**, that's fine. On your phone or PC, open https://github.com/login/device, sign in, and type the code.
+3. Wait until the Pi prints **Logged in as …**, then run:
 ```bash
 gh repo clone MarcusD9722/deadblocks ~/deadblocks -- --branch m0-stress-test
 ```
-(Once the benchmark is merged into `main`, leave off everything after `~/deadblocks`.)
 
-## 4. Download Godot for the Pi
+(Once the benchmark is merged into `main`, you can leave out the branch part.)
+
+## 3. Download Godot for the Pi
 ```bash
 mkdir -p ~/godot && cd ~/godot
 wget https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.arm64.zip
@@ -41,7 +49,7 @@ unzip Godot_v4.7.2-stable_linux.arm64.zip
 chmod +x Godot_v4.7.2-stable_linux.arm64
 ```
 
-## 5. Run the benchmark
+## 4. Run the benchmark
 If you're on SSH, start `tmux` first, so the run survives if your connection drops:
 ```bash
 tmux
@@ -53,17 +61,25 @@ GODOT=~/godot/Godot_v4.7.2-stable_linux.arm64 ./tools/run_bench.sh
 ```
 Leave the Pi alone while it runs, since other heavy programs skew the numbers. It prints `[1/3]`, `[2/3]` and `[3/3]` as it goes.
 
-## 6. Send back the results
-When it finishes, copy everything between the two `####### COPY …` lines and paste it to Claude. The same results are saved in `~/deadblocks/bench_results/`.
+## 5. Send back the results
+The results block is long, and scrolling up inside tmux doesn't work the normal way. So when the run finishes:
+1. Type `exit` to leave tmux (only if you started it).
+2. Show the saved results:
+   ```bash
+   cat ~/deadblocks/bench_results/summary.txt
+   ```
+3. Copy everything between the two `####### COPY …` lines and paste it to Claude.
+
+If a run crashed, its section says **FAILED** and includes the error. Paste that as it is, too.
 
 ## If something goes wrong
 - **"Permission denied" on `run_bench.sh`:** run `chmod +x tools/run_bench.sh` and try again.
-- **"No results found":** send the last 40 lines of the first log: `tail -n 40 ~/deadblocks/bench_results/log_1.txt`
 - **SSH dropped mid-run:** log back in and run `tmux attach`.
-- **Shorter test run:** add `--bench-secs=20` at the end of the run command. The numbers get noisier.
+- **Shorter test run:** add `--bench-secs=20` at the end of the run command. The numbers get noisier, and the combined scenario comes out a little optimistic.
 
 ## Reading the results
 - **load:** how much of one CPU core the game's main thread used. Under 50% is **OK**, 50–85% is **TIGHT**, and over 85% is **OVERLOADED**, meaning the server falls behind and the game slows down for everyone.
 - **ticks/s:** how many simulation steps per second the server managed. It should match the target (60 or 30).
-- **chunk cost:** time to create one piece of terrain. Comparing this number between machines shows how much faster or slower the Pi is.
+- **chunk cost:** time to create one piece of terrain, split into the part done on background threads and the part done on the main thread. Comparing these between machines shows how much faster or slower the Pi is.
 - **waiting on chunks:** how often a sprinting player would have to wait for terrain to load. Ideally 0%.
+- **pi during this run:** the hottest the CPU got and its clock speed during that run. A clock below the normal 2400 MHz (or your overclock) means it slowed itself down.
