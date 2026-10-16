@@ -18,7 +18,7 @@ The owner (Marcus) playtests on Windows and gives feedback. Each round of work s
 |---|---|
 | `g.gd` | Autoload `G`. Global refs (game, world, player, hud, tex, sfx) and command-line args |
 | `game.gd` | Game states (loading/title/playing/menu/paused/dead), day-night cycle and sky, Blood Moon, zombie and animal spawning, input bindings |
-| `world.gd` | Chunked voxel world (16×64×16 chunks). Terrain generation and meshing run on WorkerThreadPool. Also holds raycasts, set_block, zombie block damage with crack overlays, and the torch/campfire lights |
+| `world.gd` | Chunked voxel world (16×64×16 chunks). Keeps chunks loaded around one or more centers (`update_centers`, one per player). Terrain generation and meshing run on WorkerThreadPool. Also holds raycasts, set_block, zombie block damage with crack overlays, and the torch/campfire lights |
 | `world_gen.gd` | Deterministic terrain: hills, plains/forest/desert biomes, caves, coal/iron ore, trees, berry bushes |
 | `blocks.gd` | Block ids and per-block tables (atlas tiles, shape, solid, opaque, hardness, tool, required pick tier, zombie HP). **Block id = item id** |
 | `items.gd` | Non-block items (ids ≥ 100): tools, weapons, food |
@@ -32,6 +32,9 @@ The owner (Marcus) playtests on Windows and gives feedback. Each round of work s
 | `tex.gd` | Procedural 16×16 texture atlas and item icons |
 | `sfx.gd` | Procedural sound effects |
 | `autotest.gd` | Automated playtest, run with `-- --autotest` |
+| `bench.gd` | Server load benchmark (Blood Moon horde, explorers streaming chunks), run with `-- --bench` |
+
+Outside `scripts/`: `tools/run_bench.sh` runs the benchmark once per physics setup; `docs/pi-benchmark.md` is the owner's step-by-step guide for running it on the Raspberry Pi.
 
 ## Run / test / build
 Replace `godot` with the path to the Godot 4.7.2 executable (on Windows, `Godot_v4.7.2-stable_win64_console.exe` shows console output).
@@ -41,6 +44,7 @@ Replace `godot` with the path to the Godot 4.7.2 executable (on Windows, `Godot_
   `godot --headless --path . -- --autotest --seed=4242`
   It prints PASS/FAIL lines and ends with `AUTOTEST DONE fails=N`. Seed 4242 is the reference seed and should give `fails=0`. On some other seeds the "zombie damaged/broke the wall" checks fail because the zombie walks around the short test wall. That is a test limitation, not a game bug.
 - **Screenshots:** add `--shots=<absolute dir>` and run with a real renderer instead of `--headless`.
+- **Server benchmark:** `GODOT=<path to godot> ./tools/run_bench.sh` (about 13 minutes; add `--bench-secs=8` for a quick check). It runs `-- --bench` three times, with a temporary `override.cfg` choosing the physics engine and tick rate, and prints a results block. A single run: `godot --headless --path . -- --bench [--bench-secs=60] [--zombies=120] [--explorers=7] [--radius=6] [--only=horde]`.
 - **Windows export:** first install the 4.7.2 export templates (Editor → Manage Export Templates → Download). Then run:
   `godot --headless --path . --export-release "Windows Desktop" build/DeadBlocks.exe`
   The .pck is embedded, so the result is a single .exe.

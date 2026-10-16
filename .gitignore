@@ -1,3 +1,5 @@
 .godot/
 build/
 *.tmp
+override.cfg
+bench_results/

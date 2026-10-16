@@ -15,6 +15,10 @@ var warned := {}
 var spawn_timer := 2.0
 var animal_timer := 1.0
 var spawn_pos := Vector3.ZERO
+## Natural zombie/animal spawning. The benchmark turns it off to control the mob count itself.
+var spawner_enabled := true
+## Positions the world keeps loaded besides the local player (benchmark explorers now, remote players later).
+var extra_stream_points: Array = []
 
 var env: Environment
 var sky_mat: ProceduralSkyMaterial
@@ -76,6 +80,9 @@ func _ready() -> void:
 	if G.has_arg("--autotest"):
 		var t := preload("res://scripts/autotest.gd").new()
 		add_child(t)
+	elif G.has_arg("--bench"):
+		var b := preload("res://scripts/bench.gd").new()
+		add_child(b)
 
 
 func _setup_input() -> void:
@@ -142,23 +149,29 @@ func _find_spawn() -> Vector3:
 func _process(delta: float) -> void:
 	match state:
 		"loading":
-			world.update_center(player.global_position)
+			world.update_centers(_stream_points())
 			var p: float = world.load_progress()
 			hud.set_loading(p)
 			if p >= 0.999 or (p > 0.55 and world.is_ready_at(spawn_pos) and _elapsed() > 25.0):
 				state = "title"
 				hud.show_ready()
 		"title":
-			world.update_center(player.global_position)
+			world.update_centers(_stream_points())
 		"playing", "menu":
-			world.update_center(player.global_position)
+			world.update_centers(_stream_points())
 			_tick_time(delta)
 			_spawner(delta)
 		"dead":
-			world.update_center(player.global_position)
+			world.update_centers(_stream_points())
 
 
 var _t0 := Time.get_ticks_msec()
+
+
+func _stream_points() -> Array:
+	var pts: Array = [player.global_position]
+	pts.append_array(extra_stream_points)
+	return pts
 
 
 func _elapsed() -> float:
@@ -395,7 +408,7 @@ func _update_sky() -> void:
 # ------------------------------------------------------------ spawning
 
 func _spawner(delta: float) -> void:
-	if player.dead:
+	if player.dead or not spawner_enabled:
 		return
 	spawn_timer -= delta
 	animal_timer -= delta

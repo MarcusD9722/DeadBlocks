@@ -117,7 +117,7 @@ var seed_v := 0
 var chunks := {}
 var order: Array[Vector2i] = []
 var mesh_set := {}
-var center := Vector2i(1 << 30, 1 << 30)
+var centers: Array[Vector2i] = []
 var tasks: Array[int] = []
 var max_tasks := 4
 var urgent: Array[Vector2i] = []
@@ -126,6 +126,8 @@ var damage := {}
 var crack_nodes := {}
 var crack_mats: Array[StandardMaterial3D] = []
 var crack_mesh: BoxMesh
+var gen_count := 0
+var mesh_count := 0
 
 
 func setup(s: int, tex) -> void:
@@ -160,25 +162,48 @@ func _exit_tree() -> void:
 # ------------------------------------------------------------ streaming
 
 func update_center(pos: Vector3) -> void:
-	var c := Vector2i(floori(pos.x / CH), floori(pos.z / CH))
-	if c != center:
-		center = c
+	update_centers([pos])
+
+
+## Keep chunks loaded around every position in the list (one per player on a server).
+func update_centers(positions: Array) -> void:
+	var cs: Array[Vector2i] = []
+	for pos in positions:
+		var c := Vector2i(floori(pos.x / CH), floori(pos.z / CH))
+		if not cs.has(c):
+			cs.append(c)
+	if cs != centers:
+		centers = cs
 		_rebuild_order()
 		_unload_far()
 	_reap()
 	_schedule()
 
 
+func _near_center(k: Vector2i, lim: int) -> bool:
+	for c in centers:
+		if absi(k.x - c.x) <= lim and absi(k.y - c.y) <= lim:
+			return true
+	return false
+
+
 func _rebuild_order() -> void:
 	order.clear()
 	mesh_set.clear()
 	var r1 := render_radius + 1
+	# Each chunk is ranked by its distance to the nearest center.
+	var best := {}
+	for c in centers:
+		for dz in range(-r1, r1 + 1):
+			for dx in range(-r1, r1 + 1):
+				var d2 := dx * dx + dz * dz
+				if d2 <= r1 * r1 + 1:
+					var k := Vector2i(c.x + dx, c.y + dz)
+					if d2 < int(best.get(k, 1 << 30)):
+						best[k] = d2
 	var list := []
-	for dz in range(-r1, r1 + 1):
-		for dx in range(-r1, r1 + 1):
-			var d2 := dx * dx + dz * dz
-			if d2 <= r1 * r1 + 1:
-				list.append([d2, Vector2i(center.x + dx, center.y + dz)])
+	for k in best:
+		list.append([best[k], k])
 	list.sort_custom(func(a, b): return a[0] < b[0])
 	for e in list:
 		order.append(e[1])
@@ -189,7 +214,7 @@ func _rebuild_order() -> void:
 func _unload_far() -> void:
 	var lim := render_radius + 3
 	for key in chunks.keys():
-		if absi(key.x - center.x) > lim or absi(key.y - center.y) > lim:
+		if not _near_center(key, lim):
 			var c: Chunk = chunks[key]
 			if c.generating or c.meshing:
 				continue
@@ -276,6 +301,7 @@ func _gen_done(k: Vector2i, d: PackedByteArray) -> void:
 	c.data = d
 	c.has_data = true
 	c.generating = false
+	gen_count += 1
 
 
 func _task_mesh(k: Vector2i, ver: int, d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> void:
@@ -335,7 +361,8 @@ func _mesh_done(k: Vector2i, ver: int, buf: MeshBuf) -> void:
 	if ver < c.built_ver:
 		return
 	c.built_ver = ver
-	if absi(k.x - center.x) > render_radius + 3 or absi(k.y - center.y) > render_radius + 3:
+	mesh_count += 1
+	if not _near_center(k, render_radius + 3):
 		return
 	var origin := Vector3(k.x * CH, 0, k.y * CH)
 	if c.node == null:
