@@ -59,7 +59,7 @@ Then:
 cd ~/deadblocks
 GODOT=~/godot/Godot_v4.7.2-stable_linux.arm64 ./tools/run_bench.sh
 ```
-Leave the Pi alone while it runs, since other heavy programs skew the numbers. It prints `[1/3]`, `[2/3]` and `[3/3]` as it goes.
+Leave the Pi alone while it runs, since other heavy programs skew the numbers. It prints `[1/3]`, `[2/3]` and `[3/3]` as it goes. To stop it early, press **Ctrl+C**.
 
 ## 5. Send back the results
 The results block is long, and scrolling up inside tmux doesn't work the normal way. So when the run finishes:
@@ -72,6 +72,14 @@ The results block is long, and scrolling up inside tmux doesn't work the normal 
 
 If a run crashed, its section says **FAILED** and includes the error. Paste that as it is, too.
 
+## Running it again later
+Steps 1–3 are only needed the first time. To run the latest version of the benchmark again:
+```bash
+cd ~/deadblocks
+git pull
+```
+Then go straight to step 4. (Once the benchmark is merged into `main`, run `git checkout main` before `git pull`.)
+
 ## If something goes wrong
 - **"Permission denied" on `run_bench.sh`:** run `chmod +x tools/run_bench.sh` and try again.
 - **SSH dropped mid-run:** log back in and run `tmux attach`.
@@ -82,4 +90,4 @@ If a run crashed, its section says **FAILED** and includes the error. Paste that
 - **ticks/s:** how many simulation steps per second the server managed. It should match the target (60 or 30).
 - **chunk cost:** time to create one piece of terrain, split into the part done on background threads and the part done on the main thread. Comparing these between machines shows how much faster or slower the Pi is.
 - **waiting on chunks:** how often a sprinting player would have to wait for terrain to load. Ideally 0%.
-- **pi during this run:** the hottest the CPU got and its clock speed during that run. A clock below the normal 2400 MHz (or your overclock) means it slowed itself down.
+- **pi during this run:** the hottest the CPU got, its top clock speed, and whether it **throttled**, meaning it slowed itself down because of heat or a weak power supply. The clock dropping during quiet moments is normal. Only `throttled: YES` is a problem; if you see it, improve the cooling or use the official 27 W power supply and run it again.

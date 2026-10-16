@@ -5,6 +5,7 @@ extends Node
 ## reports how busy the main thread is. Run it on the server machine (the Raspberry Pi) to see
 ## whether it can host the game. tools/run_bench.sh runs it per physics setup; see docs/pi-benchmark.md.
 
+const WorldScript := preload("res://scripts/world.gd")
 const SPRINT := 6.9
 const FORT_R := 4
 
@@ -30,6 +31,8 @@ var zombie_min := 0
 var zombie_max := 0
 var sample_i := 0
 var fort_cells: Array[Vector3i] = []
+## Block ids the fort replaced, so it can be removed again after a siege.
+var fort_old := {}
 var explore_ms := -1.0
 
 
@@ -147,7 +150,7 @@ func _run() -> void:
 	_out("=== DEAD BLOCKS BENCH RESULTS ===")
 	_out("machine: %s | %s | %d cores | Godot %s" % [OS.get_name(), _cpu_name(), OS.get_processor_count(), Engine.get_version_info()["string"]])
 	_out("setup: physics %s at %d ticks/s | chunk radius %d | chunk worker threads %d | %d s per scenario | seed %d" % [
-		str(ProjectSettings.get_setting("physics/3d/physics_engine")), tps, w.render_radius, w.max_tasks, int(secs), g.seed_v])
+		str(ProjectSettings.get_setting("physics/3d/physics_engine")), tps, w.render_radius, _chunk_threads(), int(secs), g.seed_v])
 	_micro()
 	var idle_ms := await _scenario("idle", 10.0, 0, 0, 0.0)
 	explore_ms = await _scenario("explore", secs, 0, explorer_count, idle_ms)
@@ -165,6 +168,16 @@ func _run() -> void:
 	else:
 		print("Could not write results to ", out_path)
 	get_tree().quit()
+
+
+## How many chunk tasks can really run at once: world.gd queues up to max_tasks low-priority
+## tasks, and Godot runs low-priority tasks on only part of its worker pool.
+func _chunk_threads() -> int:
+	var pool := int(ProjectSettings.get_setting("threading/worker_pool/max_threads"))
+	if pool < 1:
+		pool = OS.get_processor_count()
+	var ratio := float(ProjectSettings.get_setting("threading/worker_pool/low_priority_thread_ratio"))
+	return mini(G.world.max_tasks, clampi(int(pool * ratio), 1, maxi(1, pool - 1)))
 
 
 func _cpu_name() -> String:
@@ -194,21 +207,17 @@ func _micro() -> void:
 		var k := Vector2i(base + i, base + 1)
 		bufs.append(w._build(datas[k], datas[k + Vector2i(1, 0)], datas[k + Vector2i(-1, 0)], datas[k + Vector2i(0, 1)], datas[k + Vector2i(0, -1)]))
 	var build_ms := (Time.get_ticks_usec() - t0) / 1000.0 / float(n)
-	# The part world._mesh_done does on the main thread: mesh and collision shape creation.
+	# The main-thread part (world.apply_mesh): render mesh, collision shape and lights, built far
+	# away from play on throwaway chunks.
+	var temp := []
 	t0 = Time.get_ticks_usec()
-	for buf in bufs:
-		var arr := []
-		arr.resize(Mesh.ARRAY_MAX)
-		arr[Mesh.ARRAY_VERTEX] = buf.verts
-		arr[Mesh.ARRAY_NORMAL] = buf.norms
-		arr[Mesh.ARRAY_TEX_UV] = buf.uvs
-		arr[Mesh.ARRAY_COLOR] = buf.cols
-		arr[Mesh.ARRAY_INDEX] = buf.idx
-		var am := ArrayMesh.new()
-		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-		var sh := ConcavePolygonShape3D.new()
-		sh.set_faces(buf.faces)
+	for i in bufs.size():
+		var c = WorldScript.Chunk.new()
+		w.apply_mesh(c, Vector2i(base + i, base + 10), bufs[i])
+		temp.append(c)
 	var upload_ms := (Time.get_ticks_usec() - t0) / 1000.0 / float(n)
+	for c in temp:
+		w._free_visual(c)
 	_out("chunk cost: generate %.1f ms + build mesh %.1f ms (worker threads) + upload %.1f ms (main thread) = %.1f ms per chunk" % [
 		gen_ms, build_ms, upload_ms, gen_ms + build_ms + upload_ms])
 
@@ -223,8 +232,11 @@ func _scenario(name: String, dur: float, zombies: int, n_expl: int, idle_ms: flo
 	explorers.clear()
 	g.extra_stream_points = []
 	await _wait(2.0)
-	# Drop terrain an earlier scenario's explorers loaded, so this one streams fresh land.
+	# Drop terrain an earlier scenario's explorers loaded, so this one streams fresh land, and put
+	# the player back where every scenario starts (zombie hits knock it around).
 	w._unload_far(w.render_radius + 1)
+	g.player.global_position = g.spawn_pos
+	g.player.velocity = Vector3.ZERO
 	await _wait(1.0)
 	w._unload_far(w.render_radius + 1)
 	if zombies > 0:
@@ -309,6 +321,9 @@ func _scenario(name: String, dur: float, zombies: int, n_expl: int, idle_ms: flo
 			w.gen_count - gen0, (w.gen_count - gen0) / wall, w.mesh_count - mesh0, max_backlog])
 	explorers.clear()
 	g.extra_stream_points = []
+	if zombies > 0:
+		_clear_mobs()
+		_remove_fort()
 	return per_tick
 
 
@@ -322,14 +337,23 @@ func _build_fort() -> void:
 	var p: Vector3 = G.player.global_position
 	var c := Vector3i(floori(p.x), floori(p.y), floori(p.z))
 	fort_cells.clear()
+	fort_old.clear()
 	for dz in range(-FORT_R, FORT_R + 1):
 		for dx in range(-FORT_R, FORT_R + 1):
 			if maxi(absi(dx), absi(dz)) != FORT_R:
 				continue
 			for dy in range(-1, 3):
 				var cell := c + Vector3i(dx, dy, dz)
+				fort_old[cell] = G.world.get_blockv(cell)
 				G.world.set_block(cell, Blocks.STONE_BRICK)
 				fort_cells.append(cell)
+
+
+## Put back whatever the fort replaced, so the next scenario starts from the same ground.
+func _remove_fort() -> void:
+	for cell in fort_old:
+		G.world.set_block(cell, int(fort_old[cell]))
+	fort_old.clear()
 
 
 func _spawn_horde(n: int) -> void:

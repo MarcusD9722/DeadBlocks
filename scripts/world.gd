@@ -386,6 +386,12 @@ func _mesh_done(k: Vector2i, ver: int, buf: MeshBuf) -> void:
 		return
 	c.built_ver = ver
 	mesh_count += 1
+	apply_mesh(c, k, buf)
+
+
+## Main-thread part of finishing a chunk: render mesh, collision shape and lights.
+## The benchmark also times this directly.
+func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 	var origin := Vector3(k.x * CH, 0, k.y * CH)
 	if c.node == null:
 		c.node = MeshInstance3D.new()

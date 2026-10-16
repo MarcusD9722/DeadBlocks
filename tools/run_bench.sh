@@ -21,15 +21,29 @@ cleanup() {
 	if [ -n "$SAMPLER_PID" ]; then kill "$SAMPLER_PID" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
+# Exit on Ctrl+C, a closed terminal or kill, so the EXIT cleanup always runs.
+trap 'exit 130' INT
+trap 'exit 129' HUP
+trap 'exit 143' TERM
 rm -f "$OUT_DIR"/bench_*.txt "$OUT_DIR"/log_*.txt "$OUT_DIR"/pi_*.txt "$OUT_DIR"/summary.txt
 
-# On a Raspberry Pi, record CPU temperature and clock every 5 s while a run is going.
+# On a Raspberry Pi, record CPU temperature, clock and the current throttling bits every 5 s while
+# a run is going. Bits 0x1-0x8 mean under-voltage, frequency capped, throttled, soft temperature limit.
 sample_pi() {
 	while true; do
-		echo "$(vcgencmd measure_temp | tr -dc '0-9.') $(vcgencmd measure_clock arm | cut -d= -f2)"
+		local t
+		t=$(vcgencmd get_throttled | cut -d= -f2)
+		echo "$(vcgencmd measure_temp | tr -dc '0-9.') $(vcgencmd measure_clock arm | cut -d= -f2) $(( t & 0xF ))"
 		sleep 5
 	done
 }
+
+# Allow each run three times --bench-secs (default 60) plus 10 minutes for loading and setup.
+secs=60
+for a in "$@"; do
+	case "$a" in --bench-secs=*) secs="${a#--bench-secs=}" ;; esac
+done
+limit=$(( ${secs%.*} * 3 + 600 ))
 
 n=0
 for setup in "${SETUPS[@]}"; do
@@ -43,7 +57,7 @@ for setup in "${SETUPS[@]}"; do
 		SAMPLER_PID=$!
 	fi
 	rc=0
-	timeout 900 "$GODOT" --headless --path . -- --bench --out="$OUT_DIR/bench_$n.txt" "$@" --seed=4242 \
+	timeout --foreground "$limit" "$GODOT" --headless --path . -- --bench --out="$OUT_DIR/bench_$n.txt" "$@" --seed=4242 \
 		> "$OUT_DIR/log_$n.txt" 2>&1 || rc=$?
 	if [ -n "$SAMPLER_PID" ]; then
 		kill "$SAMPLER_PID" 2>/dev/null || true
@@ -52,14 +66,16 @@ for setup in "${SETUPS[@]}"; do
 	fi
 	rm -f override.cfg
 	if [ ! -s "$OUT_DIR/bench_$n.txt" ]; then
+		why="exit code $rc"
+		if [ "$rc" -eq 124 ]; then why="TIMED OUT after $limit s"; fi
 		{
-			echo "=== RUN $n ($engine at $tps ticks/s) FAILED, exit code $rc. Last lines of its log: ==="
+			echo "=== RUN $n ($engine at $tps ticks/s) FAILED, $why. Last lines of its log: ==="
 			tail -n 30 "$OUT_DIR/log_$n.txt"
 		} > "$OUT_DIR/bench_$n.txt"
 	fi
 	if [ -s "$OUT_DIR/pi_$n.txt" ]; then
-		awk '{ if ($1 > t) t = $1; c = $2 / 1000000; if (lo == "" || c < lo) lo = c; if (c > hi) hi = c }
-			END { printf "pi during this run: max temp %.1f C, CPU clock %d-%d MHz\n", t, lo, hi }' \
+		awk '{ if ($1 > t) t = $1; c = $2 / 1000000; if (c > hi) hi = c; if ($3 != 0) thr = 1 }
+			END { printf "pi during this run: max temp %.1f C, top CPU clock %d MHz, throttled: %s\n", t, hi, thr ? "YES" : "no" }' \
 			"$OUT_DIR/pi_$n.txt" >> "$OUT_DIR/bench_$n.txt"
 	fi
 done
