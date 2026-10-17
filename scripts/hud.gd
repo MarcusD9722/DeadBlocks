@@ -854,5 +854,16 @@ func _draw_online(vs: Vector2) -> void:
 		shown += 1
 		if shown >= (12 if chatting else 6):
 			break
+	if G.game.state == "reconnecting":
+		canvas.draw_rect(Rect2(Vector2.ZERO, vs), Color(0, 0, 0, 0.45))
+		_text(Vector2(0, vs.y * 0.42), "Connection lost. Reconnecting...  %d s" % int(G.net.reconnect_s()), 34,
+			Color(1, 0.8, 0.5), HORIZONTAL_ALIGNMENT_CENTER, vs.x)
+		_text(Vector2(0, vs.y * 0.42 + 40), "The game keeps trying for a minute.   Esc: back to the title", 18,
+			Color(0.9, 0.9, 0.9), HORIZONTAL_ALIGNMENT_CENTER, vs.x)
+		return
 	var line := "%d online   ·   %d ms" % [G.net.others.size() + 1, G.net.ping_ms()]
 	_text(Vector2(vs.x - 320, 34), line, 16, Color(0.8, 1, 0.8, 0.8), HORIZONTAL_ALIGNMENT_RIGHT, 300)
+	var quiet: float = G.net.quiet_s()
+	if quiet > 1.5:
+		_text(Vector2(vs.x - 420, 56), "No answer from the server for %d s" % int(quiet), 16,
+			Color(1, 0.5, 0.4), HORIZONTAL_ALIGNMENT_RIGHT, 400)

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Multiplayer test: starts a dedicated server and headless clients on this machine and checks
 # login, refusals, movement sync, chat, admin commands, cheat correction, rejoining, crash
-# recovery, the player limit, and that the clock stops while nobody is online.
+# recovery, the player limit, that the clock stops while nobody is online, and riding out or
+# reconnecting after a frozen server.
 # Usage: GODOT=/path/to/godot ./tools/run_nettest.sh [SERVER PREFIX...]
 #   The server runs as "$GODOT --headless --path . --" unless a prefix is given, for example
 #   qemu-aarch64-static -L /usr/aarch64-linux-gnu build/server/DeadBlocksServer.arm64 --headless --
@@ -190,6 +191,32 @@ if wait_line "$LOG_DIR/host_crash.log" "NETTEST online" 90; then
 else
 	fail "hosted a game for the crash test (see host_crash.log)"
 	kill -9 $HC 2>/dev/null
+fi
+
+# 8. The server freezes (a Wi-Fi drop, an overloaded Pi): 8 s must not drop anyone; after 40 s
+# the player is dropped, and gets back in by itself without reloading the world.
+client stall_short alice 1234 pw stall
+ST=$CPID
+if wait_line "$LOG_DIR/stall_short.log" "NETTEST online" 90; then
+	kill -STOP $SPID
+	sleep 8
+	kill -CONT $SPID
+fi
+wait $ST
+report stall_short
+client stall_long alice 1234 pw stall --nettest-stall=long
+ST=$CPID
+if wait_line "$LOG_DIR/stall_long.log" "NETTEST online" 90; then
+	kill -STOP $SPID
+	sleep 40
+	kill -CONT $SPID
+fi
+wait $ST
+report stall_long
+if grep -q -E "alice (lost the connection \(nothing received|was replaced by a new sign-in)" "$LOG_DIR/server.log"; then
+	pass "server logged why alice dropped"
+else
+	fail "server logged why alice dropped"
 fi
 
 for f in "$LOG_DIR"/server.log "$LOG_DIR"/hold_*.log "$LOG_DIR"/host_crash.log; do

@@ -251,7 +251,7 @@ func _process(delta: float) -> void:
 			world.update_centers(_stream_points())
 			_tick_time(delta)
 			_spawner(delta)
-		"paused":
+		"paused", "reconnecting":
 			# Online, the pause menu doesn't stop the world.
 			world.update_centers(_stream_points())
 			if G.mode == "client":
@@ -301,7 +301,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				if state == "playing" and G.mode == "client":
 					open_chat()
 			KEY_ESCAPE:
-				if state == "playing":
+				if state == "reconnecting":
+					G.end_client_session("You left the server.")
+				elif state == "playing":
 					pause()
 				elif state == "menu":
 					close_inventory()
@@ -369,6 +371,38 @@ func resume() -> void:
 	get_tree().paused = false
 	hud.show_pause(false)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## Online: the connection dropped and NetClient is logging back in. The world stays on screen,
+## but the player can't act until the server is back.
+func on_connection_lost() -> void:
+	match state:
+		"chat":
+			hud._close_chat()
+		"menu":
+			hud.show_inventory(false)
+		"paused":
+			hud.show_pause(false)
+	if state in ["playing", "menu", "paused", "chat"]:
+		state = "reconnecting"
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func on_reconnected(w: Dictionary) -> void:
+	day = int(w["day"])
+	time = float(w["time"])
+	horde_active = bool(w["horde"])
+	was_night = is_night()
+	# The server puts us back where it last saw us; only snap there if we drifted (falling).
+	var pos: Vector3 = w["pos"]
+	if player.global_position.distance_to(pos) > 3.0:
+		player.global_position = pos
+		player.velocity = Vector3.ZERO
+	if state == "reconnecting":
+		state = "playing"
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	hud.msg("Reconnected.", Color(0.7, 1, 0.7))
+	G.net.send_ready()
 
 
 func open_chat() -> void:

@@ -2,7 +2,7 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.2.1"
+const VERSION := "0.2.2"
 const BUILD_NAME := "M1.2"
 
 var game: Node = null
@@ -96,6 +96,13 @@ func start_client_session(welcome: Dictionary) -> void:
 	mode = "client"
 	get_tree().paused = false
 	get_tree().call_deferred("reload_current_scene")
+
+
+## Called by NetClient after it reconnected to the same world: carry on without reloading.
+func resume_client_session(welcome: Dictionary) -> void:
+	session = welcome
+	if game != null and is_instance_valid(game):
+		game.on_reconnected(welcome)
 
 
 ## Back to the title screen with a message (disconnect, kick, server stopped).

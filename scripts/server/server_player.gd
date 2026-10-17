@@ -17,6 +17,12 @@ var admin := false
 var last_good := Vector3.ZERO
 var last_move_ms := 0
 var move_id := 0
+## Connection health, for the log: when anything last arrived, and ENet's ping and packet loss.
+var last_recv_ms := 0
+var ping_ms := 0
+var loss_pct := 0.0
+## Set when the server itself ends the session (kick, signed in elsewhere).
+var leave_reason := ""
 
 
 func take_damage(_amount: float, _from: Vector3) -> void:

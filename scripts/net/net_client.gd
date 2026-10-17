@@ -3,6 +3,8 @@ extends Node
 ## that swaps the solo world for the server's world (G.start_client_session).
 ## Sends our movement 15 times a second and keeps a short history of everyone else's, which
 ## RemotePlayer nodes draw 100 ms in the past so movement looks smooth.
+## If the connection drops while playing, it keeps logging back in for up to a minute; when the
+## server answers with the same world, play simply continues (G.resume_client_session).
 
 signal status(text: String, is_error: bool)
 signal chat(from: String, text: String)
@@ -11,6 +13,8 @@ signal notice(text: String, col: Color)
 const SEND_EVERY := 4          # physics ticks per movement update: 60 / 4 = 15 Hz
 const INTERP_DELAY := 0.1      # seconds remote players are drawn in the past
 const CONNECT_TIMEOUT := 12.0
+const RECONNECT_S := 60.0      # how long to keep trying after the connection drops
+const RETRY_EVERY := 3.0
 
 var mp: SceneMultiplayer = null
 var peer: ENetMultiplayerPeer = null
@@ -25,7 +29,13 @@ var fake_terrain := false
 ## idle -> connecting -> waiting_welcome -> online
 var state := "idle"
 var reject_reason := ""
-var last_notice := ""
+## Why the server is closing our connection (kicked, signed in elsewhere): no reconnecting then.
+var bye_reason := ""
+var reconnecting := false
+var _lost_at := 0.0
+var _retry_at := 0.0
+## When the last message from the server arrived (it sends 15 a second while we're online).
+var last_recv := 0.0
 var my_net_id := 0
 var is_admin := false
 ## net id -> {"name": String, "samples": Array of [time s, pos, yaw, pitch, flags]}
@@ -37,14 +47,19 @@ var _deadline := 0.0
 
 
 func join(h: String, p: int, pname: String, pin_k: PackedByteArray, pw_k: PackedByteArray) -> void:
-	leave()
 	host = h
 	port = p
 	player_name = pname
 	pin_key = pin_k
 	password_key = pw_k
+	reconnecting = false
+	_connect()
+
+
+func _connect() -> void:
+	_close()
 	reject_reason = ""
-	last_notice = ""
+	bye_reason = ""
 	others.clear()
 	move_id = 0
 	mp = SceneMultiplayer.new()
@@ -56,18 +71,26 @@ func join(h: String, p: int, pname: String, pin_k: PackedByteArray, pw_k: Packed
 	mp.connected_to_server.connect(_on_connected)
 	mp.connection_failed.connect(_on_failed)
 	mp.server_disconnected.connect(_on_server_gone)
-	var err := peer.create_client(h, p, Proto.CHANNELS)
+	var err := peer.create_client(host, port, Proto.CHANNELS)
 	if err != OK:
 		state = "idle"
-		status.emit("Could not start connecting to %s (error %d)." % [h, err], true)
+		_retry_at = _now() + RETRY_EVERY
+		_status("Could not start connecting to %s (error %d)." % [host, err], true)
 		return
+	Proto.set_timeouts(peer.get_peer(1))
 	mp.multiplayer_peer = peer
 	state = "connecting"
-	_deadline = Time.get_ticks_msec() / 1000.0 + CONNECT_TIMEOUT
-	status.emit("Connecting to %s:%d..." % [h, p], false)
+	_deadline = _now() + CONNECT_TIMEOUT
+	_status("Connecting to %s:%d..." % [host, port], false)
 
 
+## Stop playing online: close the connection and don't reconnect.
 func leave() -> void:
+	reconnecting = false
+	_close()
+
+
+func _close() -> void:
 	if peer != null:
 		peer.close()
 	if mp != null:
@@ -80,6 +103,27 @@ func leave() -> void:
 
 func is_online() -> bool:
 	return state == "online"
+
+
+## Seconds since the server was last heard from (0 when not online).
+func quiet_s() -> float:
+	return _now() - last_recv if state == "online" else 0.0
+
+
+## Seconds since the connection dropped, while reconnecting.
+func reconnect_s() -> float:
+	return _now() - _lost_at if reconnecting else 0.0
+
+
+static func _now() -> float:
+	return Time.get_ticks_msec() / 1000.0
+
+
+## Status for the title screen; while reconnecting it only goes to the log.
+func _status(text: String, is_error: bool) -> void:
+	print("NET ", text)
+	if not reconnecting:
+		status.emit(text, is_error)
 
 
 func send_ready() -> void:
@@ -153,54 +197,92 @@ func _on_auth(_id: int, data: PackedByteArray) -> void:
 				terrain = Proto.terrain_hash(seed_v)
 			Proto.put_bytes32(h, terrain)
 			mp.send_auth(1, h.data_array)
-			status.emit("Logging in...", false)
+			_status("Logging in...", false)
 		Proto.A_RESULT:
 			var ok := b.get_u8()
 			var reason := b.get_utf8_string()
 			if ok == 1:
 				mp.complete_auth(1)
 				state = "waiting_welcome"
-				status.emit("Joining...", false)
+				_status("Joining...", false)
 			else:
 				reject_reason = reason
 				state = "idle"
-				call_deferred("leave")
-				status.emit(reason, true)
+				call_deferred("_close")
+				if reconnecting:
+					# The server is back but won't take us (restarted with another password or version).
+					reconnecting = false
+					G.call_deferred("end_client_session", reason)
+				else:
+					_status(reason, true)
 
 
 func _on_connected() -> void:
-	var sp := peer.get_peer(1) if peer != null else null
-	if sp != null:
-		sp.set_timeout(32, 5000, 15000)
+	if peer != null:
+		Proto.set_timeouts(peer.get_peer(1))
 
 
 func _on_failed() -> void:
 	state = "idle"
-	call_deferred("leave")
+	call_deferred("_close")
+	_retry_at = _now() + RETRY_EVERY
 	if reject_reason != "":
 		return
-	status.emit("Could not reach the server at %s:%d. Check the address, that the server is running, and port forwarding for internet play." % [host, port], true)
+	_status("Could not reach the server at %s:%d. Check the address, that the server is running, and port forwarding for internet play." % [host, port], true)
 
 
 func _on_server_gone() -> void:
 	var was := state
 	state = "idle"
 	# Tear the connection down after this signal has finished.
-	call_deferred("leave")
+	call_deferred("_close")
 	if reject_reason != "":
-		status.emit(reject_reason, true)
+		_status(reject_reason, true)
 		return
-	var why := last_notice if last_notice != "" else "Lost the connection to the server."
-	if was == "online" or was == "waiting_welcome":
-		G.end_client_session(why)
+	if bye_reason != "":
+		print("NET the server closed the connection: ", bye_reason)
+		reconnecting = false
+		G.call_deferred("end_client_session", bye_reason)
+		return
+	if was == "online" or reconnecting:
+		if not reconnecting:
+			reconnecting = true
+			_lost_at = _now()
+			print("NET lost the connection to %s:%d: nothing received for %.1f s, ping was %d ms; reconnecting" % [
+				host, port, _now() - last_recv, _last_ping])
+			if G.game != null and is_instance_valid(G.game):
+				G.game.on_connection_lost()
+		_retry_at = _now() + 1.0
+		return
+	if was == "waiting_welcome":
+		G.call_deferred("end_client_session", "Lost the connection to the server.")
 	else:
-		status.emit(why, true)
+		_status("Lost the connection to the server.", true)
 
 
-func _process(_delta: float) -> void:
-	if state == "connecting" and Time.get_ticks_msec() / 1000.0 > _deadline:
-		leave()
-		status.emit("No answer from %s:%d after %d seconds. Check the address and port forwarding." % [host, port, int(CONNECT_TIMEOUT)], true)
+var _last_ping := 0
+var _ping_t := 0.0
+
+
+func _process(delta: float) -> void:
+	var now := _now()
+	if state == "connecting" and now > _deadline:
+		_close()
+		_retry_at = now + RETRY_EVERY
+		_status("No answer from %s:%d after %d seconds. Check the address and port forwarding." % [host, port, int(CONNECT_TIMEOUT)], true)
+	if state == "online":
+		_ping_t -= delta
+		if _ping_t <= 0.0:
+			_ping_t = 1.0
+			_last_ping = ping_ms()
+	if reconnecting and state == "idle" and now >= _retry_at:
+		if now - _lost_at > RECONNECT_S:
+			reconnecting = false
+			print("NET gave up reconnecting after %d s" % int(RECONNECT_S))
+			G.end_client_session("Lost the connection to the server, and it didn't come back within a minute.")
+		else:
+			print("NET reconnecting (%.0f s since the connection dropped)" % (now - _lost_at))
+			_connect()
 
 
 # ------------------------------------------------------------ game messages
@@ -208,6 +290,7 @@ func _process(_delta: float) -> void:
 func _on_packet(_id: int, data: PackedByteArray) -> void:
 	if data.is_empty():
 		return
+	last_recv = _now()
 	var b := Proto.reader(data)
 	match data[0]:
 		Proto.S_WELCOME:
@@ -229,6 +312,13 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			my_net_id = w["net_id"]
 			is_admin = w["admin"]
 			state = "online"
+			if reconnecting:
+				reconnecting = false
+				print("NET reconnected after %.1f s" % (_now() - _lost_at))
+				if G.mode == "client" and int(G.session.get("seed", -1)) == int(w["seed"]):
+					G.resume_client_session(w)
+					return
+			print("NET joined %s:%d as %s" % [host, port, player_name])
 			G.start_client_session(w)
 		Proto.S_JOIN:
 			var id := b.get_u16()
@@ -264,8 +354,9 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 		Proto.S_NOTICE:
 			var text := b.get_utf8_string()
 			var col := Color8(b.get_u8(), b.get_u8(), b.get_u8())
-			last_notice = text
 			notice.emit(text, col)
+		Proto.S_BYE:
+			bye_reason = b.get_utf8_string()
 		Proto.S_CORRECT:
 			move_id = b.get_u8()
 			var pos := Proto.get_vec3(b)

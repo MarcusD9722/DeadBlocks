@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 1
+const PROTOCOL := 2
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -28,6 +28,7 @@ const S_TIME := 14       # day u16, time f32, horde u8, paused u8
 const S_CHAT := 15       # from name, text
 const S_NOTICE := 16     # text, colour rgb u8 x3
 const S_CORRECT := 17    # move id u8, pos 3xf32: the server moved you (teleport or a rejected move)
+const S_BYE := 18        # reason: the server is about to close this connection (kick, signed in elsewhere)
 # Client -> server
 const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8
 const C_READY := 31      # my chunks are loaded, count me as online
@@ -44,6 +45,16 @@ const F_AIRBORNE := 8
 const TERRAIN_CHUNKS := [Vector2i(0, 0), Vector2i(1, -1), Vector2i(-2, 3), Vector2i(37, -91)]
 
 const MAX_CHAT := 200
+
+## ENet gives up on a connection after this much silence (ms): at least TIMEOUT_MIN_MS, at most
+## TIMEOUT_MAX_MS. Generous, so a Wi-Fi hiccup doesn't drop anyone (Minecraft waits 30 s too).
+const TIMEOUT_MIN_MS := 15000
+const TIMEOUT_MAX_MS := 30000
+
+
+static func set_timeouts(p: ENetPacketPeer) -> void:
+	if p != null:
+		p.set_timeout(32, TIMEOUT_MIN_MS, TIMEOUT_MAX_MS)
 
 
 static func password_key(password: String) -> PackedByteArray:

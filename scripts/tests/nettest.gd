@@ -14,6 +14,9 @@ extends Node
 ##   host         no --connect: press "Host game" (port from --nettest-port=), check we're in
 ##                and the admin, then quit; the script checks the background server stopped too.
 ##                With --nettest-crash, stay until killed (the server must then stop by itself).
+##   stall        join while the script freezes the server: for 8 s (must stay connected), or
+##                with --nettest-stall=long for 40 s (must drop, show the reconnecting screen and
+##                get back in by itself)
 
 var role := ""
 var fails := 0
@@ -30,6 +33,8 @@ func _ready() -> void:
 	G.net.chat.connect(func(from: String, text: String): _chats.append([from, text]))
 	G.net.notice.connect(_on_notice)
 	var limit := 150.0 if role == "hold" or G.has_arg("--nettest-crash") else 90.0
+	if role == "stall":
+		limit = 240.0
 	get_tree().create_timer(limit, true, false, true).timeout.connect(_on_timeout)
 	_run.call_deferred()
 
@@ -125,6 +130,8 @@ func _run() -> void:
 		await _run_screens()
 	elif role == "host":
 		await _run_host()
+	elif role == "stall":
+		await _run_stall()
 	else:
 		check(false, "known role (got '%s')" % role)
 	await _finish()
@@ -297,3 +304,27 @@ func _run_host() -> void:
 		await _wait(140.0)
 		check(false, "was stopped by the test script")
 	await _wait(1.0)
+
+
+func _run_stall() -> void:
+	if not await _until(_playing, 60.0):
+		check(false, "joined the server (%s)" % ", ".join(_errors))
+		return
+	var game_id: int = G.game.get_instance_id()
+	print("NETTEST online")
+	if G.arg_value("--nettest-stall=") != "long":
+		# The script freezes the server for 8 s.
+		check(await _until(func(): return G.net.quiet_s() > 5.0, 60.0), "noticed the server went quiet")
+		var back := await _until(func(): return G.net.reconnecting or (G.net.is_online() and G.net.quiet_s() < 0.5), 30.0)
+		check(back and not G.net.reconnecting, "rode out an 8 s server freeze without dropping")
+		return
+	# The script freezes the server for 40 s.
+	if await _until(func(): return G.net.quiet_s() > 3.0, 30.0):
+		await _shot("quiet")
+	check(await _until(func(): return G.net.reconnecting, 60.0), "noticed the connection dropped")
+	check(G.game.state == "reconnecting", "shows the reconnecting screen")
+	await _shot("reconnecting")
+	check(await _until(func(): return not G.net.reconnecting and _playing(), 90.0), "reconnected by itself")
+	check(is_instance_valid(G.game) and G.game.get_instance_id() == game_id, "kept the same world (no reload)")
+	await _wait(2.0)
+	check(G.net.quiet_s() < 1.0, "server messages flowing again")

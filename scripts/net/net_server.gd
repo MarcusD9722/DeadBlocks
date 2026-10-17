@@ -19,6 +19,7 @@ const MOVE_SLACK := 2.0
 ## Host game: how long the server waits for its host to join, and to come back after leaving.
 const HOST_JOIN_S := 60.0
 const HOST_GONE_S := 15.0
+const STATS_EVERY := 60.0   # seconds between "SERVER net:" lines in the log
 
 var mp := SceneMultiplayer.new()
 var peer := ENetMultiplayerPeer.new()
@@ -42,6 +43,8 @@ var _tick := 0
 var _time_t := 0.0
 var _log_t := 0.0
 var _host_seen_ms := 0
+var _stats_t := STATS_EVERY
+var _sample_t := 0.0
 var _host_joined := false
 var _terrain := PackedByteArray()
 var _players_node: Node3D
@@ -72,7 +75,8 @@ func start() -> bool:
 	mp.peer_disconnected.connect(_on_disconnected)
 	mp.peer_authentication_failed.connect(_on_disconnected)
 	mp.peer_packet.connect(_on_packet)
-	var err := peer.create_server(port, max_players + 2, Proto.CHANNELS)
+	# Spare slots for people being refused and for half-open attempts from reconnecting players.
+	var err := peer.create_server(port, max_players + 8, Proto.CHANNELS)
 	if err != OK:
 		printerr("SERVER could not listen on UDP port %d (error %d). Is another server running?" % [port, err])
 		return false
@@ -102,6 +106,7 @@ func player_positions() -> Array:
 
 func _on_authenticating(id: int) -> void:
 	_live[id] = true
+	Proto.set_timeouts(peer.get_peer(id))
 	var nonce := Crypto.new().generate_random_bytes(16)
 	_nonces[id] = nonce
 	var b := Proto.writer(Proto.A_CHALLENGE)
@@ -180,7 +185,8 @@ func _on_auth(id: int, data: PackedByteArray) -> void:
 		# Same name and correct PIN while still online (for example after a crash): the new
 		# connection wins.
 		print("SERVER %s signed in again; closing the old connection" % acc["name"])
-		_send_to(replacing, _notice_bytes("You signed in from somewhere else.", Color(1, 0.6, 0.4)))
+		_send_to(replacing, _bye_bytes("You signed in from somewhere else."))
+		players[replacing].leave_reason = "was replaced by a new sign-in"
 		_remove_player(replacing)
 		_disconnect_soon(replacing)
 	_pending[id] = key
@@ -230,9 +236,7 @@ func _on_connected(id: int) -> void:
 	var key: String = _pending[id]
 	_pending.erase(id)
 	var acc: Dictionary = accounts[key]
-	var ep := peer.get_peer(id)
-	if ep != null:
-		ep.set_timeout(32, 5000, 15000)
+	Proto.set_timeouts(peer.get_peer(id))
 	var sp := ServerPlayer.new()
 	sp.player_name = acc["name"]
 	sp.peer_id = id
@@ -244,6 +248,7 @@ func _on_connected(id: int) -> void:
 	sp.yaw = acc["yaw"]
 	sp.last_good = acc["pos"]
 	sp.last_move_ms = Time.get_ticks_msec()
+	sp.last_recv_ms = Time.get_ticks_msec()
 	players[id] = sp
 	G.sim.add_player(sp)
 	var w := Proto.writer(Proto.S_WELCOME)
@@ -296,8 +301,15 @@ func _remove_player(id: int) -> void:
 	var l := Proto.writer(Proto.S_LEAVE)
 	l.put_u16(sp.net_id)
 	_broadcast(l.data_array)
-	_broadcast(_notice_bytes("%s left the game." % sp.player_name, Color(1, 0.85, 0.7)))
-	print("SERVER %s left (%d connected)" % [sp.player_name, players.size()])
+	# Players send movement 15 times a second, so a long silence means the connection died.
+	var quiet: float = (Time.get_ticks_msec() - sp.last_recv_ms) / 1000.0
+	var why: String = sp.leave_reason
+	if why == "" and quiet > 3.0:
+		why = "lost the connection (nothing received for %.1f s; ping was %d ms, packet loss %d%%)" % [quiet, sp.ping_ms, int(sp.loss_pct)]
+		_broadcast(_notice_bytes("%s lost the connection." % sp.player_name, Color(1, 0.85, 0.7)))
+	else:
+		_broadcast(_notice_bytes("%s left the game." % sp.player_name, Color(1, 0.85, 0.7)))
+	print("SERVER %s %s (%d connected)" % [sp.player_name, why if why != "" else "left", players.size()])
 	if online_count() == 0:
 		print("SERVER nobody online: time paused at day %d %s" % [G.game.day, _clock()])
 
@@ -308,6 +320,7 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 	var sp = players.get(id)
 	if sp == null or data.is_empty():
 		return
+	sp.last_recv_ms = Time.get_ticks_msec()
 	var b := Proto.reader(data)
 	match data[0]:
 		Proto.C_MOVE:
@@ -396,7 +409,8 @@ func _command(sp, text: String) -> void:
 			if parts.size() > 1:
 				var target := _peer_of_name(parts[1].to_lower())
 				if target != 0:
-					_send_to(target, _notice_bytes("You were kicked by %s." % sp.player_name, Color(1, 0.5, 0.4)))
+					_send_to(target, _bye_bytes("You were kicked by %s." % sp.player_name))
+					players[target].leave_reason = "was kicked by %s" % sp.player_name
 					_disconnect_soon(target)
 		_:
 			_send_to(sp.peer_id, _notice_bytes("Commands: /players /dusk /bloodmoon /time <hour> /kick <name>", Color(0.8, 0.9, 1)))
@@ -413,6 +427,12 @@ func _notice_bytes(text: String, col: Color) -> PackedByteArray:
 	n.put_u8(int(col.g * 255))
 	n.put_u8(int(col.b * 255))
 	return n.data_array
+
+
+func _bye_bytes(reason: String) -> PackedByteArray:
+	var b := Proto.writer(Proto.S_BYE)
+	b.put_utf8_string(reason)
+	return b.data_array
 
 
 func _time_bytes() -> PackedByteArray:
@@ -450,7 +470,9 @@ func _physics_process(_delta: float) -> void:
 	for p in players.values():
 		if p.is_ready:
 			ready_players.append(p)
-	if ready_players.size() < 2:
+	# Even alone, a player gets an (empty) snapshot: the steady stream is how clients notice
+	# when the server goes quiet.
+	if ready_players.is_empty():
 		return
 	for to in ready_players:
 		var s := Proto.writer(Proto.S_SNAP)
@@ -463,6 +485,18 @@ func _physics_process(_delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	_sample_t -= delta
+	if _sample_t <= 0.0:
+		_sample_t = 2.0
+		_sample_connections()
+	_stats_t -= delta
+	if _stats_t <= 0.0:
+		_stats_t = STATS_EVERY
+		if not players.is_empty():
+			var parts := []
+			for p in players.values():
+				parts.append("%s %d ms, loss %d%%" % [p.player_name, p.ping_ms, int(p.loss_pct)])
+			print("SERVER net: " + " | ".join(parts))
 	_time_t -= delta
 	if _time_t <= 0.0:
 		_time_t = TIME_EVERY
@@ -483,3 +517,17 @@ func _process(delta: float) -> void:
 		elif Time.get_ticks_msec() - _host_seen_ms > (HOST_GONE_S if _host_joined else HOST_JOIN_S) * 1000.0:
 			print("SERVER the host (%s) is gone; stopping" % hosted_by)
 			get_tree().quit()
+
+
+## Remember each player's ping and packet loss while the connection is alive, for the leave
+## message and the "SERVER net:" log line.
+func _sample_connections() -> void:
+	for id in players:
+		if not _live.has(id):
+			continue
+		var ep := peer.get_peer(id)
+		if ep == null:
+			continue
+		var sp = players[id]
+		sp.ping_ms = int(ep.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME))
+		sp.loss_pct = ep.get_statistic(ENetPacketPeer.PEER_PACKET_LOSS) * 100.0 / ENetPacketPeer.PACKET_LOSS_SCALE
