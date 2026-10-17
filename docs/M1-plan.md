@@ -133,7 +133,7 @@ Not in M1: backpacks/beds/logout linger (M2), the Blood Moon split/merge rules a
 Each step ends with test_all.sh green, a Windows build for Marcus, and DESIGN.md/CLAUDE.md updated.
 
 ### M1.1 Safety net and a lighter server (still single-player) — done
-Result on the reference machine: server-mode horde 37%, combined 46% (targets 40% / 48%). The region-order test gives identical hashes in both orders (and different ones when the ordering rule is deliberately broken). Merged collision strips were left out (≈1–3 points in the prototype); revisit in M1.8 if needed.
+Result on the reference machine: server-mode horde 37%, combined 46% (targets 40% / 48%). On the Pi: horde 46% → **38%** and combined 63% → **57%** with physics on its own thread, which the dedicated server now uses (M0: 57% / 82%). The region-order test gives identical hashes in both orders (and different ones when the ordering rule is deliberately broken). Merged collision strips were left out (≈1–3 points in the prototype); revisit in M1.8 if needed.
 
 - **Work:** test_all.sh with the error-line gate; Jolt everywhere (client 60 Hz, server 30 Hz); player raycast moved to `_physics_process`; version constants shown on the title screen; export presets and build_release.sh; worldgen check under qemu; server mode (no visuals, collision-only merged chunks, radius 5); spatial-hash spacing; the `server/sim.gd` + regions + edit queue skeleton (in single-player the local player is the only player); `--regiontest`; day length from a setting (30 min default); benchmark "M1 server" setup.
 - **Done when:** test_all green; on this machine the server-mode horde is ≤ 40% and combined ≤ 48% (today 51% / 63%).

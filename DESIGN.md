@@ -122,7 +122,16 @@ Steps, in order of payoff:
 
 Expected gain: about **2.5–3×** more zombies on the same Pi, never a full 4×, because some work stays sequential and the Pi may share cores with Minecraft. The Pi benchmark results decide how soon step 4 is needed. Each step is checked with `tools/run_bench.sh`.
 
-M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spacing, zombies ticked by region) on the reference machine, Jolt at 30 ticks/s: horde **37%** (was 42% for the same code without server mode, 43–51% in M0), combined **46%** (was 53%; M0 58–63%). Pi numbers: pending the owner's M1.1 run.
+M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spacing, zombies ticked by region) on the reference machine, Jolt at 30 ticks/s: horde **37%** (was 42% for the same code without server mode, 43–51% in M0), combined **46%** (was 53%; M0 58–63%). On the owner's Pi 5 (2026-10-17, editor binary, Minecraft stopped):
+
+| M1.1 server mode, Jolt @ 30 | Explore | Horde: 120 zombies | Combined |
+|---|---|---|---|
+| physics on the main thread | 21% | 46% (M0: 57%) | 63% (M0: 82%) |
+| **physics on its own thread** | **19%** | **38%** | **57%** |
+
+- **Decided: the dedicated server runs physics on its own thread** (`physics/3d/run_on_separate_thread.dedicated_server=true` in project.godot): −8 points on the horde, −6 combined, and the chunk collision upload leaves the main thread. The game client keeps physics on the main thread.
+- The exported release build is faster again for GDScript work (chunk generate + mesh 6.4 ms vs 11.1 ms on the reference machine), so the real Pi server should land a little below these numbers.
+- The Pi reached 80.7 °C on the second run (no throttling yet; the Pi 5 starts slowing itself around 80–85 °C). Better cooling is recommended for 24/7 use next to Minecraft.
 
 ## Milestone plan
 - **M0 — Setup & measurement** (done): GitHub repo; headless stress test (120 zombies + simulated players), run both here and on the Pi. Result: Jolt @ 30 ticks/s.

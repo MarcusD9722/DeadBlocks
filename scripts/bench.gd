@@ -150,11 +150,11 @@ func _run() -> void:
 	_out("=== DEAD BLOCKS BENCH RESULTS ===")
 	_out("machine: %s | %s | %d cores | Godot %s" % [OS.get_name(), _cpu_name(), OS.get_processor_count(), Engine.get_version_info()["string"]])
 	_out("setup: physics %s at %d ticks/s | %s | chunk radius %d | chunk worker threads %d | %d s per scenario | seed %d" % [
-		str(ProjectSettings.get_setting("physics/3d/physics_engine")), tps, "SERVER MODE" if G.server_mode else "full game",
+		str(ProjectSettings.get_setting_with_override("physics/3d/physics_engine")), tps, "SERVER MODE" if G.server_mode else "full game",
 		w.render_radius, _chunk_threads(), int(secs), g.seed_v])
 	_out("build: %s %s | physics on its own thread: %s" % [
 		"exported" if OS.has_feature("template") else "editor binary", "release" if not OS.is_debug_build() else "debug",
-		"yes" if ProjectSettings.get_setting("physics/3d/run_on_separate_thread") else "no"])
+		"yes" if ProjectSettings.get_setting_with_override("physics/3d/run_on_separate_thread") else "no"])
 	_micro()
 	var idle_ms := await _scenario("idle", 10.0, 0, 0, 0.0)
 	explore_ms = await _scenario("explore", secs, 0, explorer_count, idle_ms)
