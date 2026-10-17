@@ -34,7 +34,7 @@ The owner (Marcus) playtests on Windows and gives feedback. Each round of work s
 | `autotest.gd` | Automated playtest, run with `-- --autotest` |
 | `bench.gd` | Server load benchmark (Blood Moon horde, explorers streaming chunks), run with `-- --bench` |
 
-Outside `scripts/`: `tools/run_bench.sh` runs the benchmark once per physics setup; `docs/pi-benchmark.md` is the owner's step-by-step guide for running it on the Raspberry Pi.
+Outside `scripts/`: `tools/run_bench.sh` runs the benchmark once per physics setup; `docs/pi-benchmark.md` is the owner's step-by-step guide for running it on the Raspberry Pi. `docs/M1-plan.md` is the multiplayer plan (architecture, protocol, saving, steps M1.1–M1.8).
 
 ## Run / test / build
 Replace `godot` with the path to the Godot 4.7.2 executable (on Windows, `Godot_v4.7.2-stable_win64_console.exe` shows console output).

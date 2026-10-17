@@ -124,7 +124,7 @@ Expected gain: about **2.5–3×** more zombies on the same Pi, never a full 4×
 
 ## Milestone plan
 - **M0 — Setup & measurement** (done): GitHub repo; headless stress test (120 zombies + simulated players), run both here and on the Pi. Result: Jolt @ 30 ticks/s.
-- **M1 — Multiplayer foundation**: server/client split, dedicated headless Pi server build (Linux ARM64) + Windows client build, join with name + password, server-side save/load with autosave, time pauses when empty. Clients generate terrain from the seed; the server only sends block edits. The server is built around independent regions (see "Server multi-core plan"), with physics on its own thread and no render meshes.
+- **M1 — Multiplayer foundation** (detailed plan: `docs/M1-plan.md`): server/client split, dedicated headless Pi server build (Linux ARM64) + Windows client build, join with name + password, server-side save/load with autosave, time pauses when empty. Clients generate terrain from the seed; the server only sends block edits. The server is built around independent regions (see "Server multi-core plan"), with physics on its own thread and no render meshes.
 - **M2 — Death & respawn**: backpack drop (10 min, anyone can loot), beds, random spawn points, 60 s logout linger.
 - **M3 — Zombie rework**: proximity-only aggression on normal days, Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
 - **M4 — Exploration & loot**: distance-based danger scaling, ruins/POIs, chests, loot tables with rarity, 3-day refill, doors with locks/PIN.
