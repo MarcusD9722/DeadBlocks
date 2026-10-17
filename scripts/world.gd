@@ -113,6 +113,10 @@ class MeshBuf:
 
 
 var render_radius := 6
+## False in server mode: chunks get collision only (no render mesh, lights or crack overlays).
+var render := true
+## Tests: rebuild an edited chunk immediately instead of on a worker thread, so runs repeat exactly.
+var sync_mesh := false
 var seed_v := 0
 var chunks := {}
 var order: Array[Vector2i] = []
@@ -134,6 +138,10 @@ var sched_dirty := true
 
 func setup(s: int, tex) -> void:
 	seed_v = s
+	render = not G.server_mode
+	if G.server_mode:
+		# 5 chunks (80 m) covers the 72 m zombie despawn distance.
+		render_radius = 5
 	max_tasks = clampi(OS.get_processor_count() - 2, 2, 8)
 	material = StandardMaterial3D.new()
 	material.albedo_texture = tex.atlas
@@ -322,8 +330,54 @@ func _gen_done(k: Vector2i, d: PackedByteArray) -> void:
 
 
 func _task_mesh(k: Vector2i, ver: int, d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> void:
-	var buf := _build(d, px, nx, pz, nz)
-	call_deferred("_mesh_done", k, ver, buf)
+	call_deferred("_mesh_done", k, ver, _make_buf(d, px, nx, pz, nz))
+
+
+func _make_buf(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> MeshBuf:
+	if render:
+		return _build(d, px, nx, pz, nz)
+	var buf := MeshBuf.new()
+	buf.faces = _build_collision(d, px, nx, pz, nz)
+	return buf
+
+
+## Server mode: the same scan as _build, but only the collision triangles of solid blocks.
+func _build_collision(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var sol: Array = Blocks.SOLID
+	for y in H:
+		var yo := y * CH2
+		for z in CH:
+			var zo := z * CH + yo
+			for x in CH:
+				var i := x + zo
+				if not sol[d[i]]:
+					continue
+				var o := Vector3(x, y, z)
+				if y == H - 1 or not sol[d[i + CH2]]:
+					_quad(out, o, 0)
+				if y > 0 and not sol[d[i - CH2]]:
+					_quad(out, o, 1)
+				if not sol[d[i + 1] if x < CH - 1 else px[zo]]:
+					_quad(out, o, 2)
+				if not sol[d[i - 1] if x > 0 else nx[15 + zo]]:
+					_quad(out, o, 3)
+				if not sol[d[i + CH] if z < CH - 1 else pz[x + yo]]:
+					_quad(out, o, 4)
+				if not sol[d[i - CH] if z > 0 else nz[x + 15 * CH + yo]]:
+					_quad(out, o, 5)
+	return out
+
+
+## Two collision triangles for one block face, with the same corners and winding as MeshBuf.face.
+func _quad(out: PackedVector3Array, o: Vector3, dir: int) -> void:
+	var cs: Array = MeshBuf.CORNERS[dir]
+	out.append(o + cs[0])
+	out.append(o + cs[1])
+	out.append(o + cs[2])
+	out.append(o + cs[0])
+	out.append(o + cs[2])
+	out.append(o + cs[3])
 
 
 func _build(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> MeshBuf:
@@ -393,6 +447,10 @@ func _mesh_done(k: Vector2i, ver: int, buf: MeshBuf) -> void:
 ## The benchmark also times this directly.
 func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 	var origin := Vector3(k.x * CH, 0, k.y * CH)
+	if not render:
+		_apply_collision(c, origin, buf.faces)
+		c.ready = true
+		return
 	if c.node == null:
 		c.node = MeshInstance3D.new()
 		add_child(c.node)
@@ -411,20 +469,7 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		c.node.mesh = am
 	else:
 		c.node.mesh = null
-	if c.body == null:
-		c.body = StaticBody3D.new()
-		c.body.collision_layer = 1
-		c.body.collision_mask = 0
-		c.shape = CollisionShape3D.new()
-		c.body.add_child(c.shape)
-		add_child(c.body)
-		c.body.position = origin
-	if buf.faces.size() > 0:
-		var sh := ConcavePolygonShape3D.new()
-		sh.set_faces(buf.faces)
-		c.shape.shape = sh
-	else:
-		c.shape.shape = null
+	_apply_collision(c, origin, buf.faces)
 	for l in c.lights:
 		if is_instance_valid(l):
 			l.queue_free()
@@ -439,6 +484,37 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		o.position = Vector3(lp) + Vector3(0.5, 0.8, 0.5)
 		c.lights.append(o)
 	c.ready = true
+
+
+func _apply_collision(c: Chunk, origin: Vector3, faces: PackedVector3Array) -> void:
+	if c.body == null:
+		c.body = StaticBody3D.new()
+		c.body.collision_layer = 1
+		c.body.collision_mask = 0
+		c.shape = CollisionShape3D.new()
+		c.body.add_child(c.shape)
+		add_child(c.body)
+		c.body.position = origin
+	if faces.size() > 0:
+		var sh := ConcavePolygonShape3D.new()
+		sh.set_faces(faces)
+		c.shape.shape = sh
+	else:
+		c.shape.shape = null
+
+
+## Rebuild a chunk on the spot (sync_mesh). Needs the chunk and its four neighbours' data.
+func _mesh_now(k: Vector2i) -> void:
+	var c: Chunk = chunks.get(k)
+	if c == null or not c.has_data or not c.ready:
+		return
+	var n: Array = [chunks.get(k + Vector2i(1, 0)), chunks.get(k + Vector2i(-1, 0)), chunks.get(k + Vector2i(0, 1)), chunks.get(k + Vector2i(0, -1))]
+	for nc in n:
+		if nc == null or not nc.has_data:
+			return
+	c.built_ver = c.mesh_ver
+	mesh_count += 1
+	apply_mesh(c, k, _make_buf(c.data, n[0].data, n[1].data, n[2].data, n[3].data))
 
 
 # ------------------------------------------------------------ queries & edits
@@ -511,6 +587,9 @@ func _dirty(k: Vector2i) -> void:
 		return
 	c.mesh_ver += 1
 	sched_dirty = true
+	if sync_mesh:
+		_mesh_now(k)
+		return
 	if not urgent.has(k):
 		urgent.append(k)
 
@@ -531,6 +610,8 @@ func damage_block(p: Vector3i, amount: float) -> bool:
 
 
 func _show_crack(p: Vector3i, frac: float) -> void:
+	if not render:
+		return
 	var stage := clampi(int(frac * 4.0), 0, 3)
 	var n: MeshInstance3D = crack_nodes.get(p)
 	if n == null:

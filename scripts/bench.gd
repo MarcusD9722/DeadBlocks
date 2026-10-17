@@ -149,15 +149,18 @@ func _run() -> void:
 
 	_out("=== DEAD BLOCKS BENCH RESULTS ===")
 	_out("machine: %s | %s | %d cores | Godot %s" % [OS.get_name(), _cpu_name(), OS.get_processor_count(), Engine.get_version_info()["string"]])
-	_out("setup: physics %s at %d ticks/s | chunk radius %d | chunk worker threads %d | %d s per scenario | seed %d" % [
-		str(ProjectSettings.get_setting("physics/3d/physics_engine")), tps, w.render_radius, _chunk_threads(), int(secs), g.seed_v])
+	_out("setup: physics %s at %d ticks/s | %s | chunk radius %d | chunk worker threads %d | %d s per scenario | seed %d" % [
+		str(ProjectSettings.get_setting("physics/3d/physics_engine")), tps, "SERVER MODE" if G.server_mode else "full game",
+		w.render_radius, _chunk_threads(), int(secs), g.seed_v])
+	_out("build: %s %s | physics on its own thread: %s" % [
+		"exported" if OS.has_feature("template") else "editor binary", "release" if not OS.is_debug_build() else "debug",
+		"yes" if ProjectSettings.get_setting("physics/3d/run_on_separate_thread") else "no"])
 	_micro()
 	var idle_ms := await _scenario("idle", 10.0, 0, 0, 0.0)
 	explore_ms = await _scenario("explore", secs, 0, explorer_count, idle_ms)
 	await _scenario("horde", secs, zombie_target, 0, idle_ms)
 	await _scenario("combined", secs, zombie_target, explorer_count, idle_ms)
-	_out("memory: %.0f MB now, %.0f MB peak | chunks in memory: %d" % [
-		OS.get_static_memory_usage() / 1048576.0, OS.get_static_memory_peak_usage() / 1048576.0, w.chunks.size()])
+	_out("memory: %s | chunks in memory: %d" % [_memory(), w.chunks.size()])
 	_out("Load = share of one CPU core the game's main thread used. Under 50% = OK, under 85% = TIGHT, otherwise OVERLOADED.")
 	_out("=== END ===")
 	var f := FileAccess.open(out_path, FileAccess.WRITE)
@@ -178,6 +181,25 @@ func _chunk_threads() -> int:
 		pool = OS.get_processor_count()
 	var ratio := float(ProjectSettings.get_setting("threading/worker_pool/low_priority_thread_ratio"))
 	return mini(G.world.max_tasks, clampi(int(pool * ratio), 1, maxi(1, pool - 1)))
+
+
+## Process memory. Release exports report 0 for Godot's own counters, so read Linux's when we can.
+func _memory() -> String:
+	var f := FileAccess.open("/proc/self/status", FileAccess.READ)
+	if f != null:
+		# /proc files report a length of 0, so read line by line instead of all at once.
+		var now := 0.0
+		var peak := 0.0
+		for _i in 200:
+			var line := f.get_line()
+			if line == "" and f.eof_reached():
+				break
+			if line.begins_with("VmRSS:"):
+				now = float(line.split(":")[1].strip_edges().split(" ")[0]) / 1024.0
+			elif line.begins_with("VmHWM:"):
+				peak = float(line.split(":")[1].strip_edges().split(" ")[0]) / 1024.0
+		return "%.0f MB now, %.0f MB peak (whole process)" % [now, peak]
+	return "%.0f MB now, %.0f MB peak" % [OS.get_static_memory_usage() / 1048576.0, OS.get_static_memory_peak_usage() / 1048576.0]
 
 
 func _cpu_name() -> String:
@@ -205,7 +227,7 @@ func _micro() -> void:
 	t0 = Time.get_ticks_usec()
 	for i in range(1, n + 1):
 		var k := Vector2i(base + i, base + 1)
-		bufs.append(w._build(datas[k], datas[k + Vector2i(1, 0)], datas[k + Vector2i(-1, 0)], datas[k + Vector2i(0, 1)], datas[k + Vector2i(0, -1)]))
+		bufs.append(w._make_buf(datas[k], datas[k + Vector2i(1, 0)], datas[k + Vector2i(-1, 0)], datas[k + Vector2i(0, 1)], datas[k + Vector2i(0, -1)]))
 	var build_ms := (Time.get_ticks_usec() - t0) / 1000.0 / float(n)
 	# The main-thread part (world.apply_mesh): render mesh, collision shape and lights, built far
 	# away from play on throwaway chunks.

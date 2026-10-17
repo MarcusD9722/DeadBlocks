@@ -5,7 +5,7 @@ This measures whether the Pi can run the Dead Blocks server. It simulates:
 - 7 players sprinting into new land in different directions,
 - both at the same time.
 
-It runs three times, once per physics setup, and takes about **13 minutes** in total. Every run uses the same world (seed 4242), so the numbers can be compared with other machines.
+It runs five times, once per setup, and takes about **22 minutes** in total: the three setups from M0, then the M1 server without and with physics on its own thread. To run only the two M1 setups (about **9 minutes**), put `BENCH_SETUPS=m1 ` in front of the run command in step 4. Every run uses the same world (seed 4242), so the numbers can be compared with other machines.
 
 ## What you need
 - Raspberry Pi 5 with **64-bit** Raspberry Pi OS.
@@ -57,7 +57,7 @@ Then:
 cd ~/deadblocks
 GODOT=~/godot/Godot_v4.7.2-stable_linux.arm64 ./tools/run_bench.sh
 ```
-Leave the Pi alone while it runs, since other heavy programs skew the numbers. It prints `[1/3]`, `[2/3]` and `[3/3]` as it goes. To stop it early, press **Ctrl+C**.
+Leave the Pi alone while it runs, since other heavy programs skew the numbers. It prints `[1/5]`, `[2/5]` … as it goes. To stop it early, press **Ctrl+C**.
 
 ## 5. Send back the results
 The results block is long, and scrolling up inside tmux doesn't work the normal way. So when the run finishes:

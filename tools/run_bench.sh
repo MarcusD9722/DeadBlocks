@@ -2,6 +2,7 @@
 # Runs the server benchmark once per physics setup and prints one results block, also saved to
 # bench_results/summary.txt. Usage (from anywhere):
 #   GODOT=/path/to/godot ./tools/run_bench.sh [extra bench args, e.g. --bench-secs=30]
+#   BENCH_SETUPS=m1 GODOT=... ./tools/run_bench.sh    only the two M1 server setups (about 9 minutes)
 # Every run uses world seed 4242 so runs and machines are comparable (pass --seed=N to change it).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -12,9 +13,17 @@ mkdir -p "$OUT_DIR"
 echo "Importing project..."
 "$GODOT" --headless --path . --import >/dev/null 2>&1 || true
 
-# Each setup is "physics engine|physics ticks per second". override.cfg applies one setup
-# for one run and is always removed afterwards.
-SETUPS=("GodotPhysics3D|60" "Jolt Physics|60" "Jolt Physics|30")
+# Each setup is "physics engine|physics ticks per second|extra args|physics thread (yes/no)".
+# override.cfg applies one setup for one run and is always removed afterwards. The first three are
+# the M0 setups (kept so results stay comparable); the last two are the M1 server (Jolt at 30
+# ticks/s in server mode), without and with physics on its own thread.
+M0_SETUPS=("GodotPhysics3D|60||no" "Jolt Physics|60||no" "Jolt Physics|30||no")
+M1_SETUPS=("Jolt Physics|30|--server-mode|no" "Jolt Physics|30|--server-mode|yes")
+if [ "${BENCH_SETUPS:-all}" = "m1" ]; then
+	SETUPS=("${M1_SETUPS[@]}")
+else
+	SETUPS=("${M0_SETUPS[@]}" "${M1_SETUPS[@]}")
+fi
 SAMPLER_PID=""
 cleanup() {
 	rm -f override.cfg
@@ -48,16 +57,21 @@ limit=$(( ${secs%.*} * 3 + 600 ))
 n=0
 for setup in "${SETUPS[@]}"; do
 	n=$((n + 1))
-	engine="${setup%%|*}"
-	tps="${setup##*|}"
-	printf '[physics]\n3d/physics_engine="%s"\ncommon/physics_ticks_per_second=%s\n' "$engine" "$tps" > override.cfg
-	echo "[$n/${#SETUPS[@]}] Running benchmark with $engine at $tps ticks/s (about 4 minutes)..."
+	IFS='|' read -r engine tps extra thread <<< "$setup"
+	thread_on=false
+	[ "$thread" = "yes" ] && thread_on=true
+	printf '[physics]\n3d/physics_engine="%s"\ncommon/physics_ticks_per_second=%s\n3d/run_on_separate_thread=%s\n' \
+		"$engine" "$tps" "$thread_on" > override.cfg
+	label="$engine at $tps ticks/s${extra:+ ($extra)}"
+	if [ "$thread_on" = true ]; then label="$label + physics thread"; fi
+	echo "[$n/${#SETUPS[@]}] Running benchmark with $label (about 4 minutes)..."
 	if command -v vcgencmd >/dev/null 2>&1; then
 		sample_pi > "$OUT_DIR/pi_$n.txt" &
 		SAMPLER_PID=$!
 	fi
 	rc=0
-	timeout --foreground "$limit" "$GODOT" --headless --path . -- --bench --out="$OUT_DIR/bench_$n.txt" "$@" --seed=4242 \
+	# shellcheck disable=SC2086 # $extra is empty or one flag
+	timeout --foreground "$limit" "$GODOT" --headless --path . -- --bench --out="$OUT_DIR/bench_$n.txt" $extra "$@" --seed=4242 \
 		> "$OUT_DIR/log_$n.txt" 2>&1 || rc=$?
 	if [ -n "$SAMPLER_PID" ]; then
 		kill "$SAMPLER_PID" 2>/dev/null || true
@@ -69,7 +83,7 @@ for setup in "${SETUPS[@]}"; do
 		why="exit code $rc"
 		if [ "$rc" -eq 124 ]; then why="TIMED OUT after $limit s"; fi
 		{
-			echo "=== RUN $n ($engine at $tps ticks/s) FAILED, $why. Last lines of its log: ==="
+			echo "=== RUN $n ($label) FAILED, $why. Last lines of its log: ==="
 			tail -n 30 "$OUT_DIR/log_$n.txt"
 		} > "$OUT_DIR/bench_$n.txt"
 	fi

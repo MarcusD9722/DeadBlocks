@@ -171,6 +171,10 @@ func _physics_process(delta: float) -> void:
 	var st: String = G.game.state
 	if dead or st == "loading" or st == "title":
 		return
+	# Aim is updated here, not in _process: the mob ray needs the physics space, which is only
+	# safe to query during the physics step when physics runs on its own thread.
+	if st == "playing":
+		_update_target()
 	if not G.world.is_ready_at(global_position):
 		velocity = Vector3.ZERO
 		return
@@ -230,7 +234,6 @@ func _process(delta: float) -> void:
 		elif food > 45.0 and health < max_health:
 			health = minf(max_health, health + 0.5 * delta)
 	if st == "playing":
-		_update_target()
 		_handle_mining(delta)
 	else:
 		mine_progress = 0.0

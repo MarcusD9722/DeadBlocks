@@ -122,6 +122,8 @@ Steps, in order of payoff:
 
 Expected gain: about **2.5–3×** more zombies on the same Pi, never a full 4×, because some work stays sequential and the Pi may share cores with Minecraft. The Pi benchmark results decide how soon step 4 is needed. Each step is checked with `tools/run_bench.sh`.
 
+M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spacing, zombies ticked by region) on the reference machine, Jolt at 30 ticks/s: horde **37%** (was 42% for the same code without server mode, 43–51% in M0), combined **46%** (was 53%; M0 58–63%). Pi numbers: pending the owner's M1.1 run.
+
 ## Milestone plan
 - **M0 — Setup & measurement** (done): GitHub repo; headless stress test (120 zombies + simulated players), run both here and on the Pi. Result: Jolt @ 30 ticks/s.
 - **M1 — Multiplayer foundation** (detailed plan: `docs/M1-plan.md`): server/client split, dedicated headless Pi server build (Linux ARM64) + Windows client build, join with name + password, server-side save/load with autosave, time pauses when empty. Clients generate terrain from the seed; the server only sends block edits. The server is built around independent regions (see "Server multi-core plan"), with physics on its own thread and no render meshes.

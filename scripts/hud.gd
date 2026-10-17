@@ -111,7 +111,7 @@ func _build_title() -> void:
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	t.add_theme_constant_override("outline_size", 12)
 	vb.add_child(t)
-	var sub := _label("Zombie Survival Craft   ·   Prototype Build 1", 24, Color(0.85, 0.85, 0.8))
+	var sub := _label("Zombie Survival Craft   ·   Version %s (%s)" % [G.VERSION, G.BUILD_NAME], 24, Color(0.85, 0.85, 0.8))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(sub)
 	vb.add_child(Control.new())

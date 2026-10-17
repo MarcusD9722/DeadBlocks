@@ -12,6 +12,11 @@ func _ready() -> void:
 	max_hp = 20.0
 	add_to_group("animals")
 	_setup_body(0.8, 0.9)
+	if not G.server_mode:
+		_build_model()
+
+
+func _build_model() -> void:
 	var fur := Color8(112, 74, 52).lerp(Color8(84, 60, 44), randf())
 	_box(model, Vector3(0.66, 0.55, 1.05), Vector3(0, 0.62, 0), fur)
 	_box(model, Vector3(0.5, 0.12, 0.8), Vector3(0, 0.95, -0.05), fur.darkened(0.25))
@@ -58,7 +63,8 @@ func _physics_process(delta: float) -> void:
 
 func _on_hurt(_attacker: Node) -> void:
 	flee_t = 5.0
-	G.sfx.play_at("squeal", global_position + Vector3(0, 0.7, 0), -4.0)
+	if not G.server_mode:
+		G.sfx.play_at("squeal", global_position + Vector3(0, 0.7, 0), -4.0)
 
 
 func _on_death(attacker: Node) -> void:

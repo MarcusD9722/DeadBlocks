@@ -1,8 +1,8 @@
 extends Node3D
 ## Game flow: world setup, day/night cycle, blood moon hordes, spawning, menus.
 
-const DAY_MINUTES := 12.0
-const HOURS_PER_SEC := 24.0 / (DAY_MINUTES * 60.0)
+## Real minutes per in-game day (DESIGN.md: 30). Tests can override it with --day-minutes=N.
+var day_minutes := 30.0
 
 var state := "loading"
 var day := 1
@@ -39,7 +39,16 @@ func _ready() -> void:
 	var sv := G.arg_value("--seed=")
 	if sv != "":
 		seed_v = int(sv)
+	if G.arg_value("--day-minutes=") != "":
+		day_minutes = maxf(0.1, float(G.arg_value("--day-minutes=")))
 	G.game = self
+	if G.has_arg("--worldgen-hash"):
+		preload("res://scripts/tests/worldgen_hash.gd").run(seed_v)
+		state = "quitting"
+		set_process(false)
+		set_process_unhandled_input(false)
+		get_tree().quit()
+		return
 	_setup_input()
 	G.tex = Tex.new()
 	var sfx := preload("res://scripts/sfx.gd").new()
@@ -59,12 +68,18 @@ func _ready() -> void:
 	mobs.process_mode = Node.PROCESS_MODE_PAUSABLE
 	add_child(mobs)
 
+	var sim := preload("res://scripts/server/sim.gd").new()
+	sim.name = "Sim"
+	sim.process_mode = Node.PROCESS_MODE_PAUSABLE
+	add_child(sim)
+
 	spawn_pos = _find_spawn()
 	player = preload("res://scripts/player.gd").new()
 	player.name = "Player"
 	player.process_mode = Node.PROCESS_MODE_PAUSABLE
 	add_child(player)
 	G.player = player
+	sim.add_player(player)
 	player.global_position = spawn_pos
 	player.spawn_point = spawn_pos
 	player.set_look(randf() * TAU, -0.1)
@@ -83,6 +98,9 @@ func _ready() -> void:
 	elif G.has_arg("--bench"):
 		var b := preload("res://scripts/bench.gd").new()
 		add_child(b)
+	elif G.has_arg("--regiontest"):
+		var rt := preload("res://scripts/tests/regiontest.gd").new()
+		add_child(rt)
 
 
 func _setup_input() -> void:
@@ -308,7 +326,7 @@ func horde_text() -> String:
 
 func _tick_time(delta: float) -> void:
 	var prev := time
-	time += delta * HOURS_PER_SEC
+	time += delta * 24.0 / (day_minutes * 60.0)
 	if time >= 24.0:
 		time -= 24.0
 		day += 1
@@ -351,18 +369,18 @@ func skip_time(blood: bool) -> void:
 	if blood:
 		while day % 7 != 0:
 			day += 1
-		time = 19.85
+		time = 19.95
 		horde_active = false
 		was_night = false
-		hud.msg("[Test] Jumped to Day %d, 19:51. Blood Moon in a few seconds." % day, Color(0.8, 0.8, 1))
+		hud.msg("[Test] Jumped to Day %d, 19:57. Blood Moon in a few seconds." % day, Color(0.8, 0.8, 1))
 	elif is_night():
 		if time >= 20.0:
 			day += 1
-		time = 5.85
-		hud.msg("[Test] Skipped to 05:51 — dawn is near.", Color(0.8, 0.8, 1))
+		time = 5.95
+		hud.msg("[Test] Skipped to 05:57 — dawn is near.", Color(0.8, 0.8, 1))
 	else:
-		time = 19.85
-		hud.msg("[Test] Skipped to 19:51 — night is near.", Color(0.8, 0.8, 1))
+		time = 19.95
+		hud.msg("[Test] Skipped to 19:57 — night is near.", Color(0.8, 0.8, 1))
 	_update_sky()
 
 
@@ -470,6 +488,7 @@ func spawn_zombie(kind: String, at := Vector3.INF) -> Node:
 		return null
 	var z := ZombieScript.new()
 	z.setup(kind, day)
+	G.sim.register_zombie(z)
 	mobs.add_child(z)
 	z.global_position = p
 	return z

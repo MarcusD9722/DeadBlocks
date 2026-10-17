@@ -1,5 +1,6 @@
 extends Mob
-## Chases the player, hops ledges and smashes through whatever is in the way.
+## Chases the nearest player in its region, hops ledges and smashes through whatever is in the way.
+## The Sim node ticks every zombie (sim_tick) in a fixed order; zombies have no _physics_process.
 
 var speed := 2.4
 var chase_range := 30.0
@@ -18,6 +19,12 @@ var arm_r: Node3D
 var leg_l: Node3D
 var leg_r: Node3D
 var voice: AudioStreamPlayer3D
+
+## Set by Sim: processing order, region membership, and this zombie's own random numbers
+## (so its choices don't depend on the order zombies are processed in).
+var id := 0
+var region = null
+var rng := RandomNumberGenerator.new()
 
 
 func setup(kind: String, day: int) -> void:
@@ -39,11 +46,15 @@ func setup(kind: String, day: int) -> void:
 
 
 func _ready() -> void:
+	set_physics_process(false)
 	if not blood:
 		hp = 30.0
 		max_hp = 30.0
 	add_to_group("zombies")
 	_setup_body(0.6, 1.9)
+	groan_t = rng.randf_range(1.0, 7.0)
+	if G.server_mode:
+		return
 	_build_model()
 	voice = AudioStreamPlayer3D.new()
 	voice.stream = G.sfx.streams["groan"]
@@ -52,7 +63,6 @@ func _ready() -> void:
 	voice.volume_db = -2.0
 	add_child(voice)
 	voice.position.y = 1.6
-	groan_t = randf_range(1.0, 7.0)
 
 
 func _build_model() -> void:
@@ -81,17 +91,37 @@ func _build_model() -> void:
 		model.scale = Vector3.ONE * 1.06
 
 
-func _physics_process(delta: float) -> void:
-	if dead or not G.world.is_ready_at(global_position):
+## The nearest living player in this zombie's region, or null.
+func _target():
+	if region == null:
+		return null
+	var best = null
+	var bd := INF
+	for p in region.players:
+		if not is_instance_valid(p) or p.dead:
+			continue
+		var d := Vector2(p.global_position.x - global_position.x, p.global_position.z - global_position.z).length_squared()
+		if d < bd:
+			bd = d
+			best = p
+	return best
+
+
+func sim_tick(delta: float) -> void:
+	if not G.world.is_ready_at(global_position):
 		return
 	attack_cd -= delta
 	block_cd -= delta
 	groan_t -= delta
-	_tick_flash(delta)
-	var pl = G.player
-	var to: Vector3 = pl.global_position - global_position
-	var hd := Vector2(to.x, to.z).length()
-	var chasing: bool = (not pl.dead) and hd < chase_range
+	if not G.server_mode:
+		_tick_flash(delta)
+	var pl = _target()
+	var to := Vector3.ZERO
+	var hd := INF
+	if pl != null:
+		to = pl.global_position - global_position
+		hd = Vector2(to.x, to.z).length()
+	var chasing: bool = pl != null and hd < chase_range
 	var dir := Vector3.ZERO
 	if chasing:
 		if hd > 0.85:
@@ -99,19 +129,11 @@ func _physics_process(delta: float) -> void:
 	else:
 		wander_t -= delta
 		if wander_t <= 0.0:
-			wander_t = randf_range(2.0, 6.0)
-			wander_dir = Vector3.ZERO if randf() < 0.35 else Vector3.FORWARD.rotated(Vector3.UP, randf() * TAU)
+			wander_t = rng.randf_range(2.0, 6.0)
+			wander_dir = Vector3.ZERO if rng.randf() < 0.35 else Vector3.FORWARD.rotated(Vector3.UP, rng.randf() * TAU)
 		dir = wander_dir
-	# Spread out from other zombies a little
 	if chasing:
-		for z in get_tree().get_nodes_in_group("zombies"):
-			if z == self:
-				continue
-			var d: Vector3 = global_position - z.global_position
-			d.y = 0.0
-			var l := d.length()
-			if l < 0.8 and l > 0.001:
-				dir += d / l * (0.8 - l)
+		dir += _spacing()
 		if dir.length() > 1.0:
 			dir = dir.normalized()
 	var cell := feet_cell()
@@ -123,10 +145,11 @@ func _physics_process(delta: float) -> void:
 		if stuck_t > 0.35 and block_cd <= 0.0:
 			var bc := blocking_cell(dir)
 			if bc.y > -900:
-				G.world.damage_block(bc, block_dmg)
+				G.sim.queue_block_damage(bc, block_dmg, id)
 				block_cd = 1.0
 				attack_anim = 1.0
-				G.sfx.play_at("thud", Vector3(bc) + Vector3(0.5, 0.5, 0.5), -2.0)
+				if not G.server_mode:
+					G.sfx.play_at("thud", Vector3(bc) + Vector3(0.5, 0.5, 0.5), -2.0)
 	else:
 		stuck_t = 0.0
 	# Hit the player when close and nothing solid in between
@@ -139,14 +162,40 @@ func _physics_process(delta: float) -> void:
 	if in_spikes:
 		hp -= 7.0 * delta
 		flash = maxf(flash, 0.35)
-		G.world.damage_block(cell, 3.0 * delta)
+		G.sim.queue_block_damage(cell, 3.0 * delta, id)
 		if hp <= 0.0:
 			hurt(0.0, Vector3.ZERO, null)
+	if G.server_mode:
+		return
 	if groan_t <= 0.0:
-		groan_t = randf_range(5.0, 12.0)
-		voice.pitch_scale = randf_range(0.8, 1.15) * (0.85 if blood else 1.0)
+		groan_t = rng.randf_range(5.0, 12.0)
+		voice.pitch_scale = rng.randf_range(0.8, 1.15) * (0.85 if blood else 1.0)
 		voice.play()
 	_animate(delta)
+
+
+## Push away from zombies closer than 0.8 m, using where everyone stood at the start of this tick.
+func _spacing() -> Vector3:
+	var push := Vector3.ZERO
+	if region == null:
+		return push
+	var me := global_position
+	var cx := floori(me.x)
+	var cz := floori(me.z)
+	for gz in range(cz - 1, cz + 2):
+		for gx in range(cx - 1, cx + 2):
+			var cell = region.grid.get(Vector2i(gx, gz))
+			if cell == null:
+				continue
+			for e in cell:
+				if e[0] == id:
+					continue
+				var d: Vector3 = me - e[1]
+				d.y = 0.0
+				var l := d.length()
+				if l < 0.8 and l > 0.001:
+					push += d / l * (0.8 - l)
+	return push
 
 
 func _animate(delta: float) -> void:
@@ -161,7 +210,8 @@ func _animate(delta: float) -> void:
 
 
 func _on_hurt(_attacker: Node) -> void:
-	G.sfx.play_at("zhurt", global_position + Vector3(0, 1.5, 0), -3.0)
+	if not G.server_mode:
+		G.sfx.play_at("zhurt", global_position + Vector3(0, 1.5, 0), -3.0)
 
 
 func _on_death(attacker: Node) -> void:
