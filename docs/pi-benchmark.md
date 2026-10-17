@@ -23,7 +23,7 @@ sudo apt install -y git unzip wget tmux
 ## 2. Download the game code
 **If the GitHub repository is public**, this is all you need:
 ```bash
-git clone --branch m0-stress-test https://github.com/MarcusD9722/deadblocks ~/deadblocks
+git clone https://github.com/MarcusD9722/deadblocks ~/deadblocks
 ```
 
 **If the repository is private**, the Pi has to sign in to GitHub once first:
@@ -36,10 +36,8 @@ Pick **GitHub.com**, then **HTTPS**, then answer **Yes** to "authenticate Git", 
 2. If it then says it **failed to open a web browser**, that's fine. On your phone or PC, open https://github.com/login/device, sign in, and type the code.
 3. Wait until the Pi prints **Logged in as …**, then run:
 ```bash
-gh repo clone MarcusD9722/deadblocks ~/deadblocks -- --branch m0-stress-test
+gh repo clone MarcusD9722/deadblocks ~/deadblocks
 ```
-
-(Once the benchmark is merged into `main`, you can leave out the branch part.)
 
 ## 3. Download Godot for the Pi
 ```bash
@@ -78,7 +76,9 @@ Steps 1–3 are only needed the first time. To run the latest version of the ben
 cd ~/deadblocks
 git pull
 ```
-Then go straight to step 4. (Once the benchmark is merged into `main`, run `git checkout main` before `git pull`.)
+Then go straight to step 4.
+
+If your copy was cloned from the old `m0-stress-test` branch, switch it to `main` once, first: `git fetch origin && git checkout main`.
 
 ## If something goes wrong
 - **"Permission denied" on `run_bench.sh`:** run `chmod +x tools/run_bench.sh` and try again.
