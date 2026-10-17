@@ -13,7 +13,9 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - **Dedicated server** on the owner's Raspberry Pi 5 (16 GB, 64-bit Raspberry Pi OS, mildly overclocked), running 24/7 off an **NVMe drive**.
 - The same Pi may also run the owner's **Minecraft server**. Memory is not a concern (Dead Blocks peaked at ~1 GB in the benchmark); CPU is shared, so Dead Blocks should not assume it has all 4 cores. Advice given for Minecraft: Java edition on Paper (or Fabric + Lithium/C2ME), world pre-generated with Chunky, view-distance ~8 / simulation-distance ~6. Bedrock's official server does not run natively on ARM.
 - Friends connect **over the internet**. All players are on **Windows**.
-- Joining: each player picks a name, the server has a password, characters are saved by name.
+- Home connection: **AT&T fiber, ~400 Mbps upload**, so bandwidth is not a constraint (8 players + 120 zombies needs a few Mbit/s).
+- Joining: each player picks a **name and a personal PIN**; the server also has a password. Characters are saved by name, and the PIN protects the name, so a player can log in from any PC.
+- Builds reach players as **downloads on the public GitHub repo** (Releases): the Windows `.exe` for players and the Linux ARM64 server for the Pi.
 - **Time stops when nobody is online.**
 - Logging out: your character stays in the world for **60 seconds** after you disconnect. During a Blood Moon, your share of the horde moves to the nearest other player.
 
