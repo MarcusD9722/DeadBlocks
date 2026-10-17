@@ -136,6 +136,8 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
 ## Milestone plan
 - **M0 — Setup & measurement** (done): GitHub repo; headless stress test (120 zombies + simulated players), run both here and on the Pi. Result: Jolt @ 30 ticks/s.
 - **M1 — Multiplayer foundation** (detailed plan: `docs/M1-plan.md`): server/client split, dedicated headless Pi server build (Linux ARM64) + Windows client build, join with name + password, server-side save/load with autosave, time pauses when empty. Clients generate terrain from the seed; the server only sends block edits. The server is built around independent regions (see "Server multi-core plan"), with physics on its own thread and no render meshes.
+  - M1.1 (done): test gate, server mode, physics thread, regions. M1.2 (done): join over the network with name + PIN + password, see each other, chat, admin commands, Host game, time stops while nobody is online. Next: M1.3 building together.
+  - Decided in M1.2: signing in with a name that is still online (say after a crash) and the right PIN takes over that session instead of being refused. A hosted game's server stops when the game closes, or by itself 15 s after its host is gone.
 - **M2 — Death & respawn**: backpack drop (10 min, anyone can loot), beds, random spawn points, 60 s logout linger.
 - **M3 — Zombie rework**: proximity-only aggression on normal days, Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
 - **M4 — Exploration & loot**: distance-based danger scaling, ruins/POIs, chests, loot tables with rarity, 3-day refill, doors with locks/PIN.

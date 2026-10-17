@@ -5,6 +5,8 @@ extends RefCounted
 
 const CH := 16
 const H := 64
+## Bump whenever generation changes: clients and servers must build the same terrain.
+const VERSION := 1
 
 var seed_v := 0
 var n_height := FastNoiseLite.new()

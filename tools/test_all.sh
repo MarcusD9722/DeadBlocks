@@ -3,7 +3,8 @@
 # line, any FAIL line, or any ERROR / SCRIPT ERROR line in its log (the autotest alone can say
 # fails=0 while thousands of errors scroll past).
 # Usage: GODOT=/path/to/godot ./tools/test_all.sh [--quick]
-#   --quick skips the exports, the Pi terrain check and the benchmark smoke run.
+#   --quick skips the exports, the Pi terrain check, the Pi server network test and the benchmark
+#   smoke run.
 # Logs: build/test_logs/<stage>.log. Don't run benchmarks at the same time.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -44,9 +45,16 @@ h2=$(sed -n 's/^REGIONTEST order=.* hash=//p' "$LOG_DIR/regiontest_reverse.log")
 printf '%-24s' "regiontest_same_result"
 if [ -n "$h1" ] && [ "$h1" = "$h2" ]; then echo "ok"; else echo "FAILED (forward $h1 vs reverse $h2)"; fails=$((fails + 1)); fi
 
+stage nettest "NETTEST ALL DONE fails=0" 900 env GODOT="$GODOT" NETTEST_LOGS="$LOG_DIR/nettest" ./tools/run_nettest.sh
+
 if [ "$QUICK" -eq 0 ]; then
 	stage exports "Built version" 1800 env GODOT="$GODOT" ./tools/build_release.sh
 	stage worldgen_pc_vs_pi "WORLDGEN CHECK DONE" 1200 env GODOT="$GODOT" ./tools/check_worldgen.sh
+	# The same multiplayer test against the exported Raspberry Pi server (arm64, under qemu).
+	if command -v qemu-aarch64-static >/dev/null && [ -d /usr/aarch64-linux-gnu ]; then
+		stage nettest_pi_server "NETTEST ALL DONE fails=0" 1500 env GODOT="$GODOT" NETTEST_LOGS="$LOG_DIR/nettest_pi" \
+			./tools/run_nettest.sh qemu-aarch64-static -L /usr/aarch64-linux-gnu build/server/DeadBlocksServer.arm64 --headless --
+	fi
 	stage bench_smoke "=== END ===" 900 "$GODOT" --headless --path . -- --bench --server-mode --bench-secs=4 --seed=4242 --out="$LOG_DIR/bench_smoke.txt"
 fi
 

@@ -1,6 +1,6 @@
 # M1 plan: multiplayer foundation
 
-Status: **approved by the owner; M1.1 done.** Merged from three independent drafts (simplest-first, performance-first, risk-first), each of which prototyped and measured parts of this in a scratch copy. Numbers marked *measured* come from those prototypes on the 4-core 2.1 GHz cloud machine unless they say "Pi".
+Status: **approved by the owner; M1.1 and M1.2 done.** Merged from three independent drafts (simplest-first, performance-first, risk-first), each of which prototyped and measured parts of this in a scratch copy. Numbers marked *measured* come from those prototypes on the 4-core 2.1 GHz cloud machine unless they say "Pi".
 
 ## Goals
 At the end of M1:
@@ -20,7 +20,7 @@ Not in M1: backpacks/beds/logout linger (M2), the Blood Moon split/merge rules a
 |---|---|---|
 | Dedicated server | `--server` (the Pi; also the Windows exe with `--headless -- --server`) | Runs the world: no window, HUD, textures, sounds, render meshes or mob models. Jolt Physics at **30 ticks/s**, `Engine.max_fps = 30`. |
 | Client | Title screen → **Join server** | Draws the world, generates terrain itself from the seed, sends its own movement, asks the server for everything else. Physics at 60 Hz for the local player. |
-| Host game | Title screen → **Host game** | The exe starts **a second copy of itself as a dedicated server** (`OS.create_process`, bound to 0.0.0.0) and then joins it as a client. Same server code as the Pi, so testing at home tests the real thing. The child server exits when its parent exits. |
+| Host game | Title screen → **Host game** | The exe starts **a second copy of itself as a dedicated server** (`OS.create_process`, bound to 0.0.0.0) and then joins it as a client. Same server code as the Pi, so testing at home tests the real thing. The game kills the child server when it closes; if the game crashes, the server stops by itself once its host has been gone for 15 s (or nobody joined within 60 s). |
 | Play solo | Title screen → **Play solo** | Until step 7: today's single-player code, unchanged (the autotest keeps guarding it). From step 7: Host game bound to 127.0.0.1 with a random port and password, so solo runs on the same server code and the old path is removed. |
 
 *Why a child process for Host/Solo:* the drafts that ran the server inside the client process needed a separate physics space and had to keep server code away from the `G.world`/`G.player` globals; a separate process removes that whole class of bugs for the cost of a second Godot process on the PC.
@@ -40,7 +40,7 @@ Not in M1: backpacks/beds/logout linger (M2), the Blood Moon split/merge rules a
 
 ### What travels, and how often
 - Server tick 30 Hz; a **snapshot every 2nd tick (15 Hz)**.
-- Snapshot entity record = **10 bytes** (id, position at 1/64 m relative to a reference chunk, yaw, flags: kind / attacking / hurt / dead). Player records add pitch and held item. Packets are split at **≤ 1150 B** so they never fragment.
+- Snapshot entity record = **10 bytes** (id, position at 1/64 m relative to a reference chunk, yaw, flags: kind / attacking / hurt / dead). Player records add pitch and held item. (M1.2 sends players as 19-byte records with float positions; the compact format arrives with zombie snapshots in M1.4.) Packets are split at **≤ 1150 B** so they never fragment.
 - Each client gets the entities within **96 m** (fog ends at 100 m). Clients draw remote entities ~100 ms in the past with interpolation.
 - Movement up: 15 Hz, ~20 B. Reliable messages are batched once per tick: block edits (~3 B each, grouped per chunk), crack stages on change, inventory slot changes, health/food, time (every 5 s and on change), join/leave, chat.
 - **Bandwidth** (*measured* worst case, all 8 players at one base with 120 zombies): about **1.3 Mbit/s** of server upload in total; ~0.2 Mbit/s when players are spread out. Marcus has ~400 Mbps fiber upload, so this is a non-issue; `snapshot_hz` stays configurable anyway.
@@ -76,12 +76,13 @@ Not in M1: backpacks/beds/logout linger (M2), the Blood Moon split/merge rules a
 - Solo and Host worlds live on the PC under `%APPDATA%\DeadBlocks\worlds\`, with Continue / New world on the title screen.
 
 ## Joining and players
-- Title screen: **Play solo · Host game · Join server · Quit**. Join form: server address (`host` or `host:port`), **name**, **PIN**, server password, "remember me". Clear messages for: wrong password, wrong PIN, name already online, server full, version mismatch (with the download link), terrain mismatch, no answer ("check the address and port forwarding").
+- Title screen: **Play solo · Host game · Join server · Quit**. Join form: server address (`host` or `host:port`), **name**, **PIN**, server password, "remember me". Clear messages for: wrong password, wrong PIN, server full, version mismatch (with the download link), terrain mismatch, no answer ("check the address and port forwarding").
 - **Auth handshake:** the server sends a random challenge; the client answers with HMAC proofs of the server password and of its PIN, so **neither travels over the internet in plain text.**
+- **Signing in twice:** if a name is still online (for example its game just crashed) and someone signs in with that name and the right PIN, the new connection wins and the old one is closed with "You signed in from somewhere else." (Decided in M1.2, instead of refusing with "name already online", so a crash never locks a player out.)
 - **Names and PINs:** names are 3–16 letters, digits or `_`, unique ignoring case. The first join with a name claims it with the PIN the player typed (4–8 digits). The server stores only a hash of name + PIN. Five wrong PINs for a name lock that name for 5 minutes. A forgotten PIN: Marcus runs `dbctl reset-pin Bob`. Players should not reuse a real bank PIN.
 - **Characters** are saved by name: position, look, health, food, inventory, spawn point. A new name starts at the world spawn with today's starter kit. Until M2, today's death rules stay (keep items, respawn at the spawn point).
 - **Time pause:** "online" means joined and finished loading. When the last player leaves, the server saves, stops the clock, AI, spawning and food drain, and idles at ~1% of a core (*measured*). The first player back resumes it.
-- In multiplayer **Esc never pauses** (Resume / Disconnect / Quit / player list with ping). **T** opens text chat. F6/F7 time skips become admin commands (`/dusk`, `/bloodmoon`, `/save`, `/kick`, `/players`) for the names listed in `server.cfg` (Marcus).
+- In multiplayer **Esc never pauses** (Resume / Disconnect / Quit / player list with ping). **T** opens text chat. F6/F7 time skips become admin commands (`/dusk`, `/bloodmoon`, `/save`, `/kick`, `/players`) for the names listed in `server.cfg` (Marcus; until M1.6 they are given with `--admins=Marcus`).
 
 ## Server performance
 *Measured A/B in a prototype (cloud machine, Jolt at 30 ticks/s)*, main-thread load:
@@ -139,7 +140,9 @@ Result on the reference machine: server-mode horde 37%, combined 46% (targets 40
 - **Done when:** test_all green; on this machine the server-mode horde is ≤ 40% and combined ≤ 48% (today 51% / 63%).
 - **Marcus tries:** the new exe plays the same as before (zombie crowds still spread out; days are now 30 minutes). On the Pi: `git pull` and rerun the benchmark; the M1 server line should show roughly 40% horde / 60% combined.
 
-### M1.2 Join and walk together
+### M1.2 Join and walk together — done
+Result: `tools/run_nettest.sh` (in test_all.sh) passes against the x86 server and the exported arm64 server under qemu: two bots log in, walk, chat, see each other within 0.75 m (measured 0.00 m once both stand still), an admin's `/dusk` reaches the other player, a non-admin's is refused, a 30 m cheat jump is corrected; the clock stands still while nobody is online and runs again on rejoin; a rejoin starts where the player left; wrong password, bad name, wrong PIN, other version, other terrain and a full server are each refused with their message; a `kill -9`'d game can rejoin at once; Host game starts and stops its background server, and a crashed host's server stops by itself (host gone 15 s, or nobody joined within 60 s). Mining, building, crafting and zombies stay off online until M1.3/M1.4, and characters are kept in memory only until M1.5.
+
 - **Work:** protocol.gd, ENet transport, challenge auth with password + name + PIN, the dedicated server's session list and clock, time pause when empty, remote players (blocky avatar + name tag, interpolated), title screen with Host / Join, error messages, chat, pause menu with player list; Host game launches the child server; terrain-hash check at join; nettest harness (join, auth, movement, pause).
 - **Done when:** nettest join/auth/movement/pause pass; the x86 server and the arm64 server under qemu both accept joins; autotest still green.
 - **Marcus tries:** Host game in one window, Join 127.0.0.1 from a second window, walk around and chat; a wrong password or PIN gives a clear message. Then an **early internet test**: run the server on the Pi from the git checkout (in tmux), join it from the PC over the LAN, do the CGNAT check, forward UDP 24650, and have one friend join. This also checks that Windows terrain matches the Pi's.

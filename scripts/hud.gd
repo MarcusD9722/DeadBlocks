@@ -22,6 +22,27 @@ var pause_root: Control
 var seed_lbl: Label
 var death_root: Control
 var death_lbl: Label
+var title_menu: VBoxContainer
+var solo_btn: Button
+var join_panel: VBoxContainer
+var host_panel: VBoxContainer
+var title_info: Array = []
+var f_addr: LineEdit
+var f_name: LineEdit
+var f_pin: LineEdit
+var f_pw: LineEdit
+var f_remember: CheckBox
+var h_name: LineEdit
+var h_pin: LineEdit
+var h_pw: LineEdit
+var h_port: LineEdit
+var pause_players: Label
+var pause_quit: Button
+var pause_leave: Button
+var chat_edit: LineEdit
+var chat_log: Array = []
+var _pause_refresh_t := 0.0
+const CLIENT_CFG := "user://client.cfg"
 var style_slot: StyleBoxFlat
 var style_sel: StyleBoxFlat
 
@@ -41,8 +62,12 @@ func _ready() -> void:
 	_build_pause()
 	_build_death()
 	_build_title()
+	_build_chat()
 	slot_btns.resize(36)
 	slot_lbls.resize(36)
+	G.net.status.connect(_on_net_status)
+	G.net.chat.connect(_on_chat)
+	G.net.notice.connect(_on_notice)
 
 
 func _style(bg: Color, border: Color, w: int) -> StyleBoxFlat:
@@ -101,12 +126,7 @@ func _center(root: Control) -> VBoxContainer:
 
 func _build_title() -> void:
 	title_root = _overlay(0.55)
-	title_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for c in title_root.get_children():
-		c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var vb := _center(title_root)
-	vb.get_parent().mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var t := _label("DEAD BLOCKS", 92, Color(0.85, 0.2, 0.15))
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	t.add_theme_constant_override("outline_size", 12)
@@ -114,30 +134,297 @@ func _build_title() -> void:
 	var sub := _label("Zombie Survival Craft   ·   Version %s (%s)" % [G.VERSION, G.BUILD_NAME], 24, Color(0.85, 0.85, 0.8))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(sub)
-	vb.add_child(Control.new())
-	title_status = _label("Generating world...", 28, Color(0.95, 0.95, 0.7))
+	title_status = _label("", 22, Color(0.95, 0.95, 0.7))
 	title_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title_status.custom_minimum_size = Vector2(900, 0)
 	vb.add_child(title_status)
-	vb.add_child(Control.new())
+
+	title_menu = VBoxContainer.new()
+	title_menu.alignment = BoxContainer.ALIGNMENT_CENTER
+	title_menu.add_theme_constant_override("separation", 10)
+	vb.add_child(title_menu)
+	solo_btn = _button("Play solo", func(): G.game.start_game())
+	solo_btn.disabled = true
+	solo_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	title_menu.add_child(solo_btn)
+	for e in [["Host game", func(): _show_panel(host_panel)], ["Join server", func(): _show_panel(join_panel)], ["Quit", func(): get_tree().quit()]]:
+		var b := _button(e[0], e[1])
+		b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		title_menu.add_child(b)
+
+	join_panel = _panel(vb, "JOIN A SERVER")
+	f_addr = _field(join_panel, "Server address", "e.g. 192.168.1.50 or myserver.duckdns.org", false)
+	f_name = _field(join_panel, "Your name", "3-16 letters, digits or _", false)
+	f_pin = _field(join_panel, "Your PIN", "4-8 digits; protects your name", true)
+	f_pw = _field(join_panel, "Server password", "from the server owner", true)
+	f_remember = CheckBox.new()
+	f_remember.text = "Remember me on this PC"
+	f_remember.button_pressed = true
+	f_remember.focus_mode = Control.FOCUS_NONE
+	join_panel.add_child(f_remember)
+	_panel_buttons(join_panel, "Join", _on_join_pressed)
+
+	host_panel = _panel(vb, "HOST A GAME ON THIS PC")
+	h_name = _field(host_panel, "Your name", "3-16 letters, digits or _", false)
+	h_pin = _field(host_panel, "Your PIN", "4-8 digits; protects your name", true)
+	h_pw = _field(host_panel, "Password for friends", "they type this to join (can be empty)", true)
+	h_port = _field(host_panel, "Port", str(Proto.DEFAULT_PORT), false)
+	var lan := _lan_addresses()
+	var note := _label("Friends on your home network join with %s.\nFor internet play, forward UDP port %d on your router to this PC.\nThe world resets when you stop hosting (saving comes in M1.5)." % [
+		"this PC's address: " + ", ".join(lan) if not lan.is_empty() else "this PC's local address", Proto.DEFAULT_PORT], 15, Color(0.75, 0.78, 0.8))
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	host_panel.add_child(note)
+	_panel_buttons(host_panel, "Host", _on_host_pressed)
+
 	var how := _label("Gather. Craft. Build walls. Every night they come — every 7th night the horde comes.", 18, Color(0.8, 0.8, 0.8))
 	how.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(how)
 	var ctl := _label(CONTROLS, 16, Color(0.7, 0.72, 0.7))
 	ctl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(ctl)
+	title_info = [how, ctl]
+	_load_client_cfg()
+	if G.title_notice != "":
+		_set_status(G.title_notice, true)
+		G.title_notice = ""
 	title_root.visible = true
 
 
+## This PC's addresses on the home network (what friends in the same house type to join).
+static func _lan_addresses() -> Array:
+	var out := []
+	for a in IP.get_local_addresses():
+		if a.begins_with("192.168.") or a.begins_with("10.") or (a.begins_with("172.") and int(a.split(".")[1]) >= 16 and int(a.split(".")[1]) <= 31):
+			out.append(a)
+	return out
+
+
+func _panel(parent: Control, heading: String) -> VBoxContainer:
+	var p := VBoxContainer.new()
+	p.add_theme_constant_override("separation", 8)
+	p.visible = false
+	p.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	parent.add_child(p)
+	var h := _label(heading, 22, Color(0.85, 0.95, 0.7))
+	h.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	p.add_child(h)
+	return p
+
+
+func _field(parent: Control, text: String, hint: String, secret: bool) -> LineEdit:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+	var l := _label(text, 18)
+	l.custom_minimum_size = Vector2(190, 0)
+	row.add_child(l)
+	var e := LineEdit.new()
+	e.placeholder_text = hint
+	e.secret = secret
+	e.custom_minimum_size = Vector2(380, 36)
+	e.add_theme_font_size_override("font_size", 18)
+	row.add_child(e)
+	return e
+
+
+func _panel_buttons(panel: VBoxContainer, ok_text: String, ok: Callable) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	panel.add_child(row)
+	var b := _button(ok_text, ok)
+	b.custom_minimum_size = Vector2(180, 44)
+	row.add_child(b)
+	var back := _button("Back", func(): _show_panel(null))
+	back.custom_minimum_size = Vector2(180, 44)
+	row.add_child(back)
+
+
+func _show_panel(p: Control) -> void:
+	title_menu.visible = p == null
+	join_panel.visible = p == join_panel
+	host_panel.visible = p == host_panel
+
+
+func _set_status(text: String, is_error: bool) -> void:
+	title_status.text = text
+	title_status.add_theme_color_override("font_color", Color(1, 0.55, 0.45) if is_error else Color(0.95, 0.95, 0.7))
+
+
+func set_title_status(text: String) -> void:
+	_set_status(text, false)
+
+
+func _on_net_status(text: String, is_error: bool) -> void:
+	if title_root.visible:
+		_set_status(text, is_error)
+	elif is_error:
+		msg(text, Color(1, 0.55, 0.45))
+
+
+func _on_join_pressed() -> void:
+	var addr := f_addr.text.strip_edges()
+	var pname := f_name.text.strip_edges()
+	var pin := f_pin.text.strip_edges()
+	if addr == "":
+		_set_status("Type the server's address.", true)
+		return
+	if not Proto.valid_name(pname):
+		_set_status("Names are 3-16 letters, digits or _ (no spaces).", true)
+		return
+	var cfg := ConfigFile.new()
+	cfg.load(CLIENT_CFG)
+	var same: bool = cfg.get_value("join", "address", "") == addr and str(cfg.get_value("join", "name", "")).to_lower() == pname.to_lower()
+	var pin_k: PackedByteArray
+	if pin == "" and same and cfg.has_section_key("join", "pin_key"):
+		pin_k = Marshalls.base64_to_raw(cfg.get_value("join", "pin_key"))
+	elif Proto.valid_pin(pin):
+		pin_k = Proto.pin_key(pname, pin)
+	else:
+		_set_status("Your PIN must be 4-8 digits.", true)
+		return
+	var pw_k: PackedByteArray
+	if f_pw.text == "" and same and cfg.has_section_key("join", "password_key"):
+		pw_k = Marshalls.base64_to_raw(cfg.get_value("join", "password_key"))
+	else:
+		pw_k = Proto.password_key(f_pw.text)
+	cfg.set_value("join", "address", addr)
+	cfg.set_value("join", "name", pname)
+	cfg.set_value("join", "remember", f_remember.button_pressed)
+	if f_remember.button_pressed:
+		# Only hashes are kept, never the PIN or password themselves.
+		cfg.set_value("join", "pin_key", Marshalls.raw_to_base64(pin_k))
+		cfg.set_value("join", "password_key", Marshalls.raw_to_base64(pw_k))
+	else:
+		for k in ["pin_key", "password_key"]:
+			if cfg.has_section_key("join", k):
+				cfg.erase_section_key("join", k)
+	cfg.save(CLIENT_CFG)
+	var hp := G.split_address(addr)
+	G.join(hp[0], hp[1], pname, pin_k, pw_k)
+
+
+func _on_host_pressed() -> void:
+	var pname := h_name.text.strip_edges()
+	var pin := h_pin.text.strip_edges()
+	var port := Proto.DEFAULT_PORT
+	if h_port.text.strip_edges() != "":
+		port = int(h_port.text)
+	if not Proto.valid_name(pname):
+		_set_status("Names are 3-16 letters, digits or _ (no spaces).", true)
+		return
+	if not Proto.valid_pin(pin):
+		_set_status("Your PIN must be 4-8 digits.", true)
+		return
+	if port < 1024 or port > 65535:
+		_set_status("The port must be a number from 1024 to 65535.", true)
+		return
+	var cfg := ConfigFile.new()
+	cfg.load(CLIENT_CFG)
+	cfg.set_value("host", "name", pname)
+	cfg.set_value("host", "port", port)
+	cfg.save(CLIENT_CFG)
+	_set_status("Starting the server...", false)
+	var err: String = await G.host_game(pname, pin, h_pw.text, port)
+	if err != "":
+		_set_status(err, true)
+
+
+func _load_client_cfg() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(CLIENT_CFG) != OK:
+		return
+	f_addr.text = cfg.get_value("join", "address", "")
+	f_name.text = cfg.get_value("join", "name", "")
+	f_remember.button_pressed = cfg.get_value("join", "remember", true)
+	if cfg.has_section_key("join", "pin_key"):
+		f_pin.placeholder_text = "saved (leave empty)"
+	if cfg.has_section_key("join", "password_key"):
+		f_pw.placeholder_text = "saved (leave empty)"
+	h_name.text = cfg.get_value("host", "name", "")
+	var hp = cfg.get_value("host", "port", Proto.DEFAULT_PORT)
+	h_port.text = str(hp)
+
+
 func set_loading(p: float) -> void:
-	title_status.text = "Generating world...  %d%%" % int(p * 100.0)
+	if G.mode == "client":
+		_set_status("Loading the server's world...  %d%%" % int(p * 100.0), false)
+	else:
+		solo_btn.text = "Play solo   (generating world %d%%)" % int(p * 100.0)
 
 
 func show_ready() -> void:
-	title_status.text = "Click anywhere to start"
+	solo_btn.disabled = false
+	solo_btn.text = "Play solo"
+
+
+## Client mode: just the logo and a loading line while the server's world is built.
+func show_loading_overlay(on: bool) -> void:
+	title_root.visible = on
+	title_menu.visible = false
+	join_panel.visible = false
+	host_panel.visible = false
+	for c in title_info:
+		c.visible = false
 
 
 func hide_title() -> void:
 	title_root.visible = false
+
+
+# ------------------------------------------------------------ chat
+
+func _build_chat() -> void:
+	chat_edit = LineEdit.new()
+	chat_edit.visible = false
+	chat_edit.placeholder_text = "Say something (Enter to send, Esc to cancel). Admins: /dusk /bloodmoon /time 12 /kick name"
+	chat_edit.max_length = Proto.MAX_CHAT
+	chat_edit.add_theme_font_size_override("font_size", 18)
+	chat_edit.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	chat_edit.position = Vector2(20, -150)
+	chat_edit.custom_minimum_size = Vector2(620, 36)
+	add_child(chat_edit)
+	chat_edit.text_submitted.connect(_on_chat_submit)
+	chat_edit.gui_input.connect(_on_chat_key)
+
+
+func open_chat() -> void:
+	chat_edit.text = ""
+	chat_edit.position = Vector2(20, canvas.size.y - 220)
+	chat_edit.visible = true
+	chat_edit.grab_focus()
+
+
+func _close_chat() -> void:
+	chat_edit.visible = false
+	chat_edit.release_focus()
+	G.game.close_chat()
+
+
+func _on_chat_submit(text: String) -> void:
+	G.net.send_chat(text)
+	_close_chat()
+
+
+func _on_chat_key(e: InputEvent) -> void:
+	if e is InputEventKey and e.pressed and e.keycode == KEY_ESCAPE:
+		chat_edit.accept_event()
+		_close_chat()
+
+
+func _on_chat(from: String, text: String) -> void:
+	_add_chat("<%s> %s" % [from, text], Color(1, 1, 1))
+
+
+func _on_notice(text: String, col: Color) -> void:
+	_add_chat(text, col)
+
+
+func _add_chat(text: String, col: Color) -> void:
+	chat_log.append({"text": text, "col": col, "t": 0.0})
+	if chat_log.size() > 40:
+		chat_log.pop_front()
 
 
 func _build_pause() -> void:
@@ -151,7 +438,13 @@ func _build_pause() -> void:
 	row.add_theme_constant_override("separation", 12)
 	vb.add_child(row)
 	row.add_child(_button("Resume", func(): G.game.resume()))
-	row.add_child(_button("Quit Game", func(): get_tree().quit()))
+	pause_leave = _button("Leave Server", func(): G.end_client_session("You left the server."))
+	row.add_child(pause_leave)
+	pause_quit = _button("Quit Game", func(): get_tree().quit())
+	row.add_child(pause_quit)
+	pause_players = _label("", 18, Color(0.85, 0.95, 0.85))
+	pause_players.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(pause_players)
 	var sens_row := HBoxContainer.new()
 	sens_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	sens_row.add_theme_constant_override("separation", 12)
@@ -176,7 +469,24 @@ func _build_pause() -> void:
 
 func show_pause(on: bool) -> void:
 	pause_root.visible = on
+	var online := G.mode == "client"
+	pause_leave.visible = online
+	pause_players.visible = online
 	seed_lbl.text = "World seed: %d" % G.game.seed_v
+	if online:
+		seed_lbl.text += "   ·   The world keeps running while this menu is open."
+	_refresh_pause_players()
+
+
+## Online: who is playing, refreshed while the pause menu is open.
+func _refresh_pause_players() -> void:
+	if not pause_root.visible or G.mode != "client":
+		return
+	var names: Array = [G.net.player_name + " (you)"]
+	for id in G.net.others:
+		names.append(G.net.others[id]["name"])
+	pause_players.text = "Online (%d):  %s\nServer %s:%d   ·   Ping %d ms" % [names.size(), ", ".join(names),
+		G.net.host, G.net.port, G.net.ping_ms()]
 
 
 func _build_death() -> void:
@@ -376,6 +686,9 @@ func _recipe_row(r: Dictionary, stations: Array) -> Control:
 
 
 func _on_craft(r: Dictionary) -> void:
+	if G.mode == "client":
+		msg("Crafting on servers comes in the next build.", Color(1, 0.8, 0.5))
+		return
 	var p = G.player
 	var times := 5 if Input.is_key_pressed(KEY_SHIFT) else 1
 	var made := 0
@@ -414,6 +727,12 @@ func _process(delta: float) -> void:
 	for m in pickups:
 		m["t"] += delta
 	pickups = pickups.filter(func(m): return m["t"] < 2.5)
+	for m in chat_log:
+		m["t"] += delta
+	_pause_refresh_t -= delta
+	if _pause_refresh_t <= 0.0:
+		_pause_refresh_t = 1.0
+		_refresh_pause_players()
 	canvas.queue_redraw()
 
 
@@ -431,10 +750,10 @@ func _bar(pos: Vector2, w: float, label: String, frac: float, col: Color) -> voi
 
 
 func _draw_hud() -> void:
-	if G.game == null:
+	if G.game == null or G.player == null:
 		return
 	var st: String = G.game.state
-	if st == "loading" or st == "title":
+	if st == "loading" or st == "title" or st == "connecting":
 		return
 	var p = G.player
 	var vs := canvas.size
@@ -509,3 +828,31 @@ func _draw_hud() -> void:
 		var a := 1.0 if m["t"] < 1.8 else maxf(0.0, 1.0 - (m["t"] - 1.8) / 0.7)
 		_text(Vector2(vs.x - 260, py), m["text"], 18, Color(0.85, 1.0, 0.75, a))
 		py -= 24.0
+
+	if G.mode == "client":
+		_draw_online(vs)
+
+
+## Online: the chat log above the health bars, and players / ping at the top right.
+func _draw_online(vs: Vector2) -> void:
+	var chatting: bool = G.game.state == "chat"
+	var y := vs.y - 240.0
+	var shown := 0
+	for i in range(chat_log.size() - 1, -1, -1):
+		var m = chat_log[i]
+		var a := 1.0
+		if not chatting:
+			if m["t"] > 14.0:
+				break
+			a = 1.0 if m["t"] < 12.0 else 1.0 - (m["t"] - 12.0) / 2.0
+		var col: Color = m["col"]
+		col.a = a
+		var w := font.get_string_size(m["text"], HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
+		canvas.draw_rect(Rect2(16, y - 20, minf(w + 10, 640), 26), Color(0, 0, 0, 0.35 * a))
+		_text(Vector2(20, y), m["text"], 18, col, HORIZONTAL_ALIGNMENT_LEFT, 630)
+		y -= 26.0
+		shown += 1
+		if shown >= (12 if chatting else 6):
+			break
+	var line := "%d online   ·   %d ms" % [G.net.others.size() + 1, G.net.ping_ms()]
+	_text(Vector2(vs.x - 320, 34), line, 16, Color(0.8, 1, 0.8, 0.8), HORIZONTAL_ALIGNMENT_RIGHT, 300)

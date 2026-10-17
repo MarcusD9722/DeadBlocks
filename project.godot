@@ -4,6 +4,7 @@ config_version=5
 
 config/name="Dead Blocks"
 run/main_scene="res://main.tscn"
+run/flush_stdout_on_print=true
 config/features=PackedStringArray("4.7")
 config/use_custom_user_dir=true
 config/custom_user_dir_name="DeadBlocks"

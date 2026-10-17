@@ -142,8 +142,12 @@ func setup(s: int, tex) -> void:
 	if G.server_mode:
 		# 5 chunks (80 m) covers the 72 m zombie despawn distance.
 		render_radius = 5
+	if G.arg_value("--radius=") != "":
+		render_radius = clampi(int(G.arg_value("--radius=")), 2, 12)
 	max_tasks = clampi(OS.get_processor_count() - 2, 2, 8)
 	material = StandardMaterial3D.new()
+	if tex == null:
+		return  # dedicated server: nothing is drawn
 	material.albedo_texture = tex.atlas
 	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	material.vertex_color_use_as_albedo = true

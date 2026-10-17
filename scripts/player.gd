@@ -219,7 +219,7 @@ func _process(delta: float) -> void:
 	attack_cd -= delta
 	hurt_flash = maxf(0.0, hurt_flash - delta * 1.5)
 	swing = maxf(0.0, swing - delta * 4.0)
-	if st == "playing" or st == "menu":
+	if st == "playing" or st == "menu" or st == "chat" or (st == "paused" and G.mode == "client"):
 		var drain := 0.065 + (0.12 if sprinting else 0.0)
 		food = maxf(0.0, food - drain * delta)
 		if sprinting:
@@ -282,6 +282,10 @@ func _handle_mining(delta: float) -> void:
 		mine_progress = 0.0
 		return
 	if not target.get("hit", false):
+		mine_progress = 0.0
+		return
+	if G.mode == "client":
+		_online_hint()
 		mine_progress = 0.0
 		return
 	var p: Vector3i = target["pos"]
@@ -361,7 +365,18 @@ func use_item() -> void:
 	if Items.is_consumable(cur):
 		consume(cur)
 	elif Items.is_block(cur) and target.get("hit", false):
+		if G.mode == "client":
+			_online_hint()
+			return
 		place(cur)
+
+
+## Online test builds don't send block changes to the server yet (M1.3), so mining and
+## building are off instead of letting each player's world drift apart.
+func _online_hint() -> void:
+	if not hints.has("online_blocks"):
+		hints["online_blocks"] = true
+		G.hud.msg("Mining and building on servers come in the next build.", Color(1, 0.8, 0.5))
 
 
 func consume(id: int) -> void:

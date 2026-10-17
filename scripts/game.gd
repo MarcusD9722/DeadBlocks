@@ -30,6 +30,10 @@ var hud: CanvasLayer
 
 const ZombieScript := preload("res://scripts/zombie.gd")
 const AnimalScript := preload("res://scripts/animal.gd")
+const RemotePlayerScript := preload("res://scripts/net/remote_player.gd")
+
+## Client mode: other players' figures by net id.
+var remote_players := {}
 
 
 func _ready() -> void:
@@ -41,6 +45,9 @@ func _ready() -> void:
 		seed_v = int(sv)
 	if G.arg_value("--day-minutes=") != "":
 		day_minutes = maxf(0.1, float(G.arg_value("--day-minutes=")))
+	if G.mode == "client":
+		seed_v = int(G.session["seed"])
+		day_minutes = float(G.session["day_minutes"])
 	G.game = self
 	if G.has_arg("--worldgen-hash"):
 		preload("res://scripts/tests/worldgen_hash.gd").run(seed_v)
@@ -50,6 +57,18 @@ func _ready() -> void:
 		get_tree().quit()
 		return
 	_setup_input()
+	if G.mode == "server":
+		_ready_server()
+		return
+	if G.wants_autojoin():
+		# Joining from the command line: wait for the server's welcome before building any world.
+		state = "connecting"
+		hud = preload("res://scripts/hud.gd").new()
+		add_child(hud)
+		G.hud = hud
+		hud.set_title_status("Connecting...")
+		G.autojoin()
+		return
 	G.tex = Tex.new()
 	var sfx := preload("res://scripts/sfx.gd").new()
 	add_child(sfx)
@@ -74,6 +93,13 @@ func _ready() -> void:
 	add_child(sim)
 
 	spawn_pos = _find_spawn()
+	if G.mode == "client":
+		spawn_pos = G.session["pos"]
+		spawner_enabled = false
+		day = int(G.session["day"])
+		time = float(G.session["time"])
+		horde_active = bool(G.session["horde"])
+		was_night = is_night()
 	player = preload("res://scripts/player.gd").new()
 	player.name = "Player"
 	player.process_mode = Node.PROCESS_MODE_PAUSABLE
@@ -83,6 +109,9 @@ func _ready() -> void:
 	player.global_position = spawn_pos
 	player.spawn_point = spawn_pos
 	player.set_look(randf() * TAU, -0.1)
+	if G.mode == "client":
+		player.spawn_point = G.session["spawn"]
+		player.set_look(float(G.session["yaw"]), -0.1)
 	player.inv.add(Items.BERRIES, 3)
 	player.inv.add(Blocks.TORCH, 2)
 
@@ -91,6 +120,9 @@ func _ready() -> void:
 	G.hud = hud
 	player.inv.changed.connect(hud.refresh_inventory)
 	_update_sky()
+	if G.mode == "client":
+		hud.hide_title()
+		hud.show_loading_overlay(true)
 
 	if G.has_arg("--autotest"):
 		var t := preload("res://scripts/autotest.gd").new()
@@ -110,12 +142,38 @@ func _setup_input() -> void:
 		"jump": [KEY_SPACE], "sprint": [KEY_SHIFT],
 	}
 	for action in binds:
-		if not InputMap.has_action(action):
-			InputMap.add_action(action)
+		if InputMap.has_action(action):
+			continue  # already set up before a scene reload
+		InputMap.add_action(action)
 		for k in binds[action]:
 			var e := InputEventKey.new()
 			e.physical_keycode = k
 			InputMap.action_add_event(action, e)
+
+
+## Dedicated server: the world, the Sim and networking, but no window, player, HUD or sky.
+func _ready_server() -> void:
+	world = preload("res://scripts/world.gd").new()
+	world.name = "World"
+	add_child(world)
+	G.world = world
+	world.setup(seed_v, null)
+	mobs = Node3D.new()
+	mobs.name = "Mobs"
+	add_child(mobs)
+	var sim := preload("res://scripts/server/sim.gd").new()
+	sim.name = "Sim"
+	add_child(sim)
+	spawn_pos = _find_spawn()
+	# Zombies and animals come online in M1.4.
+	spawner_enabled = false
+	var ns := preload("res://scripts/net/net_server.gd").new()
+	ns.name = "NetServer"
+	add_child(ns)
+	G.net_server = ns
+	state = "server"
+	if not ns.start():
+		get_tree().quit(1)
 
 
 func _setup_env() -> void:
@@ -166,21 +224,59 @@ func _find_spawn() -> Vector3:
 
 func _process(delta: float) -> void:
 	match state:
+		"server":
+			world.update_centers(G.net_server.player_positions())
+			# Time stops while nobody is online.
+			if G.net_server.online_count() > 0:
+				_tick_time(delta)
+			return
+		"connecting", "quitting":
+			return
 		"loading":
 			world.update_centers(_stream_points())
 			var p: float = world.load_progress()
 			hud.set_loading(p)
 			if p >= 0.999 or (p > 0.55 and world.is_ready_at(spawn_pos) and _elapsed() > 25.0):
-				state = "title"
-				hud.show_ready()
+				if G.mode == "client":
+					hud.show_loading_overlay(false)
+					state = "title"
+					start_game()
+					G.net.send_ready()
+				else:
+					state = "title"
+					hud.show_ready()
 		"title":
 			world.update_centers(_stream_points())
-		"playing", "menu":
+		"playing", "menu", "chat":
 			world.update_centers(_stream_points())
 			_tick_time(delta)
 			_spawner(delta)
+		"paused":
+			# Online, the pause menu doesn't stop the world.
+			world.update_centers(_stream_points())
+			if G.mode == "client":
+				_tick_time(delta)
 		"dead":
 			world.update_centers(_stream_points())
+			if G.mode == "client":
+				_tick_time(delta)
+	if G.mode == "client":
+		_sync_remote_players()
+
+
+## Keep one RemotePlayer figure per other player the server has told us about.
+func _sync_remote_players() -> void:
+	for id in G.net.others:
+		if not remote_players.has(id):
+			var rp := RemotePlayerScript.new()
+			rp.net_id = id
+			rp.name = "Remote%d" % id
+			add_child(rp)
+			remote_players[id] = rp
+	for id in remote_players.keys():
+		if not G.net.others.has(id):
+			remote_players[id].queue_free()
+			remote_players.erase(id)
 
 
 var _t0 := Time.get_ticks_msec()
@@ -198,7 +294,12 @@ func _elapsed() -> float:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
+		if state == "chat":
+			return
 		match event.keycode:
+			KEY_T, KEY_ENTER:
+				if state == "playing" and G.mode == "client":
+					open_chat()
 			KEY_ESCAPE:
 				if state == "playing":
 					pause()
@@ -218,19 +319,23 @@ func _unhandled_input(event: InputEvent) -> void:
 					DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 			KEY_F6:
 				if state == "playing":
-					skip_time(false)
+					if G.mode == "client":
+						G.net.send_chat("/dusk")
+					else:
+						skip_time(false)
 			KEY_F7:
 				if state == "playing":
-					skip_time(true)
+					if G.mode == "client":
+						G.net.send_chat("/bloodmoon")
+					else:
+						skip_time(true)
 	elif event is InputEventMouseButton and event.pressed:
-		if state == "title":
-			start_game()
-		elif state == "playing" and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		if state == "playing" and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and state == "playing":
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and state == "playing" and G.mode != "client":
 		pause()
 
 
@@ -242,13 +347,19 @@ func start_game() -> void:
 	state = "playing"
 	hud.hide_title()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if G.mode == "client":
+		hud.msg("Joined %s. Press T to chat, Esc for the player list." % G.net.host, Color(0.8, 1, 0.8))
+		hud.msg("Test build: building, crafting and zombies come online in the next builds.", Color(1, 0.9, 0.6))
+		return
 	hud.msg("Day 1. Gather wood, craft tools, and build shelter before 20:00.", Color(1, 1, 0.8))
 	hud.msg("Hold left click on a tree to collect logs.", Color(0.7, 1, 0.7))
 
 
 func pause() -> void:
 	state = "paused"
-	get_tree().paused = true
+	# Online the world keeps running for everyone, so only the menu opens.
+	if G.mode != "client":
+		get_tree().paused = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	hud.show_pause(true)
 
@@ -258,6 +369,16 @@ func resume() -> void:
 	get_tree().paused = false
 	hud.show_pause(false)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func open_chat() -> void:
+	state = "chat"
+	hud.open_chat()
+
+
+func close_chat() -> void:
+	if state == "chat":
+		state = "playing"
 
 
 func open_inventory() -> void:
@@ -332,10 +453,10 @@ func _tick_time(delta: float) -> void:
 		day += 1
 	if prev < 18.0 and time >= 18.0:
 		if day % 7 == 0:
-			hud.msg("The sky is turning red. The horde comes at 20:00 — fortify NOW.", Color(1, 0.4, 0.3))
-			G.sfx.play("siren", -10.0)
+			_say("The sky is turning red. The horde comes at 20:00 — fortify NOW.", Color(1, 0.4, 0.3))
+			_sound("siren", -10.0)
 		elif day == 1:
-			hud.msg("Sunset soon. Wall yourself in — zombies smash weak blocks.", Color(1, 0.85, 0.6))
+			_say("Sunset soon. Wall yourself in — zombies smash weak blocks.", Color(1, 0.85, 0.6))
 	var night := is_night()
 	if night and not was_night:
 		_on_dusk()
@@ -348,21 +469,36 @@ func _tick_time(delta: float) -> void:
 func _on_dusk() -> void:
 	if is_horde_night():
 		horde_active = true
-		hud.msg("BLOOD MOON — THE HORDE IS COMING", Color(1, 0.2, 0.15))
-		G.sfx.play("siren", -2.0)
+		_say("BLOOD MOON — THE HORDE IS COMING", Color(1, 0.2, 0.15))
+		_sound("siren", -2.0)
 	else:
-		hud.msg("Night falls. The dead grow restless.", Color(0.75, 0.8, 1.0))
+		_say("Night falls. The dead grow restless.", Color(0.75, 0.8, 1.0))
 
 
 func _on_dawn() -> void:
 	if horde_active:
-		hud.msg("Dawn. You survived the Blood Moon!", Color(1, 0.9, 0.5))
+		_say("Dawn. You survived the Blood Moon!", Color(1, 0.9, 0.5))
 	else:
-		hud.msg("Dawn breaks. Day %d." % day, Color(1, 0.95, 0.8))
+		_say("Dawn breaks. Day %d." % day, Color(1, 0.95, 0.8))
 	horde_active = false
 	for z in get_tree().get_nodes_in_group("zombies"):
-		if z.global_position.distance_to(player.global_position) > 28.0:
+		var near := false
+		for p in G.sim.players:
+			if is_instance_valid(p) and z.global_position.distance_to(p.global_position) <= 28.0:
+				near = true
+		if not near:
 			z.queue_free()
+
+
+## HUD message and sound, skipped on the dedicated server (no HUD, no audio).
+func _say(text: String, col := Color(1, 1, 1)) -> void:
+	if hud != null:
+		hud.msg(text, col)
+
+
+func _sound(sound: String, vol := 0.0) -> void:
+	if G.sfx != null and G.mode != "server":
+		G.sfx.play(sound, vol)
 
 
 func skip_time(blood: bool) -> void:
@@ -372,19 +508,21 @@ func skip_time(blood: bool) -> void:
 		time = 19.95
 		horde_active = false
 		was_night = false
-		hud.msg("[Test] Jumped to Day %d, 19:57. Blood Moon in a few seconds." % day, Color(0.8, 0.8, 1))
+		_say("[Test] Jumped to Day %d, 19:57. Blood Moon in a few seconds." % day, Color(0.8, 0.8, 1))
 	elif is_night():
 		if time >= 20.0:
 			day += 1
 		time = 5.95
-		hud.msg("[Test] Skipped to 05:57 — dawn is near.", Color(0.8, 0.8, 1))
+		_say("[Test] Skipped to 05:57 — dawn is near.", Color(0.8, 0.8, 1))
 	else:
 		time = 19.95
-		hud.msg("[Test] Skipped to 19:57 — night is near.", Color(0.8, 0.8, 1))
+		_say("[Test] Skipped to 19:57 — night is near.", Color(0.8, 0.8, 1))
 	_update_sky()
 
 
 func _update_sky() -> void:
+	if env == null:
+		return
 	var t := time
 	var day_f := clampf(smoothstep(5.0, 7.0, t) - smoothstep(18.5, 20.5, t), 0.0, 1.0)
 	var dusk_f := maxf(0.0, 1.0 - absf(t - 19.0) / 1.6) + maxf(0.0, 1.0 - absf(t - 6.0) / 1.6)

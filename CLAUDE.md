@@ -16,8 +16,8 @@ The owner (Marcus) playtests on Windows and gives feedback. Each round of work s
 ## File map (`scripts/`)
 | File | What it does |
 |---|---|
-| `g.gd` | Autoload `G`. Global refs (game, world, player, hud, sim, tex, sfx), command-line args, `VERSION`, and `server_mode` (`--server-mode`, or the dedicated-server export): no render meshes, lights, mob models or sounds, physics at 30 ticks/s |
-| `game.gd` | Game states (loading/title/playing/menu/paused/dead), day-night cycle and sky, Blood Moon, zombie and animal spawning, input bindings |
+| `g.gd` | Autoload `G`. Global refs (game, world, player, hud, sim, tex, sfx), command-line args, `VERSION`, and `server_mode` (`--server-mode`, `--server`, or the dedicated-server export): no render meshes, lights, mob models or sounds, physics at 30 ticks/s. `mode` is solo / client / server. Holds the client connection (`G.net`, survives the scene reload into the server's world), `host_game` (starts a background server process and joins it) and `start/end_client_session` |
+| `game.gd` | Game states (loading/title/playing/menu/chat/paused/dead, plus connecting and server), day-night cycle and sky, Blood Moon, zombie and animal spawning, input bindings. Server mode: `_ready_server` (world + Sim + NetServer, no player/HUD). Client mode: seed, clock and position come from the server's welcome; keeps a RemotePlayer per other player |
 | `world.gd` | Chunked voxel world (16×64×16 chunks). Keeps chunks loaded around one or more centers (`update_centers`, one per player). Terrain generation and meshing run on WorkerThreadPool. Also holds raycasts, set_block, zombie block damage with crack overlays, and the torch/campfire lights |
 | `world_gen.gd` | Deterministic terrain: hills, plains/forest/desert biomes, caves, coal/iron ore, trees, berry bushes |
 | `blocks.gd` | Block ids and per-block tables (atlas tiles, shape, solid, opaque, hardness, tool, required pick tier, zombie HP). **Block id = item id** |
@@ -28,38 +28,51 @@ The owner (Marcus) playtests on Windows and gives feedback. Each round of work s
 | `mob.gd` | Base creature: blocky box models, walking, hopping ledges, knockback, hit flash |
 | `zombie.gd` | Day/night/horde variants. Ticked by the Sim (`sim_tick`), not by `_physics_process`. Chases the nearest player in its region, smashes blocking cells (queued through the Sim), takes damage from wood spikes |
 | `animal.gd` | Boar: wanders, flees, drops raw meat |
-| `hud.gd` | HUD, inventory/crafting screen, title/pause/death screens |
+| `hud.gd` | HUD, inventory/crafting screen, title menu (Play solo / Host / Join forms; remembered in `user://client.cfg` as hashes only), pause (player list and ping online), death screen, chat box and chat log |
 | `tex.gd` | Procedural 16×16 texture atlas and item icons |
 | `sfx.gd` | Procedural sound effects |
 | `autotest.gd` | Automated playtest, run with `-- --autotest` |
 | `bench.gd` | Server load benchmark (Blood Moon horde, explorers streaming chunks), run with `-- --bench` |
+| `net/protocol.gd` | `class_name Proto`: message ids and binary layouts, login hashing (HMAC proofs of password and PIN), name/PIN rules, terrain hash. Bump `PROTOCOL` when a layout changes |
+| `net/net_server.gd` | Dedicated server networking: ENet listen, login checks and refusals, one ServerPlayer per player, 15 Hz snapshots, clock messages, chat and admin commands (`/dusk /bloodmoon /time /kick /players`), movement sanity check with corrections, `--hosted-by` stop for Host game |
+| `net/net_client.gd` | Client networking (`G.net`): connect + login, welcome → `G.start_client_session`, other players' snapshot history and interpolation (100 ms behind), 15 Hz movement up, chat |
+| `net/remote_player.gd` | Another player's blocky figure with a name tag and flashlight |
+| `server/server_player.gd` | The server's record of a connected player (Sim player record) |
 | `server/sim.gd` | Node `Sim` (`G.sim`). Each physics tick: groups players into regions, builds each region's spatial hash, ticks zombies region by region in id order, then applies queued block damage sorted by zombie id. Holds the list of player records zombies can target |
 | `server/virtual_player.gd` | Stand-in player for tests and benchmarks (zombies can target it; damage is only counted) |
 | `tests/regiontest.gd` | `-- --regiontest`: two besieged groups; prints a hash that must not depend on region order |
 | `tests/worldgen_hash.gd` | `-- --worldgen-hash`: one hash over many chunks and raw noise, to compare builds on different CPUs |
+| `tests/nettest.gd` | `-- --nettest=ROLE`: bot client roles for `tools/run_nettest.sh` (a/b pair, join, hold, reject:TEXT, host, screens) |
 
-Outside `scripts/`: `tools/test_all.sh` is the test gate; `tools/build_release.sh` builds the Windows exe and the Linux servers into `build/`; `tools/check_worldgen.sh` compares PC and Pi terrain; `tools/run_bench.sh` runs the benchmark once per physics setup; `docs/pi-benchmark.md` is the owner's step-by-step guide for running it on the Raspberry Pi. `docs/M1-plan.md` is the multiplayer plan (architecture, protocol, saving, steps M1.1–M1.8).
+Outside `scripts/`: `tools/test_all.sh` is the test gate; `tools/run_nettest.sh` is the multiplayer test; `tools/build_release.sh` builds the Windows exe and the Linux servers into `build/`; `tools/check_worldgen.sh` compares PC and Pi terrain; `tools/run_bench.sh` runs the benchmark once per physics setup; `docs/pi-benchmark.md` is the owner's step-by-step guide for running it on the Raspberry Pi. `docs/M1-plan.md` is the multiplayer plan (architecture, protocol, saving, steps M1.1–M1.8).
 
 ## Run / test / build
 Replace `godot` with the path to the Godot 4.7.2 executable (on Windows, `Godot_v4.7.2-stable_win64_console.exe` shows console output).
 
 - **Play from the editor:** open `project.godot` in Godot and press F5.
-- **The test gate — run before every commit:** `GODOT=<path> ./tools/test_all.sh` (about 4 minutes; `--quick` skips exports, the Pi terrain check and the benchmark, about 2 minutes). It runs the autotest, the region-order test both ways, the exports, the PC-vs-Pi terrain check (arm64 export under `qemu-aarch64-static`), and a short benchmark. A stage fails on a FAIL line, **any `ERROR`/`SCRIPT ERROR` line**, a crash, a timeout or a missing DONE line. Logs: `build/test_logs/`.
+- **The test gate — run before every commit:** `GODOT=<path> ./tools/test_all.sh` (about 4 minutes; `--quick` skips exports, the Pi terrain check and the benchmark, about 2 minutes). It runs the autotest, the region-order test both ways, the multiplayer test, the exports, the PC-vs-Pi terrain check (arm64 export under `qemu-aarch64-static`), the multiplayer test against the arm64 server under qemu, and a short benchmark. A stage fails on a FAIL line, **any `ERROR`/`SCRIPT ERROR` line**, a crash, a timeout or a missing DONE line. Logs: `build/test_logs/`.
 - **Automated playtest (headless):**
   `godot --headless --path . -- --autotest --seed=4242`
   It prints PASS/FAIL lines and ends with `AUTOTEST DONE fails=N`. Seed 4242 is the reference seed and should give `fails=0`. On some other seeds the "zombie damaged/broke the wall" checks fail because the zombie walks around the short test wall. That is a test limitation, not a game bug.
 - **Screenshots:** add `--shots=<absolute dir>` and run with a real renderer instead of `--headless`.
 - **Server benchmark:** `GODOT=<path to godot> ./tools/run_bench.sh` (5 setups, about 22 minutes; `BENCH_SETUPS=m1` runs only the 2 M1 server setups, about 9 minutes; add `--bench-secs=8` for a quick check). It runs `-- --bench` once per setup on seed 4242, with a temporary `override.cfg` choosing the physics engine, tick rate and physics thread; the M1 setups add `--server-mode`. It prints a results block and saves it to `bench_results/summary.txt`. A single run: `godot --headless --path . -- --bench --seed=4242 [--bench-secs=60] [--zombies=120] [--explorers=7] [--radius=6] [--only=horde]`. Don't run two benchmarks or other heavy work at the same time, or the timings are meaningless.
 - **Builds:** `GODOT=<path> ./tools/build_release.sh` exports `build/DeadBlocks.exe` (Windows), a zipped copy, and `build/server/DeadBlocksServer.{arm64,x86_64}` (dedicated-server exports, which start in server mode). Needs the 4.7.2 export templates (Editor → Manage Export Templates → Download). The .pck is embedded, so each result is a single file.
-- **Other flags:** `--server-mode` (simulate like the server), `--day-minutes=N` (default 30).
+- **Multiplayer test:** `GODOT=<path> ./tools/run_nettest.sh` (about 2.5 minutes): a local server plus headless bot clients; prints NETTEST PASS/FAIL lines and `NETTEST ALL DONE fails=N`. Logs: `build/test_logs/nettest/`. Pass a server command prefix to test an exported server instead (see the script header).
+- **Dedicated server:** `godot --headless --path . -- --server --password=S --admins=Marcus [--port=24650] [--max-players=8] [--seed=N]`. Join from the game's title screen (Join server), or `-- --connect=host[:port] --name=N --pin=P --password=S` to skip the menu.
+- **Screenshots of the menus and an online session:** run under `xvfb-run` with `--rendering-driver opengl3` and `--nettest=screens --shots=<dir>` (title/Join/Host), or `--nettest=b --shots=<dir>` as the second bot next to a server and an `a` bot.
+- **Other flags:** `--server-mode` (simulate like the server), `--day-minutes=N` (default 30), `--radius=N` (chunk radius).
 
 ## Testing shortcuts in-game
 - F6 skips to dusk or dawn.
 - F7 jumps to the Blood Moon (day 7, 19:57).
+- Online, F6/F7 send `/dusk` and `/bloodmoon` (admins only).
 
 ## Rules for server-side code
 - **No physics space queries outside `_physics_process`** (raycasts, shape queries, `direct_space_state`). With physics on its own thread they fail; the test gate's ERROR-line check catches it.
 - **Zombie code must not depend on processing order.** In `sim_tick`, read the world and the region's start-of-tick spatial hash only; queue block damage with `G.sim.queue_block_damage(...)` instead of calling `world.damage_block`; use the zombie's own `rng`, never `randf()`. The region-order test checks this.
+- **Network messages are our own binary layouts in `net/protocol.gd`** (no RPCs or Synchronizers). Any layout change bumps `Proto.PROTOCOL`, and any release bumps `G.VERSION`: the server refuses other versions at login.
+- Server code runs without a HUD, textures, sounds or a local player (`G.hud`, `G.tex`, `G.sfx`, `G.player` are null): guard UI and sound calls (see `game._say` / `game._sound`).
+- `ENetMultiplayerPeer.get_peer(id)` prints an ERROR for a peer that has gone; the server keeps its own `_live` set. `OS.is_process_running` only works for this process's own children.
 
 ## Design & roadmap
 **Read `DESIGN.md` before starting work.** It records the owner's decisions (4–8 player co-op on a Raspberry Pi 5 dedicated server, Blood Moon rules, death/backpack rules, loot, world) and the milestone plan (M0–M5). Keep it up to date when decisions change.
