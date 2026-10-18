@@ -34,6 +34,10 @@ const RemotePlayerScript := preload("res://scripts/net/remote_player.gd")
 
 ## Client mode: other players' figures by net id.
 var remote_players := {}
+## Client mode: pictures of the mobs the server runs, by net id.
+var mob_views := {}
+## Mob ids clients know mobs by (1-65535, wrapping).
+var _next_mob_id := 1
 
 
 func _ready() -> void:
@@ -228,9 +232,11 @@ func _process(delta: float) -> void:
 	match state:
 		"server":
 			world.update_centers(G.net_server.player_positions())
-			# Time stops while nobody is online.
+			# Time, spawning and the mobs stop while nobody is online.
 			if G.net_server.online_count() > 0:
 				_tick_time(delta)
+				if not G.has_arg("--no-spawns"):
+					_server_spawner(delta)
 			return
 		"connecting", "quitting":
 			return
@@ -264,6 +270,32 @@ func _process(delta: float) -> void:
 				_tick_time(delta)
 	if G.mode == "client":
 		_sync_remote_players()
+		_sync_mob_views(delta)
+
+
+## Keep one picture per mob the server tells us about, placed where its snapshots say.
+func _sync_mob_views(delta: float) -> void:
+	for id in G.net.mobs:
+		var v = mob_views.get(id)
+		if v == null or not is_instance_valid(v):
+			var kind: int = G.net.mobs[id]["kind"]
+			if kind == Proto.MOB_BOAR:
+				v = AnimalScript.new()
+			else:
+				v = ZombieScript.new()
+				v.setup(["day", "night", "horde"][kind], day)
+			v.view = true
+			v.net_id = id
+			mobs.add_child(v)
+			mob_views[id] = v
+		var s: Dictionary = G.net.mob_sample(id)
+		if not s.is_empty():
+			v.view_update(s["pos"], s["yaw"], s["flags"], delta)
+	for id in mob_views.keys():
+		if not G.net.mobs.has(id):
+			if is_instance_valid(mob_views[id]):
+				mob_views[id].queue_free()
+			mob_views.erase(id)
 
 
 ## Keep one RemotePlayer figure per other player the server has told us about.
@@ -434,16 +466,46 @@ func close_inventory() -> void:
 func on_player_died() -> void:
 	if state == "menu":
 		hud.show_inventory(false)
+	elif state == "chat":
+		hud._close_chat()
+	elif state == "paused":
+		hud.show_pause(false)
 	state = "dead"
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	hud.show_death(true)
 
 
 func respawn() -> void:
+	if G.mode == "client":
+		G.net.request_respawn()  # the server answers with S_STATS (alive) and S_CORRECT (where)
+		return
 	player.respawn()
+	on_respawned()
+
+
+func on_respawned() -> void:
 	hud.show_death(false)
 	state = "playing"
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## Server: stop or restart every mob (and the zombie Sim) while nobody is online.
+func set_mobs_paused(paused: bool) -> void:
+	mobs.process_mode = Node.PROCESS_MODE_DISABLED if paused else Node.PROCESS_MODE_INHERIT
+	G.sim.set_physics_process(not paused)
+
+
+func mob_by_net_id(id: int) -> Node:
+	for m in mobs.get_children():
+		if m is Mob and (m.net_id & 0xffff) == id:
+			return m
+	return null
+
+
+func _new_mob_id() -> int:
+	var id := _next_mob_id
+	_next_mob_id = _next_mob_id % 65535 + 1
+	return id
 
 
 func nearby_stations() -> Array:
@@ -631,12 +693,84 @@ func _spawner(delta: float) -> void:
 			a.queue_free()
 
 
-func _find_ground(min_d: float, max_d: float, need_grass: bool) -> Vector3:
+## Server: the solo spawner's rules around every player who is online and alive, with at most
+## MAX_ZOMBIES zombies in the whole world.
+const MAX_ZOMBIES := 120
+
+
+func _server_spawner(delta: float) -> void:
+	var ps: Array = G.net_server.alive_positions()
+	spawn_timer -= delta
+	animal_timer -= delta
+	var zs := get_tree().get_nodes_in_group("zombies")
+	var animals := get_tree().get_nodes_in_group("animals")
+	for z in zs:
+		if not _near_any(z.global_position, ps, 72.0):
+			z.queue_free()
+	for a in animals:
+		if not _near_any(a.global_position, ps, 80.0):
+			a.queue_free()
+	if ps.is_empty():
+		return
+	var night := is_night()
+	var cap := 2
+	var interval := 9.0
+	if horde_active:
+		cap = 22 + mini(day, 28)
+		interval = 1.0
+	elif night:
+		cap = mini(5 + day, 16)
+		interval = 3.0
+	if spawn_timer <= 0.0:
+		spawn_timer = interval
+		var total := zs.size()
+		for p in ps:
+			if total >= MAX_ZOMBIES:
+				break
+			if _count_near(zs, p, 72.0) < cap:
+				if spawn_zombie("horde" if horde_active else ("night" if night else "day"), Vector3.INF, p) != null:
+					total += 1
+	if animal_timer <= 0.0:
+		animal_timer = 6.0
+		if not night:
+			for p in ps:
+				if _count_near(animals, p, 80.0) < 6:
+					_spawn_animal(p)
+
+
+static func _near_any(pos: Vector3, ps: Array, dist: float) -> bool:
+	for p in ps:
+		if pos.distance_to(p) <= dist:
+			return true
+	return false
+
+
+static func _count_near(nodes: Array, p: Vector3, dist: float) -> int:
+	var n := 0
+	for m in nodes:
+		if is_instance_valid(m) and m.global_position.distance_to(p) <= dist:
+			n += 1
+	return n
+
+
+## Admins' /spawn: a mob 8-14 m from a player.
+func spawn_near(what: String, pos: Vector3) -> Node:
+	if what == "boar":
+		return _spawn_animal(pos, 8.0, 14.0)
+	var p := _find_ground(8.0, 14.0, false, pos)
+	if p == Vector3.INF:
+		return null
+	return spawn_zombie("day" if what == "zombie" else what, p)
+
+
+func _find_ground(min_d: float, max_d: float, need_grass: bool, center := Vector3.INF) -> Vector3:
+	if center == Vector3.INF:
+		center = player.global_position
 	for attempt in 8:
 		var a := randf() * TAU
 		var d := randf_range(min_d, max_d)
-		var x := floori(player.global_position.x + cos(a) * d)
-		var z := floori(player.global_position.z + sin(a) * d)
+		var x := floori(center.x + cos(a) * d)
+		var z := floori(center.z + sin(a) * d)
 		var y: int = world.surface_y(x, z)
 		if y < 0:
 			continue
@@ -654,24 +788,27 @@ func _find_ground(min_d: float, max_d: float, need_grass: bool) -> Vector3:
 	return Vector3.INF
 
 
-func spawn_zombie(kind: String, at := Vector3.INF) -> Node:
+func spawn_zombie(kind: String, at := Vector3.INF, near := Vector3.INF) -> Node:
 	var p := at
 	if p == Vector3.INF:
-		p = _find_ground(16.0 if kind == "horde" else 22.0, 30.0 if kind == "horde" else 36.0, false)
+		p = _find_ground(16.0 if kind == "horde" else 22.0, 30.0 if kind == "horde" else 36.0, false, near)
 	if p == Vector3.INF:
 		return null
 	var z := ZombieScript.new()
 	z.setup(kind, day)
+	z.net_id = _new_mob_id()
 	G.sim.register_zombie(z)
 	mobs.add_child(z)
 	z.global_position = p
 	return z
 
 
-func _spawn_animal() -> void:
-	var p := _find_ground(18.0, 40.0, true)
+func _spawn_animal(near := Vector3.INF, min_d := 18.0, max_d := 40.0) -> Node:
+	var p := _find_ground(min_d, max_d, true, near)
 	if p == Vector3.INF:
-		return
+		return null
 	var a := AnimalScript.new()
+	a.net_id = _new_mob_id()
 	mobs.add_child(a)
 	a.global_position = p
+	return a

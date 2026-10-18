@@ -103,6 +103,15 @@ func online_count() -> int:
 	return n
 
 
+## Where the players who could meet a zombie are (online and alive).
+func alive_positions() -> Array:
+	var out := []
+	for p in players.values():
+		if p.is_ready and not p.dead:
+			out.append(p.global_position)
+	return out
+
+
 func player_positions() -> Array:
 	var out := []
 	for p in players.values():
@@ -190,7 +199,8 @@ func _on_auth(id: int, data: PackedByteArray) -> void:
 		var inv := Inventory.new()
 		inv.add(Items.BERRIES, 3)
 		inv.add(Blocks.TORCH, 2)
-		acc = {"name": pname, "pin_key": pk, "fails": 0, "locked_until": 0.0, "pos": G.game.spawn_pos, "yaw": 0.0, "inv": inv}
+		acc = {"name": pname, "pin_key": pk, "fails": 0, "locked_until": 0.0, "pos": G.game.spawn_pos, "yaw": 0.0, "inv": inv,
+			"health": 100.0, "food": 100.0, "kills": 0, "spawn": G.game.spawn_pos}
 		accounts[key] = acc
 		print("SERVER new player %s" % pname)
 	if replacing != 0:
@@ -263,8 +273,12 @@ func _on_connected(id: int) -> void:
 	sp.last_recv_ms = Time.get_ticks_msec()
 	sp.inv = acc["inv"]
 	sp.inv_dirty = true
+	sp.health = acc["health"]
+	sp.food = acc["food"]
+	sp.kills = acc["kills"]
+	sp.spawn_point = acc["spawn"]
+	sp.dead = sp.health <= 0.0
 	players[id] = sp
-	G.sim.add_player(sp)
 	var w := Proto.writer(Proto.S_WELCOME)
 	w.put_u16(sp.net_id)
 	w.put_64(G.game.seed_v)
@@ -310,6 +324,9 @@ func _remove_player(id: int) -> void:
 	if acc != null:
 		acc["pos"] = sp.last_good
 		acc["yaw"] = sp.yaw
+		acc["health"] = sp.health
+		acc["food"] = sp.food
+		acc["kills"] = sp.kills
 	G.sim.remove_player(sp)
 	sp.queue_free()
 	var l := Proto.writer(Proto.S_LEAVE)
@@ -325,9 +342,13 @@ func _remove_player(id: int) -> void:
 		_broadcast(_notice_bytes("%s left the game." % sp.player_name, Color(1, 0.85, 0.7)))
 	print("SERVER %s %s (%d connected)" % [sp.player_name, why if why != "" else "left", players.size()])
 	if sp.refused > 0:
-		print("SERVER %s: %d of %d block requests refused this session" % [sp.player_name, sp.refused, sp.requests])
+		var parts := []
+		for k in sp.refuse_why:
+			parts.append("%s %d" % [k, sp.refuse_why[k]])
+		print("SERVER %s: %d of %d block requests refused this session (%s)" % [sp.player_name, sp.refused, sp.requests, ", ".join(parts)])
 	if online_count() == 0:
 		print("SERVER nobody online: time paused at day %d %s" % [G.game.day, _clock()])
+		G.game.set_mobs_paused(true)
 
 
 # ------------------------------------------------------------ messages
@@ -344,12 +365,23 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 		Proto.C_READY:
 			if not sp.is_ready:
 				sp.is_ready = true
+				G.sim.add_player(sp)  # zombies can go after it now
 				_send_to(id, _time_bytes())
 				if online_count() == 1:
 					print("SERVER %s is online: time running again" % sp.player_name)
+					G.game.set_mobs_paused(false)
+		Proto.C_FALL:
+			sp.take_damage(float(b.get_u8()), Vector3.ZERO)
+		Proto.C_RESPAWN:
+			if sp.dead:
+				sp.dead = false
+				sp.health = 100.0
+				sp.food = maxf(sp.food, 60.0)
+				correct(sp, sp.spawn_point)
+				print("SERVER %s respawned" % sp.player_name)
 		Proto.C_CHAT:
 			_on_chat(sp, b.get_utf8_string().strip_edges().left(Proto.MAX_CHAT))
-		Proto.C_BREAK, Proto.C_PLACE, Proto.C_SWAP, Proto.C_CRAFT, Proto.C_EAT:
+		Proto.C_BREAK, Proto.C_PLACE, Proto.C_SWAP, Proto.C_CRAFT, Proto.C_EAT, Proto.C_ATTACK:
 			_on_request(sp, data[0], b)
 
 
@@ -382,6 +414,9 @@ func _on_request(sp, type: int, b: StreamPeerBuffer) -> void:
 			_req_craft(sp, r, b.get_u8())
 		Proto.C_EAT:
 			_req_eat(sp, b.get_u8())
+		Proto.C_ATTACK:
+			var mob_id := b.get_u16()
+			_req_attack(sp, mob_id, b.get_u8())
 
 
 func _eye(sp) -> Vector3:
@@ -392,9 +427,10 @@ func _in_reach(sp, p: Vector3i) -> bool:
 	return _eye(sp).distance_to(Vector3(p) + Vector3(0.5, 0.5, 0.5)) <= Proto.REACH
 
 
-## Undo the client's guess: resend the block as the server has it.
-func _refuse(sp, p: Vector3i) -> void:
+## Undo the client's guess: resend the block as the server has it. `why` is counted for the log.
+func _refuse(sp, p: Vector3i, why: String) -> void:
 	sp.refused += 1
+	sp.refuse_why[why] = int(sp.refuse_why.get(why, 0)) + 1
 	if G.world.has_block_data(p):
 		sp.fixes.append(p)
 
@@ -402,15 +438,17 @@ func _refuse(sp, p: Vector3i) -> void:
 func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 	var w = G.world
 	var id: int = w.get_blockv(p)
-	if sp.dead or slot > 8 or id != expect or id <= 0 or not w.has_block_data(p) or not _in_reach(sp, p):
-		_refuse(sp, p)
-		return
+	var why := _common_refusal(sp, p, slot)
+	if why == "" and (id != expect or id <= 0):
+		why = "block changed"
 	var tool: int = sp.inv.id_at(slot)
 	var bt := Rules.break_time(id, tool)
 	var now := Time.get_ticks_msec()
 	# Mining takes time; allow plenty of slack for lag, but not instant mining.
-	if bt < 0.0 or now - sp.last_break_ms < bt * 350.0:
-		_refuse(sp, p)
+	if why == "" and (bt < 0.0 or now - sp.last_break_ms < bt * 350.0):
+		why = "too fast"
+	if why != "":
+		_refuse(sp, p, why)
 		return
 	sp.last_break_ms = now
 	w.set_block(p, Blocks.AIR)
@@ -425,16 +463,19 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 
 func _req_place(sp, p: Vector3i, id: int, slot: int) -> void:
 	var w = G.world
-	if sp.dead or slot > 8 or sp.inv.id_at(slot) != id or not Items.is_block(id) or p.y < 1 or p.y >= 63 \
-			or not w.has_block_data(p) or w.get_blockv(p) != Blocks.AIR or not _in_reach(sp, p):
-		_refuse(sp, p)
-		return
+	var why := _common_refusal(sp, p, slot)
+	if why == "" and (sp.inv.id_at(slot) != id or not Items.is_block(id)):
+		why = "not in that slot"
+	elif why == "" and (p.y < 1 or p.y >= 63 or w.get_blockv(p) != Blocks.AIR):
+		why = "space taken"
 	var touching := false
 	for d in [Vector3i.UP, Vector3i.DOWN, Vector3i.LEFT, Vector3i.RIGHT, Vector3i.FORWARD, Vector3i.BACK]:
 		if w.get_blockv(p + d) != Blocks.AIR:
 			touching = true
-	if not touching or (Blocks.SHAPE[id] == Blocks.SH_CROSS and not Blocks.is_solid(w.get_blockv(p + Vector3i.DOWN))):
-		_refuse(sp, p)
+	if why == "" and (not touching or (Blocks.SHAPE[id] == Blocks.SH_CROSS and not Blocks.is_solid(w.get_blockv(p + Vector3i.DOWN)))):
+		why = "nothing to build on"
+	if why != "":
+		_refuse(sp, p, why)
 		return
 	if Blocks.SOLID[id]:
 		# Not inside another player. The builder checks itself: its own position here is a
@@ -445,10 +486,22 @@ func _req_place(sp, p: Vector3i, id: int, slot: int) -> void:
 				var op: Vector3 = o.global_position
 				if op.x + 0.3 > bmin.x and op.x - 0.3 < bmin.x + 1.0 and op.z + 0.3 > bmin.z and op.z - 0.3 < bmin.z + 1.0 \
 						and op.y + 1.8 > bmin.y and op.y < bmin.y + 1.0:
-					_refuse(sp, p)
+					_refuse(sp, p, "player in the way")
 					return
 	sp.inv.remove_at(slot, 1)
 	w.set_block(p, id)
+
+
+func _common_refusal(sp, p: Vector3i, slot: int) -> String:
+	if sp.dead:
+		return "dead"
+	if slot > 8:
+		return "bad slot"
+	if not G.world.has_block_data(p):
+		return "chunk not loaded"
+	if not _in_reach(sp, p):
+		return "out of reach"
+	return ""
 
 
 func _req_craft(sp, idx: int, times: int) -> void:
@@ -472,13 +525,82 @@ func _req_eat(sp, slot: int) -> void:
 	if slot >= Inventory.SIZE:
 		return
 	var id: int = sp.inv.id_at(slot)
-	if not Items.is_consumable(id):
+	if sp.dead or not Items.is_consumable(id):
+		return
+	var d := Items.info(id)
+	var f := float(d.get("food", 0.0))
+	var h := float(d.get("heal", 0.0))
+	if f > 0.0 and sp.food >= 99.0 and (h <= 0.0 or sp.health >= 100.0):
+		_msg(sp, "You're full.", Color(1, 1, 1))
+		return
+	if f <= 0.0 and h > 0.0 and sp.health >= 100.0:
+		_msg(sp, "You're already at full health.", Color(1, 1, 1))
 		return
 	sp.inv.remove_at(slot, 1)
-	# Food and health still live on the player's PC (until M1.4); tell it what was eaten.
+	sp.food = minf(100.0, sp.food + f)
+	sp.health = minf(100.0, sp.health + h)
 	var a := Proto.writer(Proto.S_ATE)
 	a.put_u16(id)
 	_send_to(sp.peer_id, a.data_array)
+
+
+func _req_attack(sp, mob_id: int, slot: int) -> void:
+	if sp.dead or slot > 8:
+		return
+	var now := Time.get_ticks_msec()
+	if now - sp.last_attack_ms < 300:
+		return  # the client's cooldown is 0.45 s; leave room for lag
+	var mob = G.game.mob_by_net_id(mob_id)
+	if mob == null or mob.dead:
+		return
+	if _eye(sp).distance_to(mob.global_position + Vector3(0, mob.height * 0.5, 0)) > Proto.MOB_REACH:
+		return
+	sp.last_attack_ms = now
+	mob.hurt(Items.damage(sp.inv.id_at(slot)), sp.global_position, sp)
+
+
+## A ServerPlayer was hit: tell its client (flash, sound, knockback).
+func player_hurt(sp, amount: float, from: Vector3) -> void:
+	var h := Proto.writer(Proto.S_HURT)
+	h.put_u8(clampi(ceili(amount), 0, 255))
+	Proto.put_vec3(h, from)
+	_send_to(sp.peer_id, h.data_array)
+
+
+func player_died(sp) -> void:
+	print("SERVER %s died" % sp.player_name)
+	_broadcast(_notice_bytes("%s died." % sp.player_name, Color(1, 0.6, 0.5)))
+
+
+func tell(sp, text: String, col: Color) -> void:
+	_msg(sp, text, col)
+
+
+## Hunger and healing, like on a solo PC, and S_STATS whenever a shown number changes.
+func _tick_players(delta: float) -> void:
+	for sp in players.values():
+		if not sp.is_ready:
+			continue
+		if not sp.dead:
+			var sprint: bool = (sp.flags & Proto.F_SPRINT) != 0
+			sp.food = maxf(0.0, sp.food - (0.065 + (0.12 if sprint else 0.0)) * delta)
+			if sp.food <= 0.0:
+				sp.health -= 1.0 * delta
+				if sp.health <= 0.0:
+					sp.health = 0.0
+					sp.dead = true
+					player_died(sp)
+			elif sp.food > 45.0 and sp.health < 100.0:
+				sp.health = minf(100.0, sp.health + 0.5 * delta)
+		var shown := [ceili(sp.health), ceili(sp.food), sp.dead, sp.kills]
+		if shown != sp.stats_sent:
+			sp.stats_sent = shown
+			var m := Proto.writer(Proto.S_STATS)
+			m.put_u8(shown[0])
+			m.put_u8(shown[1])
+			m.put_u8(1 if sp.dead else 0)
+			m.put_u16(sp.kills)
+			_send_to(sp.peer_id, m.data_array)
 
 
 func _msg(sp, text: String, col: Color) -> void:
@@ -502,10 +624,14 @@ func _flush_world() -> void:
 			groups[k] = []
 		groups[k].append([(p.x & 15) + (p.z & 15) * 16 + p.y * 256, e[1]])
 	w.edits_out.clear()
+	var cracks: Array = w.cracks_out
+	w.cracks_out = []
 	for sp in players.values():
 		_update_subs(sp)
 		_send_chunks(sp)
 		_send_edits(sp, groups)
+		if not cracks.is_empty():
+			_send_cracks(sp, cracks)
 		if sp.inv_dirty:
 			sp.inv_dirty = false
 			var m := Proto.writer(Proto.S_INV)
@@ -569,6 +695,18 @@ func _send_chunks(sp) -> void:
 		sent += 1
 
 
+func _send_cracks(sp, cracks: Array) -> void:
+	var mine := cracks.filter(func(c): return sp.subs.has(Vector2i(c[0].x >> 4, c[0].z >> 4)))
+	if mine.is_empty():
+		return
+	var m := Proto.writer(Proto.S_CRACKS)
+	m.put_u16(mine.size())
+	for c in mine:
+		Proto.put_bpos(m, c[0])
+		m.put_u8(c[1])
+	_send_to(sp.peer_id, m.data_array)
+
+
 func _send_edits(sp, groups: Dictionary) -> void:
 	var mine := {}
 	for k in groups:
@@ -608,7 +746,8 @@ func _on_move(sp, b: StreamPeerBuffer) -> void:
 	var now := Time.get_ticks_msec()
 	var dt := maxf(0.2, (now - sp.last_move_ms) / 1000.0)
 	var d := Vector2(pos.x - sp.last_good.x, pos.z - sp.last_good.z).length()
-	if d > MOVE_SPEED_LIMIT * dt + MOVE_SLACK or not pos.is_finite():
+	var limit := MOVE_SPEED_LIMIT + (8.0 if now < sp.knock_until_ms else 0.0)
+	if d > limit * dt + MOVE_SLACK or not pos.is_finite():
 		correct(sp, sp.last_good)
 		return
 	sp.last_good = pos
@@ -616,8 +755,7 @@ func _on_move(sp, b: StreamPeerBuffer) -> void:
 	sp.global_position = pos
 	sp.yaw = yaw
 	sp.pitch = pitch
-	sp.flags = flags
-	sp.dead = (flags & Proto.F_DEAD) != 0
+	sp.flags = flags & ~Proto.F_DEAD  # the server decides who is dead
 
 
 ## Move a player (rejected movement, or later teleports). Moves already in flight are ignored.
@@ -680,6 +818,19 @@ func _command(sp, text: String) -> void:
 					_send_to(target, _bye_bytes("You were kicked by %s." % sp.player_name))
 					players[target].leave_reason = "was kicked by %s" % sp.player_name
 					_disconnect_soon(target)
+		"/spawn":
+			var what := parts[1].to_lower() if parts.size() > 1 else ""
+			var n := clampi(int(parts[2]) if parts.size() > 2 else 1, 1, 50)
+			if not what in ["zombie", "night", "horde", "boar"]:
+				_send_to(sp.peer_id, _notice_bytes("Usage: /spawn zombie|night|horde|boar [count]", Color(1, 0.6, 0.5)))
+				return
+			var made := 0
+			for i in n:
+				if G.game.spawn_near(what, sp.global_position) != null:
+					made += 1
+			print("SERVER %s used %s" % [sp.player_name, text])
+			_send_to(sp.peer_id, _notice_bytes("Spawned %d %s." % [made, what], Color(0.8, 0.9, 1)))
+			return
 		"/give":
 			var id := _item_named(parts[1] if parts.size() > 1 else "")
 			if id <= 0:
@@ -692,7 +843,7 @@ func _command(sp, text: String) -> void:
 			_send_to(sp.peer_id, _notice_bytes("Gave you %d %s." % [n - left, Items.name_of(id)], Color(0.8, 0.9, 1)))
 			return
 		_:
-			_send_to(sp.peer_id, _notice_bytes("Commands: /players /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count]", Color(0.8, 0.9, 1)))
+			_send_to(sp.peer_id, _notice_bytes("Commands: /players /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|horde|boar> [count]", Color(0.8, 0.9, 1)))
 			return
 	print("SERVER %s used %s" % [sp.player_name, text])
 	_broadcast(_time_bytes())
@@ -770,8 +921,9 @@ func _clock() -> String:
 
 # ------------------------------------------------------------ per tick
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	_tick += 1
+	_tick_players(delta)
 	_flush_world()
 	if _tick % SNAP_EVERY != 0:
 		return
@@ -783,14 +935,56 @@ func _physics_process(_delta: float) -> void:
 	# when the server goes quiet.
 	if ready_players.is_empty():
 		return
+	var mobs := mob_list(G.game.mobs)
 	for to in ready_players:
 		var s := Proto.writer(Proto.S_SNAP)
 		s.put_u32(_tick)
 		s.put_u8(ready_players.size() - 1)
 		for p in ready_players:
 			if p != to:
-				Proto.put_player_record(s, p.net_id, p.global_position, p.yaw, p.pitch, p.flags)
+				Proto.put_player_record(s, p.net_id, p.global_position, p.yaw, p.pitch, p.flags | (Proto.F_DEAD if p.dead else 0))
 		_send_raw(to.peer_id, s.data_array, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED, Proto.CH_STATE)
+		_send_mobs(to, mobs)
+
+
+func _send_mobs(to, mob_list: Array) -> void:
+	for pkt in mob_packets(_tick, to.global_position, mob_list):
+		_send_raw(to.peer_id, pkt, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED, Proto.CH_STATE)
+
+
+## Every mob's snapshot data, gathered once per round: [pos, id, kind, yaw, flags].
+static func mob_list(mobs_root: Node) -> Array:
+	var out := []
+	for m in mobs_root.get_children():
+		if m is Mob and m.net_id != 0:
+			out.append([m.global_position, m.net_id, m.net_kind(), m.rotation.y, m.net_flags()])
+	return out
+
+
+## S_MOBS for a player at `pos`: every mob of `mobs` (from mob_list) within Proto.MOB_RANGE, in
+## packets of up to Proto.MOBS_PER_PACKET (always at least one, so an empty view clears the
+## client's list). Static so the benchmark can time it for many clients.
+static func mob_packets(tick: int, pos: Vector3, mobs: Array) -> Array:
+	var origin := Vector2i(floori(pos.x / 16.0), floori(pos.z / 16.0))
+	var near := []
+	var r2 := Proto.MOB_RANGE * Proto.MOB_RANGE
+	for m in mobs:
+		if (m[0] as Vector3).distance_squared_to(pos) <= r2:
+			near.append(m)
+	var out := []
+	var i := 0
+	while i < near.size() or out.is_empty():
+		var n := mini(Proto.MOBS_PER_PACKET, near.size() - i)
+		var s := Proto.writer(Proto.S_MOBS)
+		s.put_u32(tick)
+		Proto.put_key(s, origin)
+		s.put_u8(n)
+		for j in n:
+			var m: Array = near[i + j]
+			Proto.put_mob(s, origin, m[1], m[2], m[0], m[3], m[4])
+		out.append(s.data_array)
+		i += maxi(n, 1)
+	return out
 
 
 func _process(delta: float) -> void:

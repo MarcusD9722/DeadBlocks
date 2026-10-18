@@ -10,7 +10,10 @@ var legs: Array[Node3D] = []
 func _ready() -> void:
 	hp = 20.0
 	max_hp = 20.0
-	add_to_group("animals")
+	if view:
+		set_physics_process(false)  # moved by the server's snapshots
+	else:
+		add_to_group("animals")
 	_setup_body(0.8, 0.9)
 	if not G.server_mode:
 		_build_model()
@@ -42,7 +45,7 @@ func _physics_process(delta: float) -> void:
 	var spd := 1.3
 	if flee_t > 0.0:
 		flee_t -= delta
-		var away: Vector3 = global_position - G.player.global_position
+		var away: Vector3 = global_position - last_from
 		away.y = 0.0
 		dir = away.normalized()
 		spd = 5.2
@@ -54,11 +57,20 @@ func _physics_process(delta: float) -> void:
 		dir = wander_dir
 	if walk(dir, spd, delta) and flee_t <= 0.0:
 		wander_t = 0.0
-	var rv := get_real_velocity()
-	var mv := minf(1.0, Vector2(rv.x, rv.z).length())
+	if not G.server_mode:
+		var rv := get_real_velocity()
+		_pose(Vector2(rv.x, rv.z).length())
+
+
+func _pose(spd: float) -> void:
+	var mv := minf(1.0, spd)
 	for i in legs.size():
 		var s := 1.0 if i == 0 or i == 3 else -1.0
 		legs[i].rotation.x = sin(anim * 1.4) * 0.6 * mv * s
+
+
+func _view_animate(_delta: float, spd: float, _rising: int) -> void:
+	_pose(spd)
 
 
 func _on_hurt(_attacker: Node) -> void:
@@ -68,5 +80,5 @@ func _on_hurt(_attacker: Node) -> void:
 
 
 func _on_death(attacker: Node) -> void:
-	if attacker == G.player:
-		G.player.give(Items.RAW_MEAT, 2 + (1 if randf() < 0.5 else 0))
+	if attacker != null and attacker.has_method("give"):
+		attacker.give(Items.RAW_MEAT, 2 + (1 if randf() < 0.5 else 0))

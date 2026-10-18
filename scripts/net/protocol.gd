@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 3
+const PROTOCOL := 4
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -36,7 +36,11 @@ const S_CHUNK := 21      # (bulk channel) seq u32, key, size u32, zstd(16 KB blo
 const S_EDITS := 22      # seq u32, chunk count u16, per chunk: key, count u16, count x (index u16, block u8)
 const S_INV := 23        # ack u16 (last request seq handled), 36 x (item u16, count u8)
 const S_MSG := 24        # text, colour rgb u8 x3: a message in the middle of the screen
-const S_ATE := 25        # item u16: the server took the food; apply its food and healing
+const S_ATE := 25        # item u16: the server took the food (plays the eating sound)
+const S_MOBS := 26       # (unreliable) tick u32, origin key, count u8, count x mob record (see put_mob)
+const S_STATS := 27      # health u8, food u8, dead u8, kills u16: the server owns these
+const S_HURT := 28       # amount u8, from 3xf32 (all 0 = no knockback): flash, sound, knockback
+const S_CRACKS := 29     # count u16, count x (block pos, stage u8): zombies chipping at blocks
 # Client -> server
 const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8
 const C_READY := 31      # my chunks are loaded, count me as online
@@ -47,6 +51,9 @@ const C_PLACE := 34      # seq, block pos, block id u8, slot u8
 const C_SWAP := 35       # seq, slot a u8, slot b u8
 const C_CRAFT := 36      # seq, recipe index u8, times u8
 const C_EAT := 37        # seq, slot u8
+const C_ATTACK := 38     # seq, mob id u16, slot u8 (the weapon)
+const C_FALL := 39       # damage u8 from a fall (movement is the client's)
+const C_RESPAWN := 40    # after dying
 
 # Player record flags
 const F_SPRINT := 1
@@ -70,6 +77,19 @@ const UNSUB_RADIUS := 11   # ...and unsubscribes beyond this
 const CHUNK_BYTES := 16384 # 16 x 16 x 64 blocks
 ## Reach the server allows for breaking and placing (the player's is 5 m; slack for lag).
 const REACH := 6.5
+const MOB_REACH := 4.7     # hitting a mob (the player's is 3.2 m)
+## Mobs within this distance of a player are in its S_MOBS.
+const MOB_RANGE := 96.0
+const MOBS_PER_PACKET := 100
+
+# Mob kinds and flags in S_MOBS
+const MOB_ZOMBIE := 0
+const MOB_NIGHT := 1
+const MOB_HORDE := 2
+const MOB_BOAR := 3
+const MF_HURT := 1
+const MF_ATTACK := 2
+const MF_DEAD := 4
 
 ## ENet gives up on a connection after this much silence (ms): at least TIMEOUT_MIN_MS, at most
 ## TIMEOUT_MAX_MS. Generous, so a Wi-Fi hiccup doesn't drop anyone (Minecraft waits 30 s too).
@@ -235,6 +255,28 @@ static func unpack_chunk(packed: PackedByteArray) -> PackedByteArray:
 ## True if 16-bit sequence number a is the same as or older than b (wraps around).
 static func seq_le(a: int, b: int) -> bool:
 	return ((b - a) & 0xffff) < 0x8000
+
+
+## 11 bytes: id u16, kind u8, x s16 and z s16 (1/32 m from the origin chunk's corner),
+## y u16 (1/64 m), yaw u8, flags u8.
+static func put_mob(b: StreamPeerBuffer, origin: Vector2i, id: int, kind: int, pos: Vector3, yaw: float, flags: int) -> void:
+	b.put_u16(id & 0xffff)
+	b.put_u8(kind)
+	b.put_16(clampi(roundi((pos.x - origin.x * 16) * 32.0), -32767, 32767))
+	b.put_u16(clampi(roundi(pos.y * 64.0), 0, 65535))
+	b.put_16(clampi(roundi((pos.z - origin.y * 16) * 32.0), -32767, 32767))
+	b.put_u8(int(fposmod(yaw, TAU) / TAU * 256.0) & 0xff)
+	b.put_u8(flags)
+
+
+static func get_mob(b: StreamPeerBuffer, origin: Vector2i) -> Dictionary:
+	var id := b.get_u16()
+	var kind := b.get_u8()
+	var x := b.get_16() / 32.0 + origin.x * 16
+	var y := b.get_u16() / 64.0
+	var z := b.get_16() / 32.0 + origin.y * 16
+	var yaw := b.get_u8() / 256.0 * TAU
+	return {"id": id, "kind": kind, "pos": Vector3(x, y, z), "yaw": yaw, "flags": b.get_u8()}
 
 
 ## 19 bytes: net id u16, position 3xf32, yaw u16, pitch s16, flags u8.

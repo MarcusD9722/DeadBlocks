@@ -205,7 +205,10 @@ func _physics_process(delta: float) -> void:
 	else:
 		air_min_vy = minf(air_min_vy, pre_vy)
 		if air_min_vy < -14.5:
-			take_damage((-air_min_vy - 14.5) * 4.0, Vector3.ZERO)
+			if G.mode == "client":
+				G.net.report_fall((-air_min_vy - 14.5) * 4.0)  # health is the server's
+			else:
+				take_damage((-air_min_vy - 14.5) * 4.0, Vector3.ZERO)
 		air_min_vy = 0.0
 	if global_position.y < -20.0:
 		global_position = spawn_point
@@ -222,12 +225,14 @@ func _process(delta: float) -> void:
 	hurt_flash = maxf(0.0, hurt_flash - delta * 1.5)
 	swing = maxf(0.0, swing - delta * 4.0)
 	if st == "playing" or st == "menu" or st == "chat" or (st == "paused" and G.mode == "client"):
-		var drain := 0.065 + (0.12 if sprinting else 0.0)
-		food = maxf(0.0, food - drain * delta)
 		if sprinting:
 			stamina = maxf(0.0, stamina - 16.0 * delta)
 		else:
 			stamina = minf(100.0, stamina + 20.0 * delta)
+	if G.mode != "client" and (st == "playing" or st == "menu"):
+		# Online, hunger and healing run on the server (S_STATS).
+		var drain := 0.065 + (0.12 if sprinting else 0.0)
+		food = maxf(0.0, food - drain * delta)
 		if food <= 0.0:
 			health -= 1.0 * delta
 			if health <= 0.0:
@@ -298,8 +303,10 @@ func _handle_mining(delta: float) -> void:
 
 
 func attack(mob: Node) -> void:
-	var dmg := Items.damage(cur_id())
-	mob.hurt(dmg, global_position, self)
+	if G.mode == "client":
+		G.net.request_attack(mob.net_id, selected)  # the server checks reach and deals the damage
+	else:
+		mob.hurt(Items.damage(cur_id()), global_position, self)
 	attack_cd = 0.45
 	swing = 1.0
 	G.sfx.play("hit", -3.0)
@@ -424,6 +431,34 @@ func take_damage(amount: float, from: Vector3) -> void:
 	if health <= 0.0:
 		health = 0.0
 		die()
+
+
+## Online: health, food and kills as the server has them.
+func apply_stats(hp: int, f: int, is_dead: bool, k: int) -> void:
+	health = hp
+	food = f
+	G.game.kills = k
+	if is_dead and not dead:
+		health = 0.0
+		die()
+	elif not is_dead and dead:
+		dead = false
+		stamina = 100.0
+		velocity = Vector3.ZERO
+		air_min_vy = 0.0
+		G.game.on_respawned()
+
+
+## Online: the server says we were hit (from = Vector3.ZERO: no knockback).
+func hurt_effect(_amount: int, from: Vector3) -> void:
+	hurt_flash = 1.0
+	G.sfx.play("hurt", -2.0)
+	if from != Vector3.ZERO:
+		var k := global_position - from
+		k.y = 0.0
+		if k.length() > 0.01:
+			velocity += k.normalized() * 5.0
+		velocity.y = maxf(velocity.y, 3.0)
 
 
 func die() -> void:

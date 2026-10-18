@@ -137,6 +137,9 @@ var sched_dirty := true
 ## Server: every block change is also appended here as [pos, id]; NetServer sends them out.
 var record_edits := false
 var edits_out: Array = []
+## Server: crack stage changes as [pos, stage 0-3], sent to clients like edits.
+var cracks_out: Array = []
+var crack_stage := {}
 ## Client online: chunks come from the server's subscriptions (see Proto.SUB_RADIUS). Only
 ## "fresh" chunks are generated here; edited ones wait for the server's copy.
 const SUB_FRESH := 1
@@ -659,9 +662,12 @@ func damage_block(p: Vector3i, amount: float) -> bool:
 
 
 func _show_crack(p: Vector3i, frac: float) -> void:
+	var stage := clampi(int(frac * 4.0), 0, 3)
+	if record_edits and int(crack_stage.get(p, -1)) != stage:
+		crack_stage[p] = stage
+		cracks_out.append([p, stage])
 	if not render:
 		return
-	var stage := clampi(int(frac * 4.0), 0, 3)
 	var n: MeshInstance3D = crack_nodes.get(p)
 	if n == null:
 		n = MeshInstance3D.new()
@@ -675,6 +681,7 @@ func _show_crack(p: Vector3i, frac: float) -> void:
 
 func _clear_damage(p: Vector3i) -> void:
 	damage.erase(p)
+	crack_stage.erase(p)
 	var n = crack_nodes.get(p)
 	if n != null:
 		n.queue_free()
@@ -761,6 +768,15 @@ func _apply_pending(c: Chunk) -> void:
 		if e[0] > base:
 			c.data[e[1]] = e[2]
 			c.modified = true
+
+
+## S_CRACKS: a zombie is chipping at this block.
+func net_crack(p: Vector3i, stage: int) -> void:
+	if get_blockv(p) == Blocks.AIR:
+		return
+	_show_crack(p, (stage + 0.5) / 4.0)
+	if G.sfx != null:
+		G.sfx.play_at("thud", Vector3(p) + Vector3(0.5, 0.5, 0.5), -2.0)
 
 
 ## A new session with the server (reconnect): it will subscribe us again from scratch.

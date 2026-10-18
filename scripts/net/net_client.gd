@@ -54,6 +54,10 @@ var _world_queue: Array = []
 ## [seq, "swap", a, b], replayed on top until the server acknowledges that request.
 var inv_slots: Array = []
 var _inv_known := false
+## Mobs the server runs, by id: {"kind", "seen": time s, "samples": [[time, pos, yaw, flags], ...]}.
+var mobs := {}
+## Bytes received per message type, for tests and the stats line.
+var bytes_in := {}
 var _req_seq := 0
 var _guesses: Array = []
 var _deadline := 0.0
@@ -104,6 +108,7 @@ func leave() -> void:
 
 
 func _close() -> void:
+	mobs.clear()
 	if peer != null:
 		peer.close()
 	if mp != null:
@@ -206,6 +211,42 @@ func request_craft(recipe: int, times: int) -> void:
 	m.put_u8(recipe)
 	m.put_u8(times)
 	_send(m.data_array)
+
+
+func request_attack(mob_id: int, slot: int) -> void:
+	var m := Proto.writer(Proto.C_ATTACK)
+	m.put_u16(_next_seq())
+	m.put_u16(mob_id & 0xffff)
+	m.put_u8(slot)
+	_send(m.data_array)
+
+
+func report_fall(damage: float) -> void:
+	var m := Proto.writer(Proto.C_FALL)
+	m.put_u8(clampi(ceili(damage), 1, 255))
+	_send(m.data_array)
+
+
+func request_respawn() -> void:
+	_send(Proto.writer(Proto.C_RESPAWN).data_array)
+
+
+## Where to draw a mob right now (like interpolated() for players). Empty if unknown.
+func mob_sample(id: int) -> Dictionary:
+	var o = mobs.get(id)
+	if o == null or o["samples"].is_empty():
+		return {}
+	var s: Array = o["samples"]
+	var t := Time.get_ticks_msec() / 1000.0 - INTERP_DELAY
+	if t <= s[0][0]:
+		return _sample(s[0])
+	for i in range(s.size() - 1):
+		var a: Array = s[i]
+		var b: Array = s[i + 1]
+		if t <= b[0]:
+			var f := clampf((t - a[0]) / maxf(0.001, b[0] - a[0]), 0.0, 1.0)
+			return {"pos": (a[1] as Vector3).lerp(b[1], f), "yaw": lerp_angle(a[2], b[2], f), "pitch": 0.0, "flags": b[4]}
+	return _sample(s[s.size() - 1])
 
 
 func request_eat(slot: int) -> void:
@@ -437,6 +478,10 @@ func _process(delta: float) -> void:
 		if _ping_t <= 0.0:
 			_ping_t = 1.0
 			_last_ping = ping_ms()
+	# Mobs the server stopped mentioning are gone (despawned, dead, or out of range).
+	for id in mobs.keys():
+		if now - float(mobs[id].get("seen", 0.0)) > 1.0:
+			mobs.erase(id)
 	if reconnecting and state == "idle" and now >= _retry_at:
 		if now - _lost_at > RECONNECT_S:
 			reconnecting = false
@@ -453,6 +498,7 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 	if data.is_empty():
 		return
 	last_recv = _now()
+	bytes_in[data[0]] = int(bytes_in.get(data[0], 0)) + data.size()
 	var b := Proto.reader(data)
 	match data[0]:
 		Proto.S_WELCOME:
@@ -536,9 +582,42 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			if G.hud != null and is_instance_valid(G.hud):
 				G.hud.msg(text, col)
 		Proto.S_ATE:
-			var id := b.get_u16()
-			if G.player != null and is_instance_valid(G.player):
-				G.player.ate(id)
+			b.get_u16()
+			if G.sfx != null:
+				G.sfx.play("eat", -4.0)
+		Proto.S_MOBS:
+			b.get_u32()
+			var origin := Proto.get_key(b)
+			var now := _now()
+			for i in b.get_u8():
+				var r := Proto.get_mob(b, origin)
+				var o = mobs.get(r["id"])
+				if o == null or o["kind"] != r["kind"]:
+					o = {"kind": r["kind"], "samples": []}
+					mobs[r["id"]] = o
+				o["seen"] = now
+				var smp: Array = o["samples"]
+				if smp.is_empty() or now > smp[smp.size() - 1][0]:
+					smp.append([now, r["pos"], r["yaw"], 0.0, r["flags"]])
+					if smp.size() > 16:
+						smp.pop_front()
+		Proto.S_STATS:
+			var hp := b.get_u8()
+			var food := b.get_u8()
+			var dead := b.get_u8() == 1
+			var kills := b.get_u16()
+			if G.player != null and is_instance_valid(G.player) and G.mode == "client":
+				G.player.apply_stats(hp, food, dead, kills)
+		Proto.S_HURT:
+			var amount := b.get_u8()
+			var from := Proto.get_vec3(b)
+			if G.player != null and is_instance_valid(G.player) and G.mode == "client":
+				G.player.hurt_effect(amount, from)
+		Proto.S_CRACKS:
+			if _world_ready():
+				for i in b.get_u16():
+					var p := Proto.get_bpos(b)
+					world_target.net_crack(p, b.get_u8())
 		Proto.S_CORRECT:
 			move_id = b.get_u8()
 			var pos := Proto.get_vec3(b)

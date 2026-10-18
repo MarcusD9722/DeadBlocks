@@ -2,8 +2,9 @@
 # Multiplayer test: starts a dedicated server and headless clients on this machine and checks
 # login, refusals, movement sync, chat, admin commands, cheat correction, rejoining, crash
 # recovery, the player limit, that the clock stops while nobody is online, riding out or
-# reconnecting after a frozen server, and building together (NETTEST_SOAK_S sets the length
-# of the 3-player building soak, default 20 s).
+# reconnecting after a frozen server, building together, and zombies, animals and a Blood Moon
+# (NETTEST_SOAK_S sets the length of the 3-player building soak, default 20 s; NETTEST_HORDE_S
+# that of the Blood Moon soak, default the same).
 # Usage: GODOT=/path/to/godot ./tools/run_nettest.sh [SERVER PREFIX...]
 #   The server runs as "$GODOT --headless --path . --" unless a prefix is given, for example
 #   qemu-aarch64-static -L /usr/aarch64-linux-gnu build/server/DeadBlocksServer.arm64 --headless --
@@ -16,6 +17,8 @@ LOG_DIR="${NETTEST_LOGS:-$PWD/build/test_logs/nettest}"
 mkdir -p "$LOG_DIR"
 rm -f "$LOG_DIR"/*.log
 PORT=$((30000 + RANDOM % 20000))
+SOAK_S=${NETTEST_SOAK_S:-20}
+HORDE_S=${NETTEST_HORDE_S:-$SOAK_S}
 fails=0
 SERVER=("$GODOT" --headless --path . --)
 [ $# -gt 0 ] && SERVER=("$@")
@@ -82,7 +85,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"${SERVER[@]}" --server --port=$PORT --password=pw --max-players=2 --seed=4242 --test-log \
+"${SERVER[@]}" --server --port=$PORT --password=pw --max-players=2 --seed=4242 --test-log --no-spawns \
 	--admins=alice > "$LOG_DIR/server.log" 2>&1 &
 SPID=$!
 if ! wait_line "$LOG_DIR/server.log" "listening on UDP" 120; then
@@ -237,7 +240,7 @@ fi
 # breaking the same block, a late joiner getting the edited chunks, and a soak test.
 kill $SPID 2>/dev/null
 PORT=$((PORT + 3))
-"${SERVER[@]}" --server --port=$PORT --password=pw --max-players=8 --seed=4242 --test-log \
+"${SERVER[@]}" --server --port=$PORT --password=pw --max-players=8 --seed=4242 --test-log --no-spawns \
 	--admins=alice,soak1,soak2,soak3 > "$LOG_DIR/server_build.log" 2>&1 &
 SPID=$!
 if wait_line "$LOG_DIR/server_build.log" "listening on UDP" 120; then
@@ -256,7 +259,6 @@ if wait_line "$LOG_DIR/server_build.log" "listening on UDP" 120; then
 	client late carol 1111 pw late --nettest-expect="$built"
 	wait $CPID
 	report late
-	SOAK_S=${NETTEST_SOAK_S:-20}
 	pids=()
 	for s in soak1 soak2 soak3; do
 		client "$s" "$s" 1111 pw soak --nettest-soak="$SOAK_S"
@@ -270,7 +272,44 @@ else
 	fail "building server started (see $LOG_DIR/server_build.log)"
 fi
 
-for f in "$LOG_DIR"/server.log "$LOG_DIR"/server_build.log "$LOG_DIR"/hold_*.log "$LOG_DIR"/host_crash.log; do
+# 10. Zombies and animals: a fight seen by a second player (only the zombies the fighter spawns),
+# then a Blood Moon with 3 players and the normal spawner on.
+kill $SPID 2>/dev/null
+PORT=$((PORT + 1))
+"${SERVER[@]}" --server --port=$PORT --password=pw --max-players=8 --seed=4242 --test-log --no-spawns \
+	--admins=alice > "$LOG_DIR/server_fight.log" 2>&1 &
+SPID=$!
+if wait_line "$LOG_DIR/server_fight.log" "listening on UDP" 120; then
+	client fighter alice 1234 pw fighter
+	A=$CPID
+	client zwatch bob 5678 pw zwatch
+	B=$CPID
+	wait $A
+	wait $B
+	report fighter
+	report zwatch
+else
+	fail "fight server started (see $LOG_DIR/server_fight.log)"
+fi
+kill $SPID 2>/dev/null
+PORT=$((PORT + 1))
+"${SERVER[@]}" --server --port=$PORT --password=pw --max-players=8 --seed=4242 --test-log \
+	--admins=horde1,horde2,horde3 > "$LOG_DIR/server_mobs.log" 2>&1 &
+SPID=$!
+if wait_line "$LOG_DIR/server_mobs.log" "listening on UDP" 120; then
+	pids=()
+	for s in horde1 horde2 horde3; do
+		client "$s" "$s" 1111 pw horde --nettest-soak="$HORDE_S"
+		pids+=($CPID)
+	done
+	for pid in "${pids[@]}"; do wait "$pid"; done
+	for s in horde1 horde2 horde3; do report "$s"; done
+	grep -h "^NETTEST horde " "$LOG_DIR"/horde?.log | sed 's/^NETTEST /    /'
+else
+	fail "mob server started (see $LOG_DIR/server_mobs.log)"
+fi
+
+for f in "$LOG_DIR"/server.log "$LOG_DIR"/server_build.log "$LOG_DIR"/server_fight.log "$LOG_DIR"/server_mobs.log "$LOG_DIR"/hold_*.log "$LOG_DIR"/host_crash.log; do
 	if grep -q -E '^(ERROR|SCRIPT ERROR|USER ERROR)' "$f"; then
 		fail "no errors in $(basename "$f")"
 		grep -E '^(ERROR|SCRIPT ERROR|USER ERROR)' "$f" | head -5 | sed 's/^/    /'

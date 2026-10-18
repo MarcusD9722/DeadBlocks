@@ -1,6 +1,6 @@
 # M1 plan: multiplayer foundation
 
-Status: **approved by the owner; M1.1, M1.2 and M1.3 done.** Merged from three independent drafts (simplest-first, performance-first, risk-first), each of which prototyped and measured parts of this in a scratch copy. Numbers marked *measured* come from those prototypes on the 4-core 2.1 GHz cloud machine unless they say "Pi".
+Status: **approved by the owner; M1.1 to M1.4 done.** Merged from three independent drafts (simplest-first, performance-first, risk-first), each of which prototyped and measured parts of this in a scratch copy. Numbers marked *measured* come from those prototypes on the 4-core 2.1 GHz cloud machine unless they say "Pi".
 
 ## Goals
 At the end of M1:
@@ -157,7 +157,9 @@ Open item: in one of five full runs, the exported arm64 server under qemu stoppe
 - **Done when:** nettest edits/inventory pass, including the late joiner, the two-simultaneous-breaks case, and a 60 s soak of 3 bots × 5 edits/s ending with identical chunk hashes everywhere.
 - **Marcus tries:** two windows (or a friend): build a hut in one and watch it appear in the other; craft at a workbench; leave, add blocks, rejoin and see them.
 
-### M1.4 Zombies and animals online
+### M1.4 Zombies and animals online — done
+Result (0.4.0): the server runs zombies and boars; clients draw them from `S_MOBS` (11 bytes per mob, 15 a second, everything within 96 m) as "views" built from the same scripts (`view = true`: moved by snapshots, flash, attack swing, groans, death fall from the flags). Spawning is the solo spawner around every player who is online and alive, at most 120 zombies in the world; mobs and spawning stop while nobody is online. The server owns health and food (hunger, healing, eating, starvation, falls reported by the client as `C_FALL`, death, `C_RESPAWN` at the spawn point; items are kept until M2); hits arrive as `S_HURT` (flash, sound, knockback, and the movement check allows the extra speed for a second). Attacks are requests (reach 4.7 m, a 0.3 s minimum between hits, the weapon in the slot); kill rewards and kills go to the player who landed the blow. Zombie block damage reaches everyone as crack stages (`S_CRACKS`, with the thud). Admins can `/spawn zombie|night|horde|boar [n]`. Tests: a zombie seen by both players comes for one, hurts it and is killed (kill counted, gone for both); a fall hurts; a horde cracks a dirt wall; death, the death screen and respawn; and a Blood Moon soak with 3 players (120 s in the full gate) — about 34 zombies in view, ~22 kbit/s of mob updates per player. Benchmark with updates built for 8 players (`--net-clients=8`, server mode, this machine): horde 38–42%, combined 53% (50% without networking; the networking itself costs 1–3 points, the 7 explorers' chunk streaming dominates) — just over the 50% target; worst case 1.4 Mbit/s of updates in total. The Pi runs the faster release export; M3's multi-core work is the real fix if the Pi gets tight.
+
 - **Work:** crack stages for block damage (moved from M1.3); zombie/animal code split into a server part (think + move, no visuals) and a client view (models, animation, groans, flash, death fall, driven by snapshot flags); per-player spawning with the current caps and a global ceiling of 120; zombies chase the nearest player in their region; combat (attack checks, damage and knockback to players, kill rewards); Blood Moon for everyone; admin commands.
 - **Done when:** nettest zombie/combat/bandwidth/loss pass; with 8 bot clients the combined benchmark here is ≤ 50%; a 120 s Blood Moon soak with 3 bots runs clean.
 - **Marcus tries:** Host + Join (or a friend), `/bloodmoon`, defend a wall together and watch both screens show the same zombies and cracks.

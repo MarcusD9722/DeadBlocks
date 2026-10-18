@@ -1,11 +1,13 @@
 extends Node
 ## Server load benchmark:
-## `-- --bench [--bench-secs=60] [--zombies=120] [--explorers=7] [--radius=6] [--only=horde,explore] [--out=FILE]`
+## `-- --bench [--bench-secs=60] [--zombies=120] [--explorers=7] [--radius=6] [--only=horde,explore]
+##   [--net-clients=8] [--out=FILE]`
 ## Simulates a Blood Moon horde against a walled base and players sprinting into new land, then
 ## reports how busy the main thread is. Run it on the server machine (the Raspberry Pi) to see
 ## whether it can host the game. tools/run_bench.sh runs it per physics setup; see docs/pi-benchmark.md.
 
 const WorldScript := preload("res://scripts/world.gd")
+const NetServerScript := preload("res://scripts/net/net_server.gd")
 const SPRINT := 6.9
 const FORT_R := 4
 
@@ -34,6 +36,10 @@ var fort_cells: Array[Vector3i] = []
 ## Block ids the fort replaced, so it can be removed again after a siege.
 var fort_old := {}
 var explore_ms := -1.0
+## --net-clients=N: also build every update a server sends N players (mob and player snapshots,
+## 15 a second), so the load includes networking. Clients stand at the base and with the explorers.
+var net_clients := 0
+var net_bytes := 0
 
 
 func _ready() -> void:
@@ -44,6 +50,7 @@ func _ready() -> void:
 	secs = _num_arg("--bench-secs=", secs)
 	zombie_target = int(_num_arg("--zombies=", zombie_target))
 	explorer_count = int(_num_arg("--explorers=", explorer_count))
+	net_clients = int(_num_arg("--net-clients=", 0))
 	out_path = G.arg_value("--out=")
 	if out_path == "":
 		out_path = "user://bench_results.txt"
@@ -71,6 +78,25 @@ func _out(s: String) -> void:
 func _physics_process(_delta: float) -> void:
 	if frame_start_us == 0:
 		frame_start_us = Time.get_ticks_usec()
+	if recording and net_clients > 0 and Engine.get_physics_frames() % 2 == 0:
+		_net_updates()
+
+
+func _net_updates() -> void:
+	var mobs: Array = NetServerScript.mob_list(G.game.mobs)
+	var tick := Engine.get_physics_frames()
+	for i in net_clients:
+		var pos: Vector3 = G.player.global_position
+		if i > 0 and not explorers.is_empty():
+			pos = explorers[(i - 1) % explorers.size()]["pos"]
+		for pkt in NetServerScript.mob_packets(tick, pos, mobs):
+			net_bytes += pkt.size()
+		var s := Proto.writer(Proto.S_SNAP)
+		s.put_u32(tick)
+		s.put_u8(net_clients - 1)
+		for j in net_clients - 1:
+			Proto.put_player_record(s, j + 1, pos, 0.0, 0.0, 0)
+		net_bytes += s.data_array.size()
 
 
 func _process(delta: float) -> void:
@@ -280,6 +306,7 @@ func _scenario(name: String, dur: float, zombies: int, n_expl: int, idle_ms: flo
 		explorers.append({"pos": origin, "dir": Vector3(cos(a), 0, sin(a))})
 
 	busy.clear()
+	net_bytes = 0
 	stall_frames = 0
 	explorer_frames = 0
 	max_backlog = 0
@@ -318,6 +345,9 @@ func _scenario(name: String, dur: float, zombies: int, n_expl: int, idle_ms: flo
 	_out("[%s] %s | load %.0f%% of one core" % [name, verdict, load * 100.0])
 	_out("  per tick: avg %.2f ms (budget %.1f ms) | per frame p95 %.2f ms, p99 %.2f, max %.2f | ticks/s %.1f of %d" % [
 		per_tick, tick_ms, _pct(busy, 0.95), _pct(busy, 0.99), _pct(busy, 1.0), ticks_per_s, tps])
+	if net_clients > 0:
+		_out("  network: updates for %d players built every other tick | %.0f kbit/s sent in total, %.0f per player" % [
+			net_clients, net_bytes * 8.0 / 1000.0 / wall, net_bytes * 8.0 / 1000.0 / wall / net_clients])
 	if zombies > 0:
 		var broken := 0
 		for c in fort_cells:

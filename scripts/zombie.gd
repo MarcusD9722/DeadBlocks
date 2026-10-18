@@ -2,6 +2,7 @@ extends Mob
 ## Chases the nearest player in its region, hops ledges and smashes through whatever is in the way.
 ## The Sim node ticks every zombie (sim_tick) in a fixed order; zombies have no _physics_process.
 
+var kind := "day"
 var speed := 2.4
 var chase_range := 30.0
 var player_dmg := 8.0
@@ -27,7 +28,8 @@ var region = null
 var rng := RandomNumberGenerator.new()
 
 
-func setup(kind: String, day: int) -> void:
+func setup(k: String, day: int) -> void:
+	kind = k
 	match kind:
 		"day":
 			speed = 1.7
@@ -50,7 +52,8 @@ func _ready() -> void:
 	if not blood:
 		hp = 30.0
 		max_hp = 30.0
-	add_to_group("zombies")
+	if not view:
+		add_to_group("zombies")  # the Sim ticks these; views are moved by snapshots
 	_setup_body(0.6, 1.9)
 	groan_t = rng.randf_range(1.0, 7.0)
 	if G.server_mode:
@@ -113,6 +116,7 @@ func sim_tick(delta: float) -> void:
 	attack_cd -= delta
 	block_cd -= delta
 	groan_t -= delta
+	attack_anim = maxf(0.0, attack_anim - delta * 3.0)
 	if not G.server_mode:
 		_tick_flash(delta)
 	var pl = _target()
@@ -198,12 +202,15 @@ func _spacing() -> Vector3:
 	return push
 
 
-func _animate(delta: float) -> void:
+func _animate(_delta: float) -> void:
 	var rv := get_real_velocity()
-	var mv := minf(1.0, Vector2(rv.x, rv.z).length())
+	_pose(Vector2(rv.x, rv.z).length())
+
+
+func _pose(spd: float) -> void:
+	var mv := minf(1.0, spd)
 	leg_l.rotation.x = sin(anim) * 0.7 * mv
 	leg_r.rotation.x = -sin(anim) * 0.7 * mv
-	attack_anim = maxf(0.0, attack_anim - delta * 3.0)
 	var lift := sin(attack_anim * PI) * 0.9
 	arm_l.rotation.x = -PI * 0.47 + sin(anim * 0.5) * 0.12 - lift
 	arm_r.rotation.x = -PI * 0.47 - sin(anim * 0.5) * 0.12 - lift
@@ -216,5 +223,29 @@ func _on_hurt(_attacker: Node) -> void:
 
 func _on_death(attacker: Node) -> void:
 	G.game.kills += 1
-	if attacker == G.player and randf() < 0.6:
-		G.player.give(Items.FIBER, randi_range(1, 2))
+	# The player who landed the last hit (the local player, or a ServerPlayer online).
+	if attacker != null and attacker.has_method("give"):
+		if "kills" in attacker:
+			attacker.kills += 1
+		if rng.randf() < 0.6:
+			attacker.give(Items.FIBER, rng.randi_range(1, 2))
+
+
+func net_kind() -> int:
+	return Proto.MOB_HORDE if blood else (Proto.MOB_NIGHT if kind == "night" else Proto.MOB_ZOMBIE)
+
+
+func net_flags() -> int:
+	return super() | (Proto.MF_ATTACK if attack_anim > 0.5 else 0)
+
+
+func _view_animate(delta: float, spd: float, rising: int) -> void:
+	if rising & Proto.MF_ATTACK:
+		attack_anim = 1.0
+	attack_anim = maxf(0.0, attack_anim - delta * 3.0)
+	groan_t -= delta
+	if groan_t <= 0.0:
+		groan_t = randf_range(5.0, 12.0)
+		voice.pitch_scale = randf_range(0.8, 1.15) * (0.85 if blood else 1.0)
+		voice.play()
+	_pose(spd)

@@ -15,6 +15,15 @@ var base_cols: Array[Color] = []
 var model: Node3D
 var height := 1.8
 var half := 0.3
+## Online: the id clients know this mob by (S_MOBS).
+var net_id := 0
+## Client online: only a picture of a mob the server runs, moved by its snapshots.
+var view := false
+## Where the last hit came from (animals run away from it).
+var last_from := Vector3.ZERO
+var _view_last := Vector3.INF
+var _view_flags := 0
+var _dying := false
 
 
 func _setup_body(w: float, h: float) -> void:
@@ -120,6 +129,7 @@ func hurt(dmg: float, from: Vector3, attacker: Node = null) -> void:
 		return
 	hp -= dmg
 	flash = 1.0
+	last_from = from
 	if from != Vector3.ZERO:
 		var k := global_position - from
 		k.y = 0.0
@@ -138,6 +148,47 @@ func hurt(dmg: float, from: Vector3, attacker: Node = null) -> void:
 
 
 func _on_hurt(_attacker: Node) -> void:
+	pass
+
+
+## S_MOBS: what kind of mob this is (Proto.MOB_*).
+func net_kind() -> int:
+	return Proto.MOB_BOAR
+
+
+func net_flags() -> int:
+	var f := 0
+	if flash > 0.3:
+		f |= Proto.MF_HURT
+	if dead:
+		f |= Proto.MF_DEAD
+	return f
+
+
+## Client online: show the mob where the server says it is (called every frame, interpolated).
+func view_update(pos: Vector3, yaw: float, flags: int, delta: float) -> void:
+	var spd := 0.0
+	if _view_last != Vector3.INF and delta > 0.0:
+		spd = Vector2(pos.x - _view_last.x, pos.z - _view_last.z).length() / delta
+	_view_last = pos
+	global_position = pos
+	rotation.y = yaw
+	anim += delta * spd * 3.2
+	var rising := flags & ~_view_flags
+	_view_flags = flags
+	if rising & Proto.MF_HURT:
+		flash = 1.0
+		_on_hurt(null)
+	_tick_flash(delta)
+	if (flags & Proto.MF_DEAD) and not _dying:
+		_dying = true
+		collision_layer = 0
+		var tw := create_tween()
+		tw.tween_property(model, "rotation:x", -PI * 0.5, 0.35)
+	_view_animate(delta, spd, rising)
+
+
+func _view_animate(_delta: float, _spd: float, _rising: int) -> void:
 	pass
 
 

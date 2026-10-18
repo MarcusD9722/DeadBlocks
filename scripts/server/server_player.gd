@@ -32,6 +32,7 @@ var last_break_ms := 0
 ## Requests this session, and how many were refused (shown in the log when the player leaves).
 var requests := 0
 var refused := 0
+var refuse_why := {}
 ## Chunk subscriptions (see Proto.SUB_RADIUS): keys this client is kept up to date on, the
 ## chunk they were computed around, and edited chunks still to send in full.
 var subs := {}
@@ -41,6 +42,34 @@ var chunk_queue: Array = []
 var fixes: Array[Vector3i] = []
 
 
-func take_damage(_amount: float, _from: Vector3) -> void:
-	# Players' health lives on their own PC until M1.4 sends damage to them.
-	pass
+## Health and food live here online (the player's PC shows what S_STATS says).
+var health := 100.0
+var food := 100.0
+var kills := 0
+var spawn_point := Vector3.ZERO
+## Knockback makes a player move faster than walking; the movement check allows it until then.
+var knock_until_ms := 0
+var last_attack_ms := 0
+## The numbers last sent in S_STATS (health, food, dead, kills), to send only changes.
+var stats_sent: Array = []
+
+
+## Zombies hit through this (it's a Sim player record), and so do falls.
+func take_damage(amount: float, from: Vector3) -> void:
+	if dead or not is_ready:
+		return
+	health -= amount
+	if from != Vector3.ZERO:
+		knock_until_ms = Time.get_ticks_msec() + 1000
+	G.net_server.player_hurt(self, amount, from)
+	if health <= 0.0:
+		health = 0.0
+		dead = true
+		G.net_server.player_died(self)
+
+
+## Kill rewards and drops go to whoever earned them.
+func give(id: int, n: int) -> void:
+	if inv.add(id, n) > 0:
+		G.net_server.tell(self, "Inventory full!", Color(1, 0.5, 0.4))
+	inv_dirty = true

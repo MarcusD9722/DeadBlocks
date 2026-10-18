@@ -23,6 +23,11 @@ extends Node
 ##   late         joins later: the edited chunks must arrive (--nettest-expect=cx,cz)
 ##   soak         (admin) 3 of these place and break blocks in one shared spot, 5 times a second
 ##                for --nettest-soak=S seconds; afterwards every world must match the server's
+##   fighter      (admin) spawns a zombie, gets hit, kills it; falls; walls itself in with dirt,
+##                spawns a horde, sees the wall crack, dies and respawns
+##   zwatch       walks away from the fighter and checks it sees the same zombie come and go
+##   horde        (admin) 3 of these live through a Blood Moon for --nettest-soak=S seconds:
+##                fight, die, respawn; report zombies seen and the bandwidth they cost
 
 var role := ""
 var fails := 0
@@ -41,8 +46,10 @@ func _ready() -> void:
 	var limit := 150.0 if role == "hold" or G.has_arg("--nettest-crash") else 90.0
 	if role == "stall":
 		limit = 240.0
-	elif role == "soak":
+	elif role == "soak" or role == "horde":
 		limit = 120.0 + float(G.arg_value("--nettest-soak="))
+	elif role == "fighter" or role == "zwatch":
+		limit = 240.0
 	get_tree().create_timer(limit, true, false, true).timeout.connect(_on_timeout)
 	_run.call_deferred()
 
@@ -148,6 +155,12 @@ func _run() -> void:
 		await _run_late()
 	elif role == "soak":
 		await _run_soak()
+	elif role == "fighter":
+		await _run_fighter()
+	elif role == "zwatch":
+		await _run_zwatch()
+	elif role == "horde":
+		await _run_horde()
 	else:
 		check(false, "known role (got '%s')" % role)
 	await _finish()
@@ -506,11 +519,14 @@ func _run_builder() -> void:
 		await _shot("inventory")
 		G.game.close_inventory()
 
-	# Eating goes through the server; moving an item too.
-	p.food = 50.0
+	# Eating goes through the server (health and food are its): a 10 m fall first, so we can eat.
+	p.global_position += Vector3(0, 10, 0)
+	check(await _until(func(): return p.health < 90.0, 8.0), "a fall hurt us (health %.0f)" % p.health)
+	await _until(func(): return p.is_on_floor(), 5.0)
+	var hp_low: float = p.health
 	var bslot := _select(Items.BERRIES)
 	p.consume(Items.BERRIES)
-	check(await _until(func(): return p.food > 50.0 and _count(Items.BERRIES) == 2, 5.0), "ate berries (food %.0f)" % p.food)
+	check(await _until(func(): return p.health > hp_low and _count(Items.BERRIES) == 2, 5.0), "ate berries (health %.0f -> %.0f)" % [hp_low, p.health])
 	G.net.request_swap(bslot, 20)
 	check(await _until(func(): return G.net.inv_slots[20] != null and int(G.net.inv_slots[20]["id"]) == Items.BERRIES, 5.0), "moved the berries into the backpack")
 
@@ -627,3 +643,198 @@ func _run_soak() -> void:
 	await _wait(2.0)
 	await _hash_check("after the soak, our world matches the server's", chunk)
 	await _wait(2.0)
+
+
+# ------------------------------------------------------------ zombies and animals (M1.4)
+
+## Mob ids the server currently shows us, of the given kinds.
+func _mob_ids(kinds: Array) -> Array:
+	return G.net.mobs.keys().filter(func(id): return kinds.has(int(G.net.mobs[id]["kind"])))
+
+
+func _mob_dist(id: int) -> float:
+	var s: Dictionary = G.net.mob_sample(id)
+	return 999.0 if s.is_empty() else (s["pos"] as Vector3).distance_to(G.player.global_position)
+
+
+## Walk (sprinting) toward a point for up to `secs`; true once within `near` metres.
+func _walk_to(target: Vector3, near: float, secs: float) -> bool:
+	var p = G.player
+	var t0 := Time.get_ticks_msec()
+	Input.action_press("move_forward")
+	Input.action_press("sprint")
+	var ok := false
+	while Time.get_ticks_msec() - t0 < secs * 1000.0:
+		var d: Vector3 = target - p.global_position
+		if Vector2(d.x, d.z).length() <= near:
+			ok = true
+			break
+		p.set_look(atan2(-d.x, -d.z), 0.0)
+		if p.is_on_floor() and p.get_real_velocity().length() < 1.0:
+			Input.action_press("jump")  # stuck on a ledge
+		else:
+			Input.action_release("jump")
+		await _wait(0.1)
+	Input.action_release("move_forward")
+	Input.action_release("sprint")
+	Input.action_release("jump")
+	return ok
+
+
+## Hit mob `id` with the selected item until it's gone (or `secs` pass). True if it died.
+func _fight(id: int, secs: float) -> bool:
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < secs * 1000.0:
+		if not G.net.mobs.has(id) or (int(G.net.mobs[id]["samples"].back()[4]) & Proto.MF_DEAD):
+			return true
+		var s: Dictionary = G.net.mob_sample(id)
+		if not s.is_empty():
+			_look_at(s["pos"] + Vector3(0, 1.0, 0))
+			if _mob_dist(id) < 3.4:
+				G.player.attack_cd = 0.0
+				G.net.request_attack(id, G.player.selected)
+		await _wait(0.5)
+	return false
+
+
+func _run_fighter() -> void:
+	if not await _until(_playing, 60.0):
+		check(false, "joined the server (%s)" % ", ".join(_errors))
+		return
+	check(await _until(func(): return _other_id() != 0, 30.0), "the watcher is here")
+	var other: String = G.net.others[_other_id()]["name"]
+	check(await _until(func(): return _chat_from(other, "NT away") != "", 30.0), "the watcher walked away")
+	var p = G.player
+	G.net.send_chat("/give stone_sword")
+	G.net.send_chat("/give dirt 40")
+	check(await _until(func(): return _count(Items.STONE_SWORD) == 1 and _count(Blocks.DIRT) >= 40, 10.0), "admin /give sword and dirt")
+	_select(Items.STONE_SWORD)
+
+	var before: Array = G.net.mobs.keys()
+	G.net.send_chat("/spawn zombie 1")
+	var fresh := func(): return _mob_ids([Proto.MOB_ZOMBIE]).filter(func(id): return not before.has(id))
+	check(await _until(func(): return not fresh.call().is_empty(), 10.0), "a zombie appears")
+	var zid: int = fresh.call()[0] if not fresh.call().is_empty() else 0
+	print("NETTEST zombie_id=%d" % zid)
+	G.net.send_chat("NT zombie %d" % zid)
+	var d0 := _mob_dist(zid)
+	# Without pathfinding (M5) a zombie behind a tree has to dig through, so only check that it
+	# heads our way, then meet it.
+	check(await _until(func(): return _mob_dist(zid) < d0 - 3.0, 20.0), "the zombie comes for us (from %.0f m)" % d0)
+	var zs: Dictionary = G.net.mob_sample(zid)
+	if not zs.is_empty() and _mob_dist(zid) > 2.0:
+		await _walk_to(zs["pos"], 1.5, 10.0)
+	check(await _until(func(): return p.health < 100.0, 15.0), "the zombie hurts us (health %.0f)" % p.health)
+	check(await _fight(zid, 20.0), "killed the zombie")
+	check(await _until(func(): return G.game.kills == 1, 5.0), "the server counted the kill (%d)" % G.game.kills)
+	check(await _until(func(): return not G.net.mobs.has(zid), 5.0), "the dead zombie goes away")
+	G.net.send_chat("NT zdone")
+
+	# A fall: the movement is ours, the damage the server's.
+	await _until(func(): return p.is_on_floor(), 5.0)
+	var hp_before: float = p.health
+	p.global_position += Vector3(0, 12, 0)
+	check(await _until(func(): return p.health < hp_before - 5.0, 8.0), "a 12 m fall hurts (health %.0f -> %.0f)" % [hp_before, p.health])
+
+	# A dirt ring two high around us, then a horde: they must crack it.
+	await _until(func(): return p.is_on_floor(), 5.0)
+	var c := _base()
+	# Stand in the middle of our block, or our own body blocks the cells around it. That can step
+	# us off a ledge, so plan the wall once we stand still again.
+	p.global_position = Vector3(c.x + 0.5, p.global_position.y, c.z + 0.5)
+	p.velocity = Vector3.ZERO
+	await _wait(0.5)
+	await _until(func(): return p.is_on_floor(), 5.0)
+	c = _base()
+	_select(Blocks.DIRT)
+	var ring := []
+	for dy in [0, 1]:
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1), Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
+			var b := Vector3i(c.x + d.x, c.y + dy, c.z + d.y)
+			ring.append(b)
+			if G.world.get_blockv(b) == Blocks.AIR and not p.try_place(b, Blocks.DIRT):
+				print("NETTEST wall cell %s not placed here: below %d, we stand at %s" % [b, G.world.get_blockv(b + Vector3i.DOWN), p.global_position])
+			await _wait(0.1)
+	await _wait(1.0)
+	var walled := ring.filter(func(b): return G.world.get_blockv(b) != Blocks.AIR).size()
+	check(walled >= 14, "walled ourselves in (%d of 16 around us are solid)" % walled)
+	G.net.send_chat("/spawn horde 4")
+	check(await _until(func(): return _mob_ids([Proto.MOB_HORDE]).size() >= 3, 10.0), "a horde appears")
+	# Zombies that spawned behind a cliff dig their way over; any digging shows as cracks too.
+	check(await _until(func(): return int(G.net.bytes_in.get(Proto.S_CRACKS, 0)) > 0, 75.0), "the horde cracks blocks")
+	# Dying: a 40 m fall always kills (the horde might take a while to dig in).
+	if not p.dead:
+		p.global_position += Vector3(0, 40, 0)
+	check(await _until(func(): return p.dead, 15.0), "died (health %.0f)" % p.health)
+	check(G.game.state == "dead", "the death screen shows")
+	await _wait(1.0)
+	G.game.respawn()
+	check(await _until(func(): return not p.dead and p.health >= 99.0 and G.game.state == "playing", 10.0), "respawned with full health")
+	check(p.global_position.distance_to(G.session["spawn"]) < 3.0, "respawned at the spawn point")
+	G.net.send_chat("NT fdone")
+	await _wait(1.0)
+	print("NETTEST mob bytes: %d" % int(G.net.bytes_in.get(Proto.S_MOBS, 0)))
+
+
+func _run_zwatch() -> void:
+	if not await _until(_playing, 60.0):
+		check(false, "joined the server (%s)" % ", ".join(_errors))
+		return
+	check(await _until(func(): return _other_id() != 0, 30.0), "the fighter is here")
+	var other: String = G.net.others[_other_id()]["name"]
+	# Walk 40 m away, so the zombie goes for the fighter, not us.
+	var start: Vector3 = G.player.global_position
+	await _walk_to(start + Vector3(40, 0, 0), 2.0, 12.0)
+	check(G.player.global_position.distance_to(start) > 25.0, "walked away (%.0f m)" % G.player.global_position.distance_to(start))
+	G.net.send_chat("NT away")
+	check(await _until(func(): return _chat_from(other, "NT zombie ") != "", 40.0), "the fighter spawned a zombie")
+	var zid := int(_chat_from(other, "NT zombie ").split(" ")[2])
+	check(await _until(func(): return G.net.mobs.has(zid), 5.0), "we see the same zombie (id %d)" % zid)
+	check(await _until(func(): return _chat_from(other, "NT zdone") != "", 60.0), "the fighter killed it")
+	check(await _until(func(): return not G.net.mobs.has(zid), 5.0), "it's gone for us too")
+	check(await _until(func(): return _chat_from(other, "NT fdone") != "", 150.0), "the fighter finished")
+
+
+func _run_horde() -> void:
+	if not await _until(_playing, 60.0):
+		check(false, "joined the server (%s)" % ", ".join(_errors))
+		return
+	var secs := float(G.arg_value("--nettest-soak="))
+	var me := G.arg_value("--name=")
+	G.net.send_chat("/give iron_sword")
+	check(await _until(func(): return _count(Items.IRON_SWORD) == 1, 10.0), "admin /give sword")
+	_select(Items.IRON_SWORD)
+	check(await _until(func(): return G.net.others.size() >= 2, 60.0), "all three are here")
+	if me == "horde1":
+		G.net.send_chat("/bloodmoon")
+	check(await _until(func(): return G.game.horde_active, 30.0), "the Blood Moon rises")
+	var p = G.player
+	var most := 0
+	var deaths := 0
+	var hits := 0
+	var bytes0 := int(G.net.bytes_in.get(Proto.S_MOBS, 0))
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < secs * 1000.0:
+		most = maxi(most, G.net.mobs.size())
+		if p.dead:
+			deaths += 1
+			await _wait(1.0)
+			G.game.respawn()
+			await _until(func(): return not p.dead, 10.0)
+			continue
+		var best := 0
+		var bd := 3.4
+		for id in _mob_ids([Proto.MOB_ZOMBIE, Proto.MOB_NIGHT, Proto.MOB_HORDE]):
+			var d := _mob_dist(id)
+			if d < bd:
+				bd = d
+				best = id
+		if best != 0:
+			G.net.request_attack(best, p.selected)
+			hits += 1
+		await _wait(0.5)
+	var kbit := (int(G.net.bytes_in.get(Proto.S_MOBS, 0)) - bytes0) * 8.0 / 1000.0 / secs
+	print("NETTEST horde %s: at most %d mobs in view, %d kills, %d deaths, %d swings, mob updates %.0f kbit/s" % [me, most, G.game.kills, deaths, hits, kbit])
+	check(most >= 15, "the horde came (%d at once)" % most)
+	check(most <= 120, "never more than 120 zombies")
+	check(kbit < 400.0, "mob updates cost %.0f kbit/s" % kbit)
