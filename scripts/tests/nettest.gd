@@ -252,6 +252,9 @@ func _run_pair() -> void:
 	var oid := _other_id()
 	var other: String = G.net.others[oid]["name"]
 	check(true, "sees the other player (%s)" % other)
+	# What's in our hand shows in theirs: "a" holds a torch, "b" berries (the starter kit).
+	await _until(func(): return _count(Blocks.TORCH) == 2 and _count(Items.BERRIES) == 3, 10.0)
+	_select(Blocks.TORCH if role == "a" else Items.BERRIES)
 
 	# Walk (hopping over anything in the way), stop, and tell the other player where we ended up.
 	var p = G.player
@@ -283,7 +286,13 @@ func _run_pair() -> void:
 	var rp = G.game.remote_players.get(oid)
 	var drawn := 99.0 if rp == null or theirs == Vector3.INF else (rp.global_position as Vector3).distance_to(theirs)
 	check(drawn < 0.75, "draws %s there (off by %.2f m)" % [other, drawn])
+	var expect_held: int = Items.BERRIES if role == "a" else Blocks.TORCH
+	var held_of := func(): return int(G.net.others[oid].get("held", 0))
+	check(await _until(func(): return held_of.call() == expect_held, 5.0), "sees what %s holds (%s)" % [other, Items.name_of(held_of.call())])
+	check(rp != null and rp.held.visible, "draws it in their hand")
 	if G.arg_value("--shots=") != "" and rp != null:
+		await _walk_to(rp.global_position, 4.0, 8.0)  # close enough to see what they hold
+		await _wait(0.5)
 		p.look_at_mob(rp)
 		await _wait(0.5)
 		await _shot("1_other_player")
@@ -759,7 +768,17 @@ func _run_fighter() -> void:
 	check(await _until(func(): return _count(Items.STONE_SWORD) == 1 and _count(Blocks.DIRT) >= 40, 10.0), "admin /give sword and dirt")
 	_select(Items.STONE_SWORD)
 
+	# A fall, here at the spawn point where no tree is in the way: the movement is ours, the
+	# damage the server's.
+	await _until(func(): return p.is_on_floor(), 5.0)
+	var hp_before: float = p.health
+	p.global_position += Vector3(0, 12, 0)
+	check(await _until(func(): return p.health < hp_before - 5.0, 8.0), "a 12 m fall hurts (health %.0f -> %.0f)" % [hp_before, p.health])
+	await _until(func(): return p.is_on_floor(), 5.0)
+	await _wait(1.0)  # healed a little? the zombie still has to hurt us below
+
 	var before: Array = G.net.mobs.keys()
+	var hurts0 := int(G.net.bytes_in.get(Proto.S_HURT, 0))
 	G.net.send_chat("/spawn zombie 1")
 	var fresh := func(): return _mob_ids([Proto.MOB_ZOMBIE]).filter(func(id): return not before.has(id))
 	check(await _until(func(): return not fresh.call().is_empty(), 10.0), "a zombie appears")
@@ -773,17 +792,12 @@ func _run_fighter() -> void:
 	var zs: Dictionary = G.net.mob_sample(zid)
 	if not zs.is_empty() and _mob_dist(zid) > 2.0:
 		await _walk_to(zs["pos"], 1.5, 10.0)
-	check(await _until(func(): return p.health < 100.0, 15.0), "the zombie hurts us (health %.0f)" % p.health)
+	check(await _until(func(): return int(G.net.bytes_in.get(Proto.S_HURT, 0)) > hurts0, 15.0), "the zombie hurts us (health %.0f)" % p.health)
 	check(await _fight(zid, 20.0), "killed the zombie")
 	check(await _until(func(): return G.game.kills == 1, 5.0), "the server counted the kill (%d)" % G.game.kills)
 	check(await _until(func(): return not G.net.mobs.has(zid), 5.0), "the dead zombie goes away")
 	G.net.send_chat("NT zdone")
 
-	# A fall: the movement is ours, the damage the server's.
-	await _until(func(): return p.is_on_floor(), 5.0)
-	var hp_before: float = p.health
-	p.global_position += Vector3(0, 12, 0)
-	check(await _until(func(): return p.health < hp_before - 5.0, 8.0), "a 12 m fall hurts (health %.0f -> %.0f)" % [hp_before, p.health])
 
 	# A dirt ring two high around us, then a horde: they must crack it.
 	await _until(func(): return p.is_on_floor(), 5.0)
@@ -801,7 +815,12 @@ func _run_fighter() -> void:
 	check(await _until(func(): return _mob_ids([Proto.MOB_HORDE]).size() >= 3, 10.0), "a horde appears")
 	# Zombies that spawned behind a cliff dig their way over; any digging shows as cracks too.
 	# (Up to 150 s: the arm64 server under qemu runs well behind real time.)
-	check(await _until(func(): return int(G.net.bytes_in.get(Proto.S_CRACKS, 0)) > 0, 150.0), "the horde cracks blocks")
+	var cracked := await _until(func(): return int(G.net.bytes_in.get(Proto.S_CRACKS, 0)) > 0, 150.0)
+	check(cracked, "the horde cracks blocks")
+	if not cracked:
+		for id in _mob_ids([Proto.MOB_HORDE]):
+			var hs: Dictionary = G.net.mob_sample(id)
+			print("NETTEST horde zombie %d at %s, %.1f m away (we are at %s)" % [id, hs.get("pos"), _mob_dist(id), p.global_position])
 	# Dying: a 40 m fall always kills (the horde might take a while to dig in).
 	if not p.dead:
 		p.global_position += Vector3(0, 40, 0)

@@ -799,6 +799,7 @@ func _on_move(sp, b: StreamPeerBuffer) -> void:
 	var yaw := Proto.u16_to_yaw(b.get_u16())
 	var pitch := b.get_16() / 10000.0
 	var flags := b.get_u8()
+	sp.slot = clampi(b.get_u8(), 0, 8)
 	if mid != sp.move_id:
 		return  # sent before our last correction
 	var now := Time.get_ticks_msec()
@@ -811,6 +812,11 @@ func _on_move(sp, b: StreamPeerBuffer) -> void:
 	sp.last_good = pos
 	sp.last_move_ms = now
 	sp.global_position = pos
+	if pos.y < -8.0 and not sp.dead:
+		# Fell out of the world (through a gap, or a glitch): that's a death, so the player
+		# respawns instead of falling forever.
+		print("SERVER %s fell out of the world" % sp.player_name)
+		sp.take_damage(1000.0, Vector3.ZERO)
 	sp.yaw = yaw
 	sp.pitch = pitch
 	sp.flags = flags & ~Proto.F_DEAD  # the server decides who is dead
@@ -850,6 +856,13 @@ func _command(sp, text: String) -> void:
 		for p in players.values():
 			names.append(p.player_name)
 		_send_to(sp.peer_id, _notice_bytes("Online: " + ", ".join(names), Color(0.8, 0.9, 1)))
+		return
+	if cmd == "/kill":
+		# Anyone: stuck in a hole or under the world, die and respawn at your spawn point.
+		# (Until M2 nothing is lost by dying.)
+		if not sp.dead:
+			print("SERVER %s used /kill" % sp.player_name)
+			sp.take_damage(1000.0, Vector3.ZERO)
 		return
 	if cmd == "/hash" and parts.size() >= 4:
 		# Tests: a fingerprint of the server's blocks around a chunk, to compare with a client's.
@@ -905,7 +918,7 @@ func _command(sp, text: String) -> void:
 			_send_to(sp.peer_id, _notice_bytes("Gave you %d %s." % [n - left, Items.name_of(id)], Color(0.8, 0.9, 1)))
 			return
 		_:
-			_send_to(sp.peer_id, _notice_bytes("Commands: /players /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|horde|boar> [count] /save", Color(0.8, 0.9, 1)))
+			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|night|horde|boar> [count] /save", Color(0.8, 0.9, 1)))
 			return
 	print("SERVER %s used %s" % [sp.player_name, text])
 	_broadcast(_time_bytes())
@@ -1004,7 +1017,8 @@ func _physics_process(delta: float) -> void:
 		s.put_u8(ready_players.size() - 1)
 		for p in ready_players:
 			if p != to:
-				Proto.put_player_record(s, p.net_id, p.global_position, p.yaw, p.pitch, p.flags | (Proto.F_DEAD if p.dead else 0))
+				Proto.put_player_record(s, p.net_id, p.global_position, p.yaw, p.pitch, p.flags | (Proto.F_DEAD if p.dead else 0),
+					maxi(0, p.inv.id_at(p.slot)))
 		_send_raw(to.peer_id, s.data_array, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED, Proto.CH_STATE)
 		_send_mobs(to, mobs)
 

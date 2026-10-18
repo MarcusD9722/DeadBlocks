@@ -199,6 +199,13 @@ Not measured here: frame time (this machine has no GPU); the second process cost
 - **Done when:** autotest green in the new mode; solo worlds from M1.5 still load; frame time within 10% of before.
 - **Marcus tries:** Play solo feels the same as before.
 
+### After the two-PC test (0.7.1)
+Marcus and his wife played together on the Pi server. Fixed from their notes:
+- **Stuck after falling** (mining down, she fell through and couldn't die): the pause menu has **Die and Respawn** (`/kill` for anyone); the server counts falling below y = −8 as a death (the game's own "teleport to spawn" below the world could be undone by the server's movement check, leaving a player falling for ever); and a player stuck inside solid blocks for half a second climbs out to the first free space above.
+- **Held items**: `C_MOVE` carries the hotbar slot, the snapshot's player record carries the item in that slot from the server's copy of the inventory, plus `F_SWING` while mining or hitting (PROTOCOL 6); other players show it in their right hand (two crossed icons) and swing their arm.
+- **Zombies**: on normal days and nights they notice a player within 10 m (day) / 16 m (night) and give up beyond 20 / 30 m; being hit makes them hunt; Blood Moon zombies hunt everyone until dawn, when every zombie near a player becomes a day zombie (no red eyes, proximity only) and the clients swap the picture.
+Tests: the pair test checks each player sees the other's held item; the autotest checks the horde calms down at dawn and looks it, Die and Respawn, a fall out of the world, and climbing out of being buried.
+
 ### M1.8 First friends evening
 - **Work:** per-minute stats in the log (ping, loss, kbit/s per player, load, worst tick), `tools/pi/stats.sh` summary, fixes from the session, tuning of snapshot rate / interest range / chunk radius, final numbers into DESIGN.md.
 - **Done when:** a session of 4+ players for 30+ minutes including a Blood Moon, with server load ≤ 70% and no ticks falling behind.

@@ -306,8 +306,12 @@ func _process(delta: float) -> void:
 func _sync_mob_views(delta: float) -> void:
 	for id in G.net.mobs:
 		var v = mob_views.get(id)
+		var kind: int = G.net.mobs[id]["kind"]
+		if v != null and is_instance_valid(v) and v.net_kind() != kind:
+			# It changed kind (horde zombies calm down at dawn): a new picture for the new kind.
+			v.queue_free()
+			v = null
 		if v == null or not is_instance_valid(v):
-			var kind: int = G.net.mobs[id]["kind"]
 			if kind == Proto.MOB_BOAR:
 				v = AnimalScript.new()
 			else:
@@ -425,6 +429,15 @@ func pause() -> void:
 		get_tree().paused = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	hud.show_pause(true)
+
+
+## The pause menu's "Die and Respawn": for being stuck in a hole or under the world. Until M2
+## dying costs nothing; the server does the dying (/kill), the death screen follows.
+func kill_self() -> void:
+	if G.mode != "client":
+		return
+	resume()
+	G.net.send_chat("/kill")
 
 
 func resume() -> void:
@@ -610,6 +623,8 @@ func _on_dawn() -> void:
 	else:
 		_say("Dawn breaks. Day %d." % day, Color(1, 0.95, 0.8))
 	horde_active = false
+	# Zombies far from everyone go; the rest calm down into day zombies (no more red eyes, and
+	# they only come for players who get close).
 	for z in get_tree().get_nodes_in_group("zombies"):
 		var near := false
 		for p in G.sim.players:
@@ -617,6 +632,8 @@ func _on_dawn() -> void:
 				near = true
 		if not near:
 			z.queue_free()
+		elif z.kind != "day":
+			z.become_day()
 
 
 ## HUD message and sound, skipped on the dedicated server (no HUD, no audio).
@@ -759,7 +776,10 @@ func spawn_near(what: String, pos: Vector3) -> Node:
 	var p := _find_ground(8.0, 14.0, false, pos)
 	if p == Vector3.INF:
 		return null
-	return spawn_zombie("day" if what == "zombie" else what, p)
+	var z := spawn_zombie("day" if what == "zombie" else what, p)
+	if z != null:
+		z.hunting = true  # an admin's /spawn comes straight for them
+	return z
 
 
 func _find_ground(min_d: float, max_d: float, need_grass: bool, center := Vector3.INF) -> Vector3:

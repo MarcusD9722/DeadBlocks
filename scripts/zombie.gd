@@ -1,10 +1,15 @@
 extends Mob
 ## Chases the nearest player in its region, hops ledges and smashes through whatever is in the way.
 ## The Sim node ticks every zombie (sim_tick) in a fixed order; zombies have no _physics_process.
+## On normal days and nights a zombie only notices a player who comes within notice_range (or
+## hits it), and gives up beyond chase_range; the Blood Moon horde hunts everyone.
 
 var kind := "day"
 var speed := 2.4
-var chase_range := 30.0
+var notice_range := 10.0
+var chase_range := 20.0
+## Noticed a player (came close, was hit, or was spawned by /spawn) and is after them.
+var hunting := false
 var player_dmg := 8.0
 var block_dmg := 10.0
 var blood := false
@@ -33,18 +38,36 @@ func setup(k: String, day: int) -> void:
 	match kind:
 		"day":
 			speed = 1.7
-			chase_range = 16.0
+			notice_range = 10.0
+			chase_range = 20.0
 		"night":
 			speed = 2.6 + minf(day * 0.05, 0.6)
-			chase_range = 34.0
+			notice_range = 16.0
+			chase_range = 30.0
 		"horde":
 			speed = 3.5
+			notice_range = 400.0
 			chase_range = 400.0
 			hp = 40.0
 			player_dmg = 11.0
 			block_dmg = 14.0
 			blood = true
 	max_hp = hp
+
+
+## Dawn after the Blood Moon (and after any night): back to a slow day zombie that only goes for
+## players who come close. Clients see the new kind in S_MOBS and swap the picture.
+func become_day() -> void:
+	kind = "day"
+	blood = false
+	speed = 1.7
+	notice_range = 10.0
+	chase_range = 20.0
+	player_dmg = 8.0
+	block_dmg = 10.0
+	max_hp = 30.0
+	hp = minf(hp, max_hp)
+	hunting = false
 
 
 func _ready() -> void:
@@ -125,7 +148,9 @@ func sim_tick(delta: float) -> void:
 	if pl != null:
 		to = pl.global_position - global_position
 		hd = Vector2(to.x, to.z).length()
-	var chasing: bool = pl != null and hd < chase_range
+	var chasing: bool = pl != null and hd < (chase_range if hunting else notice_range)
+	if pl != null:
+		hunting = chasing  # (no one to target yet, say before its first region: keep the mood)
 	var dir := Vector3.ZERO
 	if chasing:
 		if hd > 0.85:
@@ -216,7 +241,9 @@ func _pose(spd: float) -> void:
 	arm_r.rotation.x = -PI * 0.47 - sin(anim * 0.5) * 0.12 - lift
 
 
-func _on_hurt(_attacker: Node) -> void:
+func _on_hurt(attacker: Node) -> void:
+	if attacker != null:
+		hunting = true  # hit by a player: goes after the nearest one, as long as they stay in chase_range
 	if not G.server_mode:
 		G.sfx.play_at("zhurt", global_position + Vector3(0, 1.5, 0), -3.0)
 

@@ -198,8 +198,12 @@ func _play() -> void:
 		near.sort_custom(func(a, b): return _mob_dist(a) < _mob_dist(b))
 		var kills0: int = g.kills
 		if not near.is_empty():
-			check(await _fight(near[0], 20.0), "killed a horde zombie")
-			check(await _until(func(): return g.kills > kills0, 5.0), "the kill is counted (%d)" % g.kills)
+			var won: bool = await _fight(near[0], 20.0)
+			if p.dead:
+				print("AUTOTEST the horde got us during the fight (the kill checks are in the network test)")
+			else:
+				check(won, "killed a horde zombie")
+				check(await _until(func(): return g.kills > kills0, 5.0), "the kill is counted (%d)" % g.kills)
 	# Dying and respawning: a 40 m fall always kills.
 	if not p.dead:
 		p.global_position += Vector3(0, 40, 0)
@@ -222,6 +226,41 @@ func _play() -> void:
 		await _until(func(): return g.state == "playing", 10.0)
 	G.net.send_chat("/time 5.98")
 	check(await _until(func(): return not g.horde_active, 20.0), "the horde ends at dawn")
+	check(await _until(func(): return _mob_ids([Proto.MOB_HORDE]).is_empty(), 10.0),
+		"the horde calms down into day zombies (%d still horde)" % _mob_ids([Proto.MOB_HORDE]).size())
+	check(await _until(func(): return g.mob_views.values().all(func(v): return not is_instance_valid(v) or v.net_kind() != Proto.MOB_HORDE), 5.0),
+		"and they look like day zombies again")
+
+	# Stuck somewhere: the pause menu's Die and Respawn, falling out of the world, being buried.
+	if p.dead:
+		g.respawn()
+		await _until(func(): return g.state == "playing", 10.0)
+	g.pause()
+	g.kill_self()
+	check(await _until(func(): return p.dead and g.state == "dead", 10.0), "Die and Respawn: we die")
+	g.respawn()
+	check(await _until(func(): return not p.dead and g.state == "playing", 10.0), "and respawn")
+	await _until(func(): return p.is_on_floor(), 5.0)
+	p.global_position.y = -15.0
+	check(await _until(func(): return p.dead, 10.0), "falling out of the world is a death, not falling forever")
+	g.respawn()
+	await _until(func(): return not p.dead and g.state == "playing", 10.0)
+	await _until(func(): return p.is_on_floor(), 5.0)
+	var here := _base()
+	var buried := Vector3i(0, -1, 0)
+	for depth in range(3, 12):
+		var cell := Vector3i(here.x, w.surface_y(here.x, here.z) - depth, here.z)
+		if Blocks.is_solid(w.get_blockv(cell)) and Blocks.is_solid(w.get_blockv(cell + Vector3i.UP)):
+			buried = cell
+			break
+	check(buried.y >= 0, "found solid ground to be buried in")
+	if buried.y >= 0:
+		p.global_position = Vector3(buried.x + 0.5, buried.y + 0.05, buried.z + 0.5)
+		p.velocity = Vector3.ZERO
+		var free := func():
+			var f := Vector3i(floori(p.global_position.x), floori(p.global_position.y + 0.1), floori(p.global_position.z))
+			return not Blocks.is_solid(w.get_blockv(f)) and not Blocks.is_solid(w.get_blockv(f + Vector3i.UP))
+		check(await _until(free, 5.0), "buried in the ground, we climb out by ourselves")
 
 ## Chase mob `id` and hit it until it dies (a boar runs away once it is hit).
 func _hunt(id: int, secs: float) -> bool:

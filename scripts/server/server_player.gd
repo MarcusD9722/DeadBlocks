@@ -13,6 +13,8 @@ var dead := false
 var is_ready := false
 ## Solo game: the pause menu is open (the world stops while every player has paused).
 var paused := false
+## The hotbar slot in the player's hand (from their movement), so others see what they hold.
+var slot := 0
 var admin := false
 ## Movement checking: the last accepted position and when it arrived, and the current move id
 ## (bumped on every server correction so in-flight moves from before it are ignored).

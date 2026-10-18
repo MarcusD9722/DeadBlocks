@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 5
+const PROTOCOL := 6
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -42,7 +42,7 @@ const S_STATS := 27      # health u8, food u8, dead u8, kills u16: the server ow
 const S_HURT := 28       # amount u8, from 3xf32 (all 0 = no knockback): flash, sound, knockback
 const S_CRACKS := 29     # count u16, count x (block pos, stage u8): zombies chipping at blocks
 # Client -> server
-const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8
+const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8, hotbar slot u8
 const C_READY := 31      # my chunks are loaded, count me as online
 const C_CHAT := 32       # text (a leading "/" is a command)
 # Requests the server checks. Each carries a seq u16; S_INV acknowledges the latest one handled.
@@ -61,6 +61,7 @@ const F_SPRINT := 1
 const F_FLASHLIGHT := 2
 const F_DEAD := 4
 const F_AIRBORNE := 8
+const F_SWING := 16      # mining or hitting: other players see the arm swing
 
 ## A few fixed chunks whose block data both sides hash at login: a different build that would
 ## generate different terrain (and so a different world) is refused with a clear message.
@@ -281,12 +282,13 @@ static func get_mob(b: StreamPeerBuffer, origin: Vector2i) -> Dictionary:
 
 
 ## 19 bytes: net id u16, position 3xf32, yaw u16, pitch s16, flags u8.
-static func put_player_record(b: StreamPeerBuffer, net_id: int, pos: Vector3, yaw: float, pitch: float, flags: int) -> void:
+static func put_player_record(b: StreamPeerBuffer, net_id: int, pos: Vector3, yaw: float, pitch: float, flags: int, held := 0) -> void:
 	b.put_u16(net_id)
 	put_vec3(b, pos)
 	b.put_u16(yaw_to_u16(yaw))
 	b.put_16(clampi(int(pitch * 10000.0), -32767, 32767))
 	b.put_u8(flags)
+	b.put_u8(held)  # the item in their hand (from the server's copy of their inventory)
 
 
 static func get_player_record(b: StreamPeerBuffer) -> Dictionary:
@@ -295,7 +297,7 @@ static func get_player_record(b: StreamPeerBuffer) -> Dictionary:
 	var yaw := u16_to_yaw(b.get_u16())
 	var pitch := b.get_16() / 10000.0
 	var flags := b.get_u8()
-	return {"id": id, "pos": pos, "yaw": yaw, "pitch": pitch, "flags": flags}
+	return {"id": id, "pos": pos, "yaw": yaw, "pitch": pitch, "flags": flags, "held": b.get_u8()}
 
 
 static func _sha(s: String) -> PackedByteArray:

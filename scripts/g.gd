@@ -2,7 +2,7 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.7.0"
+const VERSION := "0.7.1"
 const BUILD_NAME := "M1.7"
 
 var game: Node = null

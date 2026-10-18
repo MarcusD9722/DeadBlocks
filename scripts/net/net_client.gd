@@ -555,6 +555,7 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 					o = {"name": "?", "samples": []}
 					others[r["id"]] = o
 				o["samples"].append([now, r["pos"], r["yaw"], r["pitch"], r["flags"]])
+				o["held"] = r["held"]
 				if o["samples"].size() > 16:
 					o["samples"].pop_front()
 		Proto.S_TIME:
@@ -655,6 +656,8 @@ func _physics_process(_delta: float) -> void:
 		flags |= Proto.F_DEAD
 	if not p.is_on_floor():
 		flags |= Proto.F_AIRBORNE
+	if p.swing > 0.05 or p.mine_progress > 0.0:
+		flags |= Proto.F_SWING
 	_seq = (_seq + 1) & 0xffff
 	var m := Proto.writer(Proto.C_MOVE)
 	m.put_u8(move_id)
@@ -663,6 +666,7 @@ func _physics_process(_delta: float) -> void:
 	m.put_u16(Proto.yaw_to_u16(p.head.rotation.y))
 	m.put_16(clampi(int(p.cam.rotation.x * 10000.0), -32767, 32767))
 	m.put_u8(flags)
+	m.put_u8(p.selected)
 	_send(m.data_array, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED, Proto.CH_STATE)
 
 

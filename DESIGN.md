@@ -27,12 +27,14 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 ### Normal days and nights (6 of every 7)
 - Moderate difficulty. Zombies **only chase when a player comes close**; otherwise they wander.
 - These days are for gathering, building and re-supplying.
+- **Built in 0.7.1** (after the first two-PC test, where night zombies came from too far away): a zombie notices a player within **10 m by day, 16 m at night**, and gives up beyond **20 m / 30 m**. Hitting one makes it hunt you (within that range); an admin's `/spawn` comes straight for the admin.
+- **At dawn** every zombie still near a player turns into a day zombie: Blood Moon zombies lose their red eyes and stop hunting, and only chase players who come close. Zombies far from everyone disappear, as before.
 
 ### Blood Moon (every 7th night) — grim and punishing
 - **Global cap of 120 zombies**, split evenly between players online:
   1 player → 120, 2 → 60 each, 3 → 40 each, … 8 → 15 each.
 - **Players close together share one combined horde**: their allocations merge and attack the group together.
-- Every horde zombie hunts players (no proximity limit).
+- Every horde zombie hunts players (no proximity limit), until dawn.
 - Difficulty comes from **tougher zombie types**, not just numbers. Planned types:
   - **Runner** — fast.
   - **Brute** — heavy damage to blocks.
@@ -47,6 +49,7 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - **Decided (M0): the server runs Jolt Physics at 30 ticks/s.** It is the only setup that kept a full 120-zombie Blood Moon at full speed on the Pi (see "Server performance" below). Godot's default physics cannot carry 120 zombies even on a desktop-class core.
 
 ## Death & respawn
+- **Built in 0.7.1:** the pause menu's **Die and Respawn** (and `/kill` in chat) for anyone stuck in a hole or under the world, and falling out of the world counts as a death. Until M2 dying costs nothing, so this is a free trip back to the spawn point.
 - On death you drop a **backpack containing everything** (hotbar included).
 - **Anyone** can pick it up. It **despawns after 10 real minutes**. It has a visible beacon.
 - Respawn at your **bed**, or at a **random spawn point** if you have not placed one.
@@ -141,6 +144,6 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
   - Decided in M1.2: signing in with a name that is still online (say after a crash) and the right PIN takes over that session instead of being refused. A hosted game's server stops when the game closes, or by itself 15 s after its host is gone.
   - Decided in 0.2.2 (after drops in the first Pi test): a connection counts as lost only after 15–30 s of silence, and the game then reconnects by itself for up to a minute, keeping the world on screen.
 - **M2 — Death & respawn**: backpack drop (10 min, anyone can loot), beds, random spawn points, 60 s logout linger.
-- **M3 — Zombie rework**: proximity-only aggression on normal days, Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
+- **M3 — Zombie rework**: proximity-only aggression on normal days (a first version is in 0.7.1), Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
 - **M4 — Exploration & loot**: distance-based danger scaling, ruins/POIs, chests, loot tables with rarity, 3-day refill, doors with locks/PIN.
 - **M5 — Smarter zombies**: pathfinding toward the weakest part of a base.

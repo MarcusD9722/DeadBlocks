@@ -37,6 +37,7 @@ var spawn_point := Vector3.ZERO
 var sprinting := false
 var held_id := -1
 var hints := {}
+var stuck_t := 0.0
 
 
 func _ready() -> void:
@@ -208,9 +209,31 @@ func _physics_process(delta: float) -> void:
 			else:
 				take_damage((-air_min_vy - 14.5) * 4.0, Vector3.ZERO)
 		air_min_vy = 0.0
-	if global_position.y < -20.0:
+	_unstick(delta)
+	if global_position.y < -20.0 and G.mode != "client":
+		# Online the server sees this and it counts as a death (the respawn brings us back).
 		global_position = spawn_point
 		velocity = Vector3.ZERO
+
+
+## Stuck inside solid blocks (a glitch, or the world changed around us) for half a second:
+## climb out to the first space above with room to stand.
+func _unstick(delta: float) -> void:
+	var w = G.world
+	var feet := Vector3i(floori(global_position.x), floori(global_position.y + 0.1), floori(global_position.z))
+	if not (Blocks.is_solid(w.get_blockv(feet)) and Blocks.is_solid(w.get_blockv(feet + Vector3i.UP))):
+		stuck_t = 0.0
+		return
+	stuck_t += delta
+	if stuck_t < 0.5:
+		return
+	stuck_t = 0.0
+	for dy in range(1, 64):
+		var f := feet + Vector3i(0, dy, 0)
+		if not Blocks.is_solid(w.get_blockv(f)) and not Blocks.is_solid(w.get_blockv(f + Vector3i.UP)):
+			global_position.y = f.y + 0.02
+			velocity = Vector3.ZERO
+			return
 
 
 # ------------------------------------------------------------ per-frame

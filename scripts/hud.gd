@@ -44,6 +44,7 @@ var h_world: Label
 var pause_players: Label
 var pause_quit: Button
 var pause_leave: Button
+var pause_respawn: Button
 var chat_edit: LineEdit
 var chat_log: Array = []
 var _pause_refresh_t := 0.0
@@ -490,6 +491,8 @@ func _build_pause() -> void:
 	row.add_theme_constant_override("separation", 12)
 	vb.add_child(row)
 	row.add_child(_button("Resume", func(): G.game.resume()))
+	pause_respawn = _button("Die and Respawn", func(): G.game.kill_self())
+	row.add_child(pause_respawn)
 	pause_leave = _button("Leave Server", func(): G.end_client_session("Your world is saved." if G.solo else "You left the server."))
 	row.add_child(pause_leave)
 	pause_quit = _button("Quit Game", func(): get_tree().quit())
@@ -521,6 +524,7 @@ func _build_pause() -> void:
 
 func show_pause(on: bool) -> void:
 	pause_root.visible = on
+	pause_respawn.visible = G.mode == "client"  # stuck somewhere? back to your spawn point
 	var online := G.mode == "client" and not G.solo
 	pause_leave.visible = G.mode == "client"
 	pause_leave.text = "Save and Quit to Title" if G.solo else "Leave Server"

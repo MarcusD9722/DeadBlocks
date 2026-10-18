@@ -11,6 +11,11 @@ var arm_l: Node3D
 var arm_r: Node3D
 var label: Label3D
 var light: SpotLight3D
+## What they hold, in their right hand: two crossed icons, so it reads from every side.
+var held: Node3D
+var held_mat: StandardMaterial3D
+var held_id := 0
+var _swing := 0.0
 var _anim := 0.0
 var _last_pos := Vector3.INF
 
@@ -33,10 +38,27 @@ func _ready() -> void:
 	leg_r = _pivot(model, Vector3(0.125, 0.68, 0))
 	_box(leg_l, Vector3(0.24, 0.68, 0.26), Vector3(0, -0.34, 0), pants)
 	_box(leg_r, Vector3(0.24, 0.68, 0.26), Vector3(0, -0.34, 0), pants)
-	arm_l = _pivot(model, Vector3(-0.37, 1.36, 0))
-	arm_r = _pivot(model, Vector3(0.37, 1.36, 0))
+	# The figure faces +Z, so its right hand is on the -X side.
+	arm_l = _pivot(model, Vector3(0.37, 1.36, 0))
+	arm_r = _pivot(model, Vector3(-0.37, 1.36, 0))
 	_box(arm_l, Vector3(0.22, 0.7, 0.22), Vector3(0, -0.33, 0), shirt.darkened(0.15))
 	_box(arm_r, Vector3(0.22, 0.7, 0.22), Vector3(0, -0.33, 0), shirt.darkened(0.15))
+	held = _pivot(arm_r, Vector3(0, -0.64, 0.14))  # in the hand, a little in front of it
+	held_mat = StandardMaterial3D.new()
+	held_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	held_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	held_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	held_mat.roughness = 1.0
+	for turn in [0.0, PI * 0.5]:
+		var mi := MeshInstance3D.new()
+		var q := QuadMesh.new()
+		q.size = Vector2(0.5, 0.5)
+		mi.mesh = q
+		mi.material_override = held_mat
+		mi.rotation.y = turn
+		held.add_child(mi)
+	held.rotation.x = 0.5  # the top leans forward, like a tool in hand
+	held.visible = false
 	label = Label3D.new()
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
@@ -94,6 +116,12 @@ func _process(delta: float) -> void:
 	head.rotation.x = -s["pitch"]
 	var flags: int = s["flags"]
 	light.visible = (flags & Proto.F_FLASHLIGHT) != 0
+	var hid: int = o.get("held", 0)
+	if hid != held_id:
+		held_id = hid
+		held.visible = hid > 0 and G.tex != null
+		if held.visible:
+			held_mat.albedo_texture = G.tex.icon(hid)
 	var dead := (flags & Proto.F_DEAD) != 0
 	model.rotation.x = lerpf(model.rotation.x, -PI * 0.5 if dead else 0.0, minf(1.0, delta * 6.0))
 	var speed := 0.0
@@ -105,4 +133,10 @@ func _process(delta: float) -> void:
 	leg_l.rotation.x = sin(_anim) * 0.7 * mv
 	leg_r.rotation.x = -sin(_anim) * 0.7 * mv
 	arm_l.rotation.x = -sin(_anim) * 0.5 * mv
-	arm_r.rotation.x = sin(_anim) * 0.5 * mv
+	# Mining or hitting: the right arm chops up and down.
+	if (flags & Proto.F_SWING) != 0:
+		_swing += delta * 14.0
+		arm_r.rotation.x = -0.9 - absf(sin(_swing)) * 0.9
+	else:
+		_swing = 0.0
+		arm_r.rotation.x = sin(_anim) * 0.5 * mv
