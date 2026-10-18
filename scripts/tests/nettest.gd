@@ -28,6 +28,13 @@ extends Node
 ##   zwatch       walks away from the fighter and checks it sees the same zombie come and go
 ##   horde        (admin) 3 of these live through a Blood Moon for --nettest-soak=S seconds:
 ##                fight, die, respawn; report zombies seen and the bandwidth they cost
+##   saver        (admin) builds a pillar, gets a pickaxe, then prints NETTEST saved ... with
+##                what a restarted server must give back (join checks it: --nettest-expect,
+##                --nettest-has, --nettest-count=ID:N, --nettest-hash=CX,CZ,HASH)
+##   crasher      (admin) keeps building and breaking while the script kills and restarts the
+##                server (--nettest-crashes=N times, at most --nettest-soak=S seconds; prints
+##                NETTEST crasher online N each time it is back); then its world must match
+##                the server's
 
 var role := ""
 var fails := 0
@@ -46,7 +53,7 @@ func _ready() -> void:
 	var limit := 150.0 if role == "hold" or G.has_arg("--nettest-crash") else 90.0
 	if role == "stall":
 		limit = 240.0
-	elif role == "soak" or role == "horde":
+	elif role == "soak" or role == "horde" or role == "crasher":
 		limit = 120.0 + float(G.arg_value("--nettest-soak="))
 	elif role == "fighter" or role == "zwatch":
 		limit = 240.0
@@ -161,6 +168,10 @@ func _run() -> void:
 		await _run_zwatch()
 	elif role == "horde":
 		await _run_horde()
+	elif role == "saver":
+		await _run_saver()
+	elif role == "crasher":
+		await _run_crasher()
 	else:
 		check(false, "known role (got '%s')" % role)
 	await _finish()
@@ -201,6 +212,15 @@ func _run_join() -> void:
 	if G.arg_value("--nettest-has=") != "":
 		var id := int(G.arg_value("--nettest-has="))
 		check(await _until(func(): return _count(id) >= 1, 10.0), "kept its %s after leaving" % Items.name_of(id))
+	if G.arg_value("--nettest-count=") != "":
+		var ic := G.arg_value("--nettest-count=").split(":")
+		check(await _until(func(): return _count(int(ic[0])) == int(ic[1]), 10.0), "has exactly %s %s (has %d)" % [ic[1], Items.name_of(int(ic[0])), _count(int(ic[0]))])
+	if G.arg_value("--nettest-hash=") != "":
+		var hp := G.arg_value("--nettest-hash=").split(",")
+		var c := Vector2i(int(hp[0]), int(hp[1]))
+		await _hash_check("the blocks are as they were saved", c)
+		var mine: String = G.world.region_hash(c.x, c.y, 1)
+		check(mine == hp[2], "the same blocks as before the restart (%s, then %s)" % [mine, hp[2]])
 	await _wait(4.0)
 
 
@@ -413,17 +433,24 @@ static func _drop_of(id: int) -> int:
 
 
 ## Ask the server for its fingerprint of the blocks around chunk c and compare it with ours.
+## Asks up to 5 times: just after joining, the server may not have generated every chunk yet.
 func _hash_check(what: String, c: Vector2i, r := 1) -> void:
 	var prefix := "HASH %d %d %d " % [c.x, c.y, r]
-	_notices = _notices.filter(func(n): return not String(n).begins_with(prefix))
-	G.net.send_chat("/hash %d %d %d" % [c.x, c.y, r])
-	var ok := await _until(func(): return _notices.any(func(n): return String(n).begins_with(prefix)), 10.0)
-	await _wait(0.5)  # the edit batch of the same tick may still be on its way
+	var ok := false
+	var mine := ""
 	var server := ""
-	for n in _notices:
-		if String(n).begins_with(prefix):
-			server = String(n).substr(prefix.length())
-	var mine: String = G.world.region_hash(c.x, c.y, r)
+	for attempt in 5:
+		_notices = _notices.filter(func(n): return not String(n).begins_with(prefix))
+		G.net.send_chat("/hash %d %d %d" % [c.x, c.y, r])
+		ok = await _until(func(): return _notices.any(func(n): return String(n).begins_with(prefix)), 10.0)
+		await _wait(0.5)  # the edit batch of the same tick may still be on its way
+		for n in _notices:
+			if String(n).begins_with(prefix):
+				server = String(n).substr(prefix.length())
+		mine = G.world.region_hash(c.x, c.y, r)
+		if ok and mine == server:
+			break
+		await _wait(1.0)
 	check(ok and mine == server, "%s (ours %s, server %s)" % [what, mine, server])
 
 
@@ -838,3 +865,80 @@ func _run_horde() -> void:
 	check(most >= 15, "the horde came (%d at once)" % most)
 	check(most <= 120, "never more than 120 zombies")
 	check(kbit < 400.0, "mob updates cost %.0f kbit/s" % kbit)
+
+
+# ------------------------------------------------------------ saving (M1.5)
+
+func _run_saver() -> void:
+	if not await _until(_playing, 60.0):
+		check(false, "joined the server (%s)" % ", ".join(_errors))
+		return
+	var p = G.player
+	G.net.send_chat("/give dirt 10")
+	G.net.send_chat("/give stone_pickaxe")
+	check(await _until(func(): return _count(Blocks.DIRT) >= 10 and _count(Items.STONE_PICK) == 1, 10.0), "admin /give dirt and a pickaxe")
+	var base := _base()
+	var spot := Vector3i(base.x + 2, G.world.surface_y(base.x + 2, base.z) + 1, base.z)
+	_select(Blocks.DIRT)
+	for i in 3:
+		p.try_place(spot + Vector3i(0, i, 0), Blocks.DIRT)
+		await _wait(0.3)
+	check(await _until(func(): return _server_count(Blocks.DIRT) == 7, 5.0), "built a pillar")
+	await _wait(0.5)
+	var chunk := _chunk_of(base)
+	await _hash_check("blocks match before saving", chunk)
+	var pos: Vector3 = p.global_position
+	print("NETTEST saved pos=%.3f,%.3f,%.3f chunk=%d,%d hash=%s dirt=%d" % [pos.x, pos.y, pos.z, chunk.x, chunk.y,
+		G.world.region_hash(chunk.x, chunk.y, 1), _count(Blocks.DIRT)])
+	await _wait(1.0)
+
+
+func _run_crasher() -> void:
+	if not await _until(_playing, 60.0):
+		check(false, "joined the server (%s)" % ", ".join(_errors))
+		return
+	var secs := float(G.arg_value("--nettest-soak="))
+	var want := int(G.arg_value("--nettest-crashes="))
+	var p = G.player
+	G.net.send_chat("/give dirt 300")
+	check(await _until(func(): return _count(Blocks.DIRT) >= 300, 10.0), "admin /give dirt 300")
+	var base := _base()
+	var chunk := _chunk_of(base)
+	var surf := {}
+	for x in range(base.x + 2, base.x + 5):
+		for z in range(base.z - 1, base.z + 2):
+			surf[Vector2i(x, z)] = G.world.surface_y(x, z)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 99
+	var edits := 0
+	var drops := 0
+	var t_end := Time.get_ticks_msec() + secs * 1000.0
+	var was_online := true
+	var back_ms := Time.get_ticks_msec()
+	print("NETTEST crasher online 0")
+	# Edit until the server has gone away `want` times and we've been back 4 s, or time is up.
+	while Time.get_ticks_msec() < t_end and (drops < want or Time.get_ticks_msec() - back_ms < 4000):
+		if not G.net.is_online() or G.game.state != "playing":
+			if was_online:
+				drops += 1
+			was_online = false
+			await _wait(0.2)
+			continue
+		if not was_online:
+			back_ms = Time.get_ticks_msec()
+			print("NETTEST crasher online %d" % drops)
+		was_online = true
+		var col: Vector2i = surf.keys()[rng.randi_range(0, surf.size() - 1)]
+		var pos := Vector3i(col.x, surf[col] + rng.randi_range(1, 2), col.y)
+		var id: int = G.world.get_blockv(pos)
+		if id != Blocks.AIR:
+			p.break_block(pos, id)
+			edits += 1
+		elif G.world.get_blockv(pos + Vector3i.DOWN) != Blocks.AIR and _select(Blocks.DIRT) >= 0 and p.try_place(pos, Blocks.DIRT):
+			edits += 1
+		await _wait(0.25)
+	print("NETTEST crasher: %d edits, lost the server %d times" % [edits, drops])
+	check(drops >= maxi(want, 1), "the server went away and came back (%d times)" % drops)
+	check(await _until(func(): return G.net.is_online() and G.game.state == "playing", 60.0), "back online at the end")
+	await _wait(3.0)
+	await _hash_check("after the crashes our blocks match the restarted server's", chunk)

@@ -36,6 +36,8 @@ var h_name: LineEdit
 var h_pin: LineEdit
 var h_pw: LineEdit
 var h_port: LineEdit
+var h_new: CheckBox
+var h_world: Label
 var pause_players: Label
 var pause_quit: Button
 var pause_leave: Button
@@ -170,8 +172,15 @@ func _build_title() -> void:
 	h_pin = _field(host_panel, "Your PIN", "4-8 digits; protects your name", true)
 	h_pw = _field(host_panel, "Password for friends", "they type this to join (can be empty)", true)
 	h_port = _field(host_panel, "Port", str(Proto.DEFAULT_PORT), false)
+	h_world = _label("", 16, Color(0.85, 0.95, 0.7))
+	h_world.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	host_panel.add_child(h_world)
+	h_new = CheckBox.new()
+	h_new.text = "Start a new world (the old one is kept in backups)"
+	h_new.focus_mode = Control.FOCUS_NONE
+	host_panel.add_child(h_new)
 	var lan := _lan_addresses()
-	var note := _label("Friends on your home network join with %s.\nFor internet play, forward UDP port %d on your router to this PC.\nThe world resets when you stop hosting (saving comes in M1.5)." % [
+	var note := _label("Friends on your home network join with %s.\nFor internet play, forward UDP port %d on your router to this PC.\nThe world is saved on this PC and continues next time you host." % [
 		"this PC's address: " + ", ".join(lan) if not lan.is_empty() else "this PC's local address", Proto.DEFAULT_PORT], 15, Color(0.75, 0.78, 0.8))
 	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	host_panel.add_child(note)
@@ -242,6 +251,16 @@ func _panel_buttons(panel: VBoxContainer, ok_text: String, ok: Callable) -> void
 
 
 func _show_panel(p: Control) -> void:
+	if p == host_panel:
+		var info: Dictionary = G.host_world_info()
+		h_new.button_pressed = false
+		h_new.visible = not info.is_empty()
+		if info.is_empty():
+			h_world.text = "A new world will be made."
+		else:
+			var t := float(info.get("time", 7.0))
+			h_world.text = "Your world continues: day %d, %02d:%02d (saved %s)" % [int(info.get("day", 1)), int(t), int((t - int(t)) * 60.0),
+				Time.get_datetime_string_from_unix_time(int(info.get("saved", 0)), true)]
 	title_menu.visible = p == null
 	join_panel.visible = p == join_panel
 	host_panel.visible = p == host_panel
@@ -326,7 +345,7 @@ func _on_host_pressed() -> void:
 	cfg.set_value("host", "port", port)
 	cfg.save(CLIENT_CFG)
 	_set_status("Starting the server...", false)
-	var err: String = await G.host_game(pname, pin, h_pw.text, port)
+	var err: String = await G.host_game(pname, pin, h_pw.text, port, h_new.button_pressed)
 	if err != "":
 		_set_status(err, true)
 

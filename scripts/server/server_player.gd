@@ -50,6 +50,7 @@ var spawn_point := Vector3.ZERO
 ## Knockback makes a player move faster than walking; the movement check allows it until then.
 var knock_until_ms := 0
 var last_attack_ms := 0
+var joined_ms := 0
 ## The numbers last sent in S_STATS (health, food, dead, kills), to send only changes.
 var stats_sent: Array = []
 

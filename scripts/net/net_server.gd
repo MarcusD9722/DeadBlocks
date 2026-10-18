@@ -38,9 +38,13 @@ var _nonces := {}           # peer id -> nonce
 var _live := {}             # peer ids with an open connection (logging in or playing)
 var _pending := {}          # peer id -> account name (lower case), between login and connect
 var players := {}           # peer id -> ServerPlayer
-## Accounts by lower-case name: {name, pin_key, fails, locked_until, pos, yaw}. Kept in memory
-## for now; M1.5 saves them.
+## Accounts by lower-case name: {name, pin_key, fails, locked_until, pos, yaw, health, food,
+## kills, spawn, inv, play_s}. Loaded from and saved to players/<name>.json by `saver`.
 var accounts := {}
+## The save files (server/save.gd); null in tests that build a NetServer without saving.
+var saver: Node = null
+var _acc_dirty := {}
+var _stopping := false
 var _pw_fails := {}         # ip -> [count, first try ms]
 var _next_net_id := 1
 var _tick := 0
@@ -174,7 +178,9 @@ func _on_auth(id: int, data: PackedByteArray) -> void:
 	var key := pname.to_lower()
 	var acc = accounts.get(key)
 	var now := Time.get_ticks_msec() / 1000.0
-	if acc != null:
+	# An empty PIN key means the owner reset this name's PIN: the next sign-in sets a new one.
+	var reset: bool = acc != null and (acc["pin_key"] as PackedByteArray).is_empty()
+	if acc != null and not reset:
 		if now < float(acc["locked_until"]):
 			_reject(id, "Too many wrong PINs for %s. Try again in a few minutes." % acc["name"])
 			return
@@ -190,17 +196,23 @@ func _on_auth(id: int, data: PackedByteArray) -> void:
 	if replacing == 0 and players.size() + _pending.size() >= max_players:
 		_reject(id, "The server is full (%d players)." % max_players)
 		return
-	if acc == null:
+	var pk := PackedByteArray()
+	if acc == null or reset:
 		# First join with this name: unmask the PIN key and check it matches the proof.
-		var pk := Proto.xor_bytes(pin_reg, Proto.hmac(password_key, nonce + "reg".to_utf8_buffer()))
+		pk = Proto.xor_bytes(pin_reg, Proto.hmac(password_key, nonce + "reg".to_utf8_buffer()))
 		if pin_proof != Proto.hmac(pk, nonce):
 			_reject(id, "Could not register that name. Please try again.")
 			return
+		_acc_dirty[key] = true
+	if reset:
+		acc["pin_key"] = pk
+		print("SERVER %s set a new PIN" % acc["name"])
+	elif acc == null:
 		var inv := Inventory.new()
 		inv.add(Items.BERRIES, 3)
 		inv.add(Blocks.TORCH, 2)
 		acc = {"name": pname, "pin_key": pk, "fails": 0, "locked_until": 0.0, "pos": G.game.spawn_pos, "yaw": 0.0, "inv": inv,
-			"health": 100.0, "food": 100.0, "kills": 0, "spawn": G.game.spawn_pos}
+			"health": 100.0, "food": 100.0, "kills": 0, "spawn": G.game.spawn_pos, "play_s": 0.0}
 		accounts[key] = acc
 		print("SERVER new player %s" % pname)
 	if replacing != 0:
@@ -266,9 +278,14 @@ func _on_connected(id: int) -> void:
 	_next_net_id += 1
 	sp.admin = admins.has(key)
 	_players_node.add_child(sp)
+	if acc["pos"] == Vector3.INF:
+		acc["pos"] = G.game.spawn_pos
+	if acc["spawn"] == Vector3.INF:
+		acc["spawn"] = G.game.spawn_pos
 	sp.global_position = acc["pos"]
 	sp.yaw = acc["yaw"]
 	sp.last_good = acc["pos"]
+	sp.joined_ms = Time.get_ticks_msec()
 	sp.last_move_ms = Time.get_ticks_msec()
 	sp.last_recv_ms = Time.get_ticks_msec()
 	sp.inv = acc["inv"]
@@ -320,13 +337,8 @@ func _remove_player(id: int) -> void:
 	if sp == null:
 		return
 	players.erase(id)
-	var acc = accounts.get(sp.player_name.to_lower())
-	if acc != null:
-		acc["pos"] = sp.last_good
-		acc["yaw"] = sp.yaw
-		acc["health"] = sp.health
-		acc["food"] = sp.food
-		acc["kills"] = sp.kills
+	_store_account(sp)
+	acc_play_time(sp)
 	G.sim.remove_player(sp)
 	sp.queue_free()
 	var l := Proto.writer(Proto.S_LEAVE)
@@ -346,9 +358,16 @@ func _remove_player(id: int) -> void:
 		for k in sp.refuse_why:
 			parts.append("%s %d" % [k, sp.refuse_why[k]])
 		print("SERVER %s: %d of %d block requests refused this session (%s)" % [sp.player_name, sp.refused, sp.requests, ", ".join(parts)])
-	if online_count() == 0:
+	if online_count() == 0 and not _stopping:
 		print("SERVER nobody online: time paused at day %d %s" % [G.game.day, _clock()])
 		G.game.set_mobs_paused(true)
+		# Everything is quiet now: save it all, and back up (at most once an hour).
+		save_world(false)
+		if saver != null and saver.hours_since_backup() >= 1.0:
+			saver.finish()
+			saver.backup("server empty")
+	elif not _stopping:
+		save_world(false)  # their file now, not at the next autosave
 
 
 # ------------------------------------------------------------ messages
@@ -818,6 +837,10 @@ func _command(sp, text: String) -> void:
 					_send_to(target, _bye_bytes("You were kicked by %s." % sp.player_name))
 					players[target].leave_reason = "was kicked by %s" % sp.player_name
 					_disconnect_soon(target)
+		"/save":
+			save_world(false)
+			_send_to(sp.peer_id, _notice_bytes("Saving the world.", Color(0.8, 0.9, 1)))
+			return
 		"/spawn":
 			var what := parts[1].to_lower() if parts.size() > 1 else ""
 			var n := clampi(int(parts[2]) if parts.size() > 2 else 1, 1, 50)
@@ -843,7 +866,7 @@ func _command(sp, text: String) -> void:
 			_send_to(sp.peer_id, _notice_bytes("Gave you %d %s." % [n - left, Items.name_of(id)], Color(0.8, 0.9, 1)))
 			return
 		_:
-			_send_to(sp.peer_id, _notice_bytes("Commands: /players /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|horde|boar> [count]", Color(0.8, 0.9, 1)))
+			_send_to(sp.peer_id, _notice_bytes("Commands: /players /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|horde|boar> [count] /save", Color(0.8, 0.9, 1)))
 			return
 	print("SERVER %s used %s" % [sp.player_name, text])
 	_broadcast(_time_bytes())
@@ -1018,8 +1041,128 @@ func _process(delta: float) -> void:
 			_host_seen_ms = Time.get_ticks_msec()
 			_host_joined = true
 		elif Time.get_ticks_msec() - _host_seen_ms > (HOST_GONE_S if _host_joined else HOST_JOIN_S) * 1000.0:
-			print("SERVER the host (%s) is gone; stopping" % hosted_by)
-			get_tree().quit()
+			stop_server("the host (%s) is gone" % hosted_by)
+	if saver != null:
+		_save_tick(delta)
+
+
+# ------------------------------------------------------------ saving
+
+## The account as it should be saved: where the player is now, and how they're doing.
+func _store_account(sp) -> void:
+	var key: String = sp.player_name.to_lower()
+	var acc = accounts.get(key)
+	if acc == null:
+		return
+	acc["pos"] = sp.last_good
+	acc["yaw"] = sp.yaw
+	acc["health"] = sp.health
+	acc["food"] = sp.food
+	acc["kills"] = sp.kills
+	_acc_dirty[key] = true
+
+
+func acc_play_time(sp) -> void:
+	var acc = accounts.get(sp.player_name.to_lower())
+	if acc != null and sp.joined_ms > 0:
+		acc["play_s"] = float(acc.get("play_s", 0.0)) + (Time.get_ticks_msec() - sp.joined_ms) / 1000.0
+		sp.joined_ms = Time.get_ticks_msec()
+
+
+## Save the world: edited chunks changed since the last save, every account that changed, and
+## the clock. `now` = on this thread, waiting for the files (stopping); otherwise in the background.
+func save_world(now: bool) -> bool:
+	if saver == null:
+		return false
+	for sp in players.values():
+		_store_account(sp)
+	var accs := {}
+	for key in _acc_dirty:
+		if accounts.has(key):
+			accs[key] = accounts[key]
+	if not now and saver.busy():
+		return false  # the next autosave picks these up
+	_acc_dirty.clear()
+	var chunks: Array = G.world.take_unsaved()
+	if now:
+		return saver.save_now(G.game.day, G.game.time, chunks, accs)
+	_last_job_chunks = chunks
+	_last_job_accs = accs.keys()
+	return saver.save_async(G.game.day, G.game.time, chunks, accs)
+
+
+var _last_job_chunks: Array = []
+var _last_job_accs: Array = []
+
+
+func _save_tick(delta: float) -> void:
+	var done: Dictionary = saver.poll()
+	if not done.is_empty() and not done["ok"]:
+		# Writing failed (disk full?): keep everything marked unsaved so the next try has it.
+		for c in _last_job_chunks:
+			G.world.save_dirty[c[0]] = true
+		for key in _last_job_accs:
+			_acc_dirty[key] = true
+	var due: Dictionary = saver.tick(delta)
+	for cmd in due.get("control", []):
+		_control(cmd)
+	if due.has("autosave") and (online_count() > 0 or not G.world.save_dirty.is_empty() or not _acc_dirty.is_empty()):
+		save_world(false)
+	if due.has("status"):
+		var names := []
+		for p in players.values():
+			names.append(p.player_name)
+		saver.write_status({"players": names, "zombies": get_tree().get_nodes_in_group("zombies").size(),
+			"day": G.game.day, "time": _clock(), "blood_moon": G.game.horde_active})
+
+
+## Commands from dbctl (files in control/).
+func _control(cmd: String) -> void:
+	var parts := cmd.split(" ", false)
+	if parts.is_empty():
+		return
+	print("SERVER control: %s" % cmd)
+	match parts[0].to_lower():
+		"stop":
+			stop_server("asked to stop")
+		"save":
+			save_world(false)
+		"backup":
+			save_world(true)
+			saver.backup("asked for")
+		"kick":
+			if parts.size() > 1:
+				var target := _peer_of_name(parts[1].to_lower())
+				if target != 0:
+					_send_to(target, _bye_bytes("You were kicked by the server owner."))
+					players[target].leave_reason = "was kicked by the server owner"
+					_disconnect_soon(target)
+		"reset-pin":
+			if parts.size() > 1 and accounts.has(parts[1].to_lower()):
+				accounts[parts[1].to_lower()]["pin_key"] = PackedByteArray()
+				_acc_dirty[parts[1].to_lower()] = true
+				print("SERVER %s's PIN was reset: their next sign-in sets a new one" % parts[1])
+		"say":
+			_broadcast(_notice_bytes("[Server] " + cmd.substr(4), Color(1, 0.9, 0.6)))
+
+
+## Save everything, tell everyone, and quit. The only safe way to stop: headless Godot dies at
+## once on SIGTERM / SIGINT without running any of this.
+func stop_server(why: String) -> void:
+	if _stopping:
+		return
+	_stopping = true
+	print("SERVER stopping (%s)" % why)
+	for id in players.keys():
+		_send_to(id, _bye_bytes("The server is stopping. Your progress is saved."))
+	if saver != null:
+		for sp in players.values():
+			acc_play_time(sp)
+		var ok := save_world(true)
+		saver.release_lock()
+		print("SERVER stopped%s" % ("" if ok else " (SAVING FAILED)"))
+	# Let the goodbye messages go out before the process ends.
+	get_tree().create_timer(0.3).timeout.connect(func(): get_tree().quit())
 
 
 ## Remember each player's ping and packet loss while the connection is alive, for the leave

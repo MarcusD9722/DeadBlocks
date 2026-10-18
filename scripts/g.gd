@@ -2,8 +2,8 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.4.0"
-const BUILD_NAME := "M1.4"
+const VERSION := "0.5.0"
+const BUILD_NAME := "M1.5"
 
 var game: Node = null
 var world: Node3D = null
@@ -34,7 +34,7 @@ var _autojoin_done := false
 
 func _ready() -> void:
 	args = OS.get_cmdline_user_args()
-	var test_run := has_arg("--autotest") or has_arg("--bench") or has_arg("--regiontest") or has_arg("--worldgen-hash")
+	var test_run := has_arg("--autotest") or has_arg("--bench") or has_arg("--regiontest") or has_arg("--worldgen-hash") or has_arg("--savetest")
 	if has_arg("--server") or (OS.has_feature("dedicated_server") and not test_run):
 		mode = "server"
 	server_mode = mode == "server" or has_arg("--server-mode") or OS.has_feature("dedicated_server")
@@ -122,7 +122,11 @@ func end_client_session(notice: String) -> void:
 ## Host game: start this same program as a dedicated server in the background, then join it.
 ## Closing the game stops the server; if the game crashes, the server notices the host is gone
 ## and stops by itself (--hosted-by).
-func host_game(pname: String, pin: String, password: String, port: int) -> String:
+## The Host game world lives in this PC's game data folder (worlds/host, backups/).
+const HOST_WORLD := "host"
+
+
+func host_game(pname: String, pin: String, password: String, port: int, new_world := false) -> String:
 	stop_host()
 	var exe := OS.get_executable_path()
 	var a := PackedStringArray()
@@ -132,7 +136,10 @@ func host_game(pname: String, pin: String, password: String, port: int) -> Strin
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://logs"))
 	a.append_array(["--log-file", ProjectSettings.globalize_path("user://logs/host_server.log")])
 	a.append_array(["--headless", "--", "--server", "--port=%d" % port, "--password=%s" % password,
-		"--admins=%s" % pname, "--hosted-by=%s" % pname, "--seed=%d" % (randi() % 1000000)])
+		"--admins=%s" % pname, "--hosted-by=%s" % pname, "--seed=%d" % (randi() % 1000000),
+		"--data=%s" % ProjectSettings.globalize_path("user://"), "--world=%s" % HOST_WORLD])
+	if new_world:
+		a.append("--new-world")
 	host_pid = OS.create_process(exe, a)
 	if host_pid <= 0:
 		host_pid = 0
@@ -141,15 +148,37 @@ func host_game(pname: String, pin: String, password: String, port: int) -> Strin
 	await get_tree().create_timer(1.5).timeout
 	if not OS.is_process_running(host_pid):
 		host_pid = 0
-		return "The server stopped right away. Is something else using UDP port %d?" % port
+		return "The server stopped right away. Is something else using UDP port %d, or another game hosting? (Details: %s)" % [
+			port, ProjectSettings.globalize_path("user://logs/host_server.log")]
 	join("127.0.0.1", port, pname, Proto.pin_key(pname, pin), Proto.password_key(password))
 	return ""
 
 
+## Ask the hosted server to save and stop (a file in control/), and only kill it if it hasn't
+## stopped after a few seconds.
 func stop_host() -> void:
-	if host_pid > 0:
-		OS.kill(host_pid)
+	if host_pid <= 0 or not OS.is_process_running(host_pid):
 		host_pid = 0
+		return
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://control"))
+	var f := FileAccess.open("user://control/stop-host.cmd", FileAccess.WRITE)
+	if f != null:
+		f.store_string("stop")
+		f.close()
+	for i in 50:
+		if not OS.is_process_running(host_pid):
+			break
+		OS.delay_msec(100)
+	if OS.is_process_running(host_pid):
+		OS.kill(host_pid)
+	host_pid = 0
+
+
+## The Host game world on this PC, if there is one: {day, time, saved (unix time)}.
+static func host_world_info() -> Dictionary:
+	var meta = preload("res://scripts/server/save.gd")._read_json(
+		ProjectSettings.globalize_path("user://worlds").path_join(HOST_WORLD).path_join("world.json"))
+	return meta if meta != null else {}
 
 
 func _notification(what: int) -> void:

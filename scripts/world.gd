@@ -137,6 +137,8 @@ var sched_dirty := true
 ## Server: every block change is also appended here as [pos, id]; NetServer sends them out.
 var record_edits := false
 var edits_out: Array = []
+## Server: edited chunks not saved since their last change (see server/save.gd).
+var save_dirty := {}
 ## Server: crack stage changes as [pos, stage 0-3], sent to clients like edits.
 var cracks_out: Array = []
 var crack_stage := {}
@@ -592,6 +594,29 @@ static func pos_of(k: Vector2i, idx: int) -> Vector3i:
 	return Vector3i(k.x * CH + (idx & 15), idx / CH2, k.y * CH + ((idx >> 4) & 15))
 
 
+## Server start: an edited chunk from the save files (it is never generated).
+func preload_chunk(k: Vector2i, data: PackedByteArray) -> void:
+	var c := Chunk.new()
+	c.key = k
+	c.data = data
+	c.has_data = true
+	c.modified = true
+	chunks[k] = c
+	sched_dirty = true
+
+
+## Server saving: the edited chunks changed since the last save, as [[key, data], ...] (the data
+## arrays are copies: later edits don't change them). Forgets them as saved.
+func take_unsaved() -> Array:
+	var out := []
+	for k in save_dirty:
+		var c: Chunk = chunks.get(k)
+		if c != null and c.has_data:
+			out.append([k, c.data.duplicate()])
+	save_dirty.clear()
+	return out
+
+
 func has_block_data(p: Vector3i) -> bool:
 	var c: Chunk = chunks.get(key_of(p))
 	return c != null and c.has_data
@@ -620,6 +645,7 @@ func set_block(p: Vector3i, id: int) -> bool:
 	c.modified = true
 	if record_edits:
 		edits_out.append([p, id])
+		save_dirty[k] = true
 	_clear_damage(p)
 	_dirty(k)
 	if lx == 0:

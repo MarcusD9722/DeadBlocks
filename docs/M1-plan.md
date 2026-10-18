@@ -1,6 +1,6 @@
 # M1 plan: multiplayer foundation
 
-Status: **approved by the owner; M1.1 to M1.4 done.** Merged from three independent drafts (simplest-first, performance-first, risk-first), each of which prototyped and measured parts of this in a scratch copy. Numbers marked *measured* come from those prototypes on the 4-core 2.1 GHz cloud machine unless they say "Pi".
+Status: **approved by the owner; M1.1 to M1.5 done.** Merged from three independent drafts (simplest-first, performance-first, risk-first), each of which prototyped and measured parts of this in a scratch copy. Numbers marked *measured* come from those prototypes on the 4-core 2.1 GHz cloud machine unless they say "Pi".
 
 ## Goals
 At the end of M1:
@@ -56,24 +56,26 @@ Not in M1: backpacks/beds/logout linger (M2), the Blood Moon split/merge rules a
 
 ### Save files (server)
 ```
-~/deadblocks-server/
-  server.cfg                 port, password, max_players=8, admins, day_minutes=30, autosave_s=60, snapshot_hz=15
-  control/                   drop-box for stop / save / kick / reset-pin, checked once a second
-  status.json                written every minute: players, zombies, load %, worst tick, last save
-  worlds/main/
-    world.json               format, game & worldgen version, seed, day, time, kills, next entity id
-    players/<name>.json      name, PIN hash, position, look, health, food, inventory, spawn point, play time
-    chunks/<cx>.<cz>.bin     header + CRC32 + zstd(16 KB block array)
-    world.lock               refuses a second server on the same world
-  backups/                   zip of worlds/main
+~/deadblocks-server/         (the data folder: --data=DIR, default user://server)
+  server.cfg                 port, password, max_players=8, admins, day_minutes=30, autosave_s=60 (M1.6)
+  control/                   drop-box for stop / save / backup / kick / reset-pin / say, checked once a second
+  status.json                written every minute: players, zombies, day and time, uptime, last save, warnings
+  worlds/main/               (--world=NAME)
+    world.json               format, game & worldgen version, seed, day, time, save time
+    players/<name>.json      name, PIN hash, position, look, health, food, kills, inventory, spawn point, play time
+    chunks/<cx>_<cz>.bin     "DBC1", key, size, SHA-256, zstd(16 KB block array)
+    world.lock               process id, rewritten every 30 s: refuses a second server on the same world
+    damaged/                 files that failed their check (moved aside, never loaded)
+  backups/                   zips of worlds/main
 ```
+(As built in M1.5: JSON files end with a `#sha256` line over their text.)
 - **Writes are crash-safe:** write `.tmp`, run `sync` (Godot never fsyncs, *measured* with strace), rename over the old file. *Measured:* 15 `kill -9`s during saving never produced a broken file.
 - **Loads are checked:** stale `.tmp` files are removed, every file's checksum is verified, a save from a newer version is refused (so an old build can't overwrite it), older formats are migrated after a backup.
 - **Autosave every 60 s** (the main thread only copies data; compression and writing run on a worker thread), plus: a player's file when they leave, everything when the server empties, and on stop.
 - **Stopping must not use signals.** All three drafts measured that headless Godot dies instantly on SIGTERM/SIGINT/SIGHUP without running any save code. So the service stops through `dbctl stop`, which drops a file in `control/` and waits. A power cut loses at most the last minute.
 - **Backups:** on every start, when the server empties (at most hourly), daily, and before every update. Keep the newest 20 plus one per day for 14 days.
 - Not saved: zombies and animals (they respawn), crack damage, mining progress, chat.
-- Solo and Host worlds live on the PC under `%APPDATA%\DeadBlocks\worlds\`, with Continue / New world on the title screen.
+- Solo and Host worlds live on the PC under `%APPDATA%\DeadBlocks\worlds\`, with Continue / New world on the title screen. (Host since M1.5; Solo with M1.7, when Play solo becomes a local server.)
 
 ## Joining and players
 - Title screen: **Play solo · Host game · Join server · Quit**. Join form: server address (`host` or `host:port`), **name**, **PIN**, server password, "remember me". Clear messages for: wrong password, wrong PIN, server full, version mismatch (with the download link), terrain mismatch, no answer ("check the address and port forwarding").
@@ -164,7 +166,10 @@ Result (0.4.0): the server runs zombies and boars; clients draw them from `S_MOB
 - **Done when:** nettest zombie/combat/bandwidth/loss pass; with 8 bot clients the combined benchmark here is ≤ 50%; a 120 s Blood Moon soak with 3 bots runs clean.
 - **Marcus tries:** Host + Join (or a friend), `/bloodmoon`, defend a wall together and watch both screens show the same zombies and cracks.
 
-### M1.5 The world remembers
+### M1.5 The world remembers — done
+Result (0.5.0): the server saves into a data folder (`--data=DIR`, default `user://server`; `--world=NAME`, default `main`; `--new-world` starts over after a backup; `--autosave=S`, default 60). Saved: edited chunks, every character (position, look, health, food, kills, inventory, spawn point, play time, PIN hash) and the clock. Writes go to `.tmp`, `sync`, rename (then `sync` the folder; on Windows, where a rename deletes the old file first, a checked `.tmp` without its real file is recovered at start); every file carries a SHA-256 and is checked on load: a damaged chunk or player file is moved to `damaged/` with a warning and the rest loads, a damaged `world.json` stops the server with "restore from backups", and a newer save format or other terrain is refused. Autosave copies the data on the main thread and writes on a worker thread (~10 ms for a handful of files here, mostly the `sync`); a leaving player's file is written at once, everything when the server empties and on stop. `world.lock` holds the server's process id: a second server on the same world is refused; the lock of a server that is gone (Linux: /proc, Windows: tasklist) or older than 90 s is taken over. Backups (zip) on every start, when the server empties (at most hourly) and on request, keeping the newest 20 plus one a day for 14 days. The control folder takes `stop`, `save`, `backup`, `kick NAME`, `reset-pin NAME`, `say TEXT` (commands left from before a start are ignored), and `status.json` is written every minute; M1.6's `dbctl` writes these files. Host game keeps its world in the PC's game data folder (`worlds/host`), shows its day and last save, and has "Start a new world" (the old one goes to backups); closing the game stops its server through the control folder, so it saves. Solo saving moves to M1.7 with Play solo on the server code.
+Tests: `--savetest` (in test_all.sh): round trip identical, flipped byte / cut file set aside, damaged world.json, newer format and other terrain refused, lock rules, leftover `.tmp` removed, backup contents and pruning, control files. `run_nettest.sh` part 11: a player builds and gets a pickaxe; a control-file stop saves; a restart with a different `--seed` loads seed 4242 with the same clock, and the player is back in place with the same items and blocks; a second server on the same world is refused; the server is `kill -9`'d 6 times (3 under qemu) while a player builds and breaks 4 times a second, restarted each time, the player reconnects by itself and its world ends identical to the server's, with no damaged files; a damaged world.json stops the server, a damaged chunk is set aside; `backup` and `reset-pin` from the control folder (the new PIN works and keeps the character, the old one is refused).
+
 - **Work:** the save system above (crash-safe writes, checks, autosave 60 s on a worker thread, backups, world.lock, control-file stop); characters by name + PIN; `dbctl reset-pin`; Solo/Host worlds on the PC with Continue / New world; savetest and crash test.
 - **Done when:** savetest and crash test pass; nettest stop → restart restores positions, inventories, edits and time, and time didn't move while the server was empty.
 - **Marcus tries:** Host, build something, fill the hotbar, quit everything, start again: it's all there and the clock didn't move. Rejoin as Bob from the second window: Bob's things are back; a wrong PIN for Bob is refused.

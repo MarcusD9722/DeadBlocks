@@ -53,8 +53,11 @@ func _ready() -> void:
 		seed_v = int(G.session["seed"])
 		day_minutes = float(G.session["day_minutes"])
 	G.game = self
-	if G.has_arg("--worldgen-hash"):
-		preload("res://scripts/tests/worldgen_hash.gd").run(seed_v)
+	if G.has_arg("--worldgen-hash") or G.has_arg("--savetest"):
+		if G.has_arg("--savetest"):
+			preload("res://scripts/tests/savetest.gd").run()
+		else:
+			preload("res://scripts/tests/worldgen_hash.gd").run(seed_v)
 		state = "quitting"
 		set_process(false)
 		set_process_unhandled_input(false)
@@ -158,12 +161,34 @@ func _setup_input() -> void:
 
 
 ## Dedicated server: the world, the Sim and networking, but no window, player, HUD or sky.
+## Dedicated server: the saved world (or a new one), the Sim and networking, but no window,
+## player, HUD or sky. --data=DIR (default user://server) and --world=NAME (default main) pick
+## the save folder; --new-world starts over (the old world goes to backups/).
 func _ready_server() -> void:
+	var saver := preload("res://scripts/server/save.gd").new()
+	saver.name = "Save"
+	add_child(saver)
+	var data_dir := G.arg_value("--data=")
+	var wname := G.arg_value("--world=")
+	if G.arg_value("--autosave=") != "":
+		saver.autosave_s = maxf(1.0, float(G.arg_value("--autosave=")))
+	if not saver.open(data_dir if data_dir != "" else "user://server", wname if wname != "" else "main", seed_v, G.has_arg("--new-world")):
+		printerr("SERVER cannot start: " + saver.error)
+		state = "quitting"
+		get_tree().quit(1)
+		return
+	seed_v = saver.seed_v
+	day = saver.day
+	time = saver.time
+	was_night = is_night()
 	world = preload("res://scripts/world.gd").new()
 	world.name = "World"
 	add_child(world)
 	G.world = world
 	world.setup(seed_v, null)
+	var saved_chunks: Array = saver.load_chunks()
+	for c in saved_chunks:
+		world.preload_chunk(c[0], c[1])
 	mobs = Node3D.new()
 	mobs.name = "Mobs"
 	add_child(mobs)
@@ -171,14 +196,21 @@ func _ready_server() -> void:
 	sim.name = "Sim"
 	add_child(sim)
 	spawn_pos = _find_spawn()
-	# Zombies and animals come online in M1.4.
-	spawner_enabled = false
+	spawner_enabled = false  # the server has its own spawner (_server_spawner)
 	var ns := preload("res://scripts/net/net_server.gd").new()
 	ns.name = "NetServer"
+	ns.saver = saver
+	ns.accounts = saver.load_players()
 	add_child(ns)
 	G.net_server = ns
 	state = "server"
+	print("SERVER world \"%s\" in %s: %s, seed %d, day %d %02d:%02d, %d edited chunks, %d players" % [
+		saver.world_name, saver.world_dir, "new" if saver.is_new else "loaded", seed_v, day, int(time),
+		int((time - int(time)) * 60.0), saved_chunks.size(), ns.accounts.size()])
+	if not saver.is_new:
+		saver.backup("server start")
 	if not ns.start():
+		saver.release_lock()
 		get_tree().quit(1)
 
 

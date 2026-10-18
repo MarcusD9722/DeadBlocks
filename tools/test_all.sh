@@ -38,6 +38,7 @@ stage() {
 "$GODOT" --headless --path . --import > "$LOG_DIR/import.log" 2>&1 || true
 
 stage autotest "AUTOTEST DONE fails=0" 600 "$GODOT" --headless --path . -- --autotest --seed=4242
+stage savetest "SAVETEST DONE fails=0" 120 "$GODOT" --headless --path . -- --savetest
 stage regiontest_forward "REGIONTEST DONE" 600 "$GODOT" --headless --path . -- --regiontest --server-mode --seed=4242 --region-order=forward
 stage regiontest_reverse "REGIONTEST DONE" 600 "$GODOT" --headless --path . -- --regiontest --server-mode --seed=4242 --region-order=reverse
 h1=$(sed -n 's/^REGIONTEST order=.* hash=//p' "$LOG_DIR/regiontest_forward.log")
@@ -45,19 +46,21 @@ h2=$(sed -n 's/^REGIONTEST order=.* hash=//p' "$LOG_DIR/regiontest_reverse.log")
 printf '%-24s' "regiontest_same_result"
 if [ -n "$h1" ] && [ "$h1" = "$h2" ]; then echo "ok"; else echo "FAILED (forward $h1 vs reverse $h2)"; fails=$((fails + 1)); fi
 
-# The full gate runs the 3-player building soak for 60 s and the Blood Moon soak for 120 s (the
-# plan's targets), --quick both for 20 s.
+# The full gate runs the 3-player building soak for 60 s, the Blood Moon soak for 120 s (the
+# plan's targets) and 6 server crashes in the saving test; --quick 20 s, 20 s and 3 crashes.
 SOAK_S=60
 HORDE_S=120
-[ "$QUICK" -eq 1 ] && SOAK_S=20 && HORDE_S=20
-stage nettest "NETTEST ALL DONE fails=0" 1500 env GODOT="$GODOT" NETTEST_LOGS="$LOG_DIR/nettest" NETTEST_SOAK_S=$SOAK_S NETTEST_HORDE_S=$HORDE_S ./tools/run_nettest.sh
+CRASHES=6
+[ "$QUICK" -eq 1 ] && SOAK_S=20 && HORDE_S=20 && CRASHES=3
+stage nettest "NETTEST ALL DONE fails=0" 1800 env GODOT="$GODOT" NETTEST_LOGS="$LOG_DIR/nettest" NETTEST_SOAK_S=$SOAK_S NETTEST_HORDE_S=$HORDE_S \
+	NETTEST_CRASHES=$CRASHES ./tools/run_nettest.sh
 
 if [ "$QUICK" -eq 0 ]; then
 	stage exports "Built version" 1800 env GODOT="$GODOT" ./tools/build_release.sh
 	stage worldgen_pc_vs_pi "WORLDGEN CHECK DONE" 1200 env GODOT="$GODOT" ./tools/check_worldgen.sh
 	# The same multiplayer test against the exported Raspberry Pi server (arm64, under qemu).
 	if command -v qemu-aarch64-static >/dev/null && [ -d /usr/aarch64-linux-gnu ]; then
-		stage nettest_pi_server "NETTEST ALL DONE fails=0" 1500 env GODOT="$GODOT" NETTEST_LOGS="$LOG_DIR/nettest_pi" NETTEST_SOAK_S=20 NETTEST_HORDE_S=30 \
+		stage nettest_pi_server "NETTEST ALL DONE fails=0" 1800 env GODOT="$GODOT" NETTEST_LOGS="$LOG_DIR/nettest_pi" NETTEST_SOAK_S=20 NETTEST_HORDE_S=30 NETTEST_CRASHES=3 \
 			./tools/run_nettest.sh qemu-aarch64-static -L /usr/aarch64-linux-gnu build/server/DeadBlocksServer.arm64 --headless --
 	fi
 	stage bench_smoke "=== END ===" 900 "$GODOT" --headless --path . -- --bench --server-mode --bench-secs=4 --seed=4242 --out="$LOG_DIR/bench_smoke.txt"
