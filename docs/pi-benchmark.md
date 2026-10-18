@@ -23,7 +23,7 @@ sudo apt install -y git unzip wget tmux
 ## 2. Download the game code
 **If the GitHub repository is public**, this is all you need:
 ```bash
-git clone https://github.com/MarcusD9722/deadblocks ~/deadblocks
+git clone https://github.com/MarcusD9722/DeadBlocks ~/deadblocks
 ```
 
 **If the repository is private**, the Pi has to sign in to GitHub once first:
@@ -36,7 +36,7 @@ Pick **GitHub.com**, then **HTTPS**, then answer **Yes** to "authenticate Git", 
 2. If it then says it **failed to open a web browser**, that's fine. On your phone or PC, open https://github.com/login/device, sign in, and type the code.
 3. Wait until the Pi prints **Logged in as …**, then run:
 ```bash
-gh repo clone MarcusD9722/deadblocks ~/deadblocks
+gh repo clone MarcusD9722/DeadBlocks ~/deadblocks
 ```
 
 ## 3. Download Godot for the Pi

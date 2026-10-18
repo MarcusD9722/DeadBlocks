@@ -2,8 +2,8 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.5.0"
-const BUILD_NAME := "M1.5"
+const VERSION := "0.6.0"
+const BUILD_NAME := "M1.6"
 
 var game: Node = null
 var world: Node3D = null
@@ -34,10 +34,16 @@ var _autojoin_done := false
 
 func _ready() -> void:
 	args = OS.get_cmdline_user_args()
+	if has_arg("--version"):
+		print("Dead Blocks %s" % VERSION)  # update.sh checks a new server program runs with this
+		get_tree().quit()
+		return
 	var test_run := has_arg("--autotest") or has_arg("--bench") or has_arg("--regiontest") or has_arg("--worldgen-hash") or has_arg("--savetest")
 	if has_arg("--server") or (OS.has_feature("dedicated_server") and not test_run):
 		mode = "server"
 	server_mode = mode == "server" or has_arg("--server-mode") or OS.has_feature("dedicated_server")
+	if mode == "server":
+		_load_server_cfg()
 	if server_mode:
 		Engine.physics_ticks_per_second = 30
 		Engine.max_fps = 30
@@ -50,6 +56,36 @@ func _ready() -> void:
 		var t := preload("res://scripts/tests/nettest.gd").new()
 		t.name = "NetTest"
 		add_child(t)
+
+
+## server.cfg keys (written by tools/pi/install.sh) and the flags they stand for.
+const CFG_FLAGS := {"port": "--port=", "password": "--password=", "max_players": "--max-players=",
+	"admins": "--admins=", "day_minutes": "--day-minutes=", "autosave_s": "--autosave=", "world": "--world=",
+	"seed": "--seed="}
+
+
+## The server's settings file, <data folder>/server.cfg: "key=value" lines, # for comments.
+## Flags given on the command line win over it.
+func _load_server_cfg() -> void:
+	var dir := arg_value("--data=")
+	var file := (dir if dir != "" else "user://server").path_join("server.cfg")
+	if not FileAccess.file_exists(file):
+		return
+	var used := PackedStringArray()
+	for raw in FileAccess.get_file_as_string(file).split("\n"):
+		var line := raw.strip_edges()
+		if line == "" or line.begins_with("#") or line.find("=") < 0:
+			continue
+		var key := line.left(line.find("=")).strip_edges()
+		var value := line.substr(line.find("=") + 1).strip_edges()
+		if not CFG_FLAGS.has(key):
+			printerr("SERVER WARNING: unknown setting \"%s\" in %s" % [key, file])
+			continue
+		if arg_value(CFG_FLAGS[key]) != "":
+			continue
+		args.append(CFG_FLAGS[key] + value)
+		used.append(key if key == "password" else "%s %s" % [key, value])
+	print("SERVER settings from %s: %s" % [ProjectSettings.globalize_path(file), ", ".join(used)])
 
 
 func has_arg(a: String) -> bool:

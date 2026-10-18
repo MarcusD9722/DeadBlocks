@@ -77,6 +77,13 @@ server_state() {
 	done | head -12
 	echo "      last log lines:"
 	tail -3 "$LOG_DIR/server.log" | sed 's/^/        /'
+	# Once per run: every thread's stack (under qemu these are qemu's own threads, which shows
+	# whether the emulator or the game is stuck).
+	if [ -z "${STACKS_DONE:-}" ] && command -v gdb > /dev/null && [ -d /proc/"$SPID" ]; then
+		STACKS_DONE=1
+		timeout 90 gdb -p "$SPID" -batch -ex "thread apply all bt 30" > "$LOG_DIR/server_stacks.txt" 2>&1
+		echo "      thread stacks: $LOG_DIR/server_stacks.txt"
+	fi
 }
 
 # time_values ONLINE: the clock values the server printed while ONLINE players were online

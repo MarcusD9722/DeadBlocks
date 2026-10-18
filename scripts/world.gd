@@ -117,6 +117,11 @@ var render_radius := 6
 var render := true
 ## Tests: rebuild an edited chunk immediately instead of on a worker thread, so runs repeat exactly.
 var sync_mesh := false
+## Tests (server mode): make no collision bodies until flush_bodies(), which then makes them in
+## chunk order. Physics results depend on the order bodies were made in, and worker threads
+## finish chunks in a different order every run.
+var defer_bodies := false
+var _deferred_faces := {}  # chunk key -> collision faces
 var seed_v := 0
 var chunks := {}
 var order: Array[Vector2i] = []
@@ -273,6 +278,7 @@ func _free_visual(c: Chunk) -> void:
 		c.body.queue_free()
 		c.body = null
 		c.shape = null
+	_deferred_faces.erase(c.key)
 	c.ready = false
 
 
@@ -471,7 +477,10 @@ func _mesh_done(k: Vector2i, ver: int, buf: MeshBuf) -> void:
 func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 	var origin := Vector3(k.x * CH, 0, k.y * CH)
 	if not render:
-		_apply_collision(c, origin, buf.faces)
+		if defer_bodies and c.body == null:
+			_deferred_faces[k] = buf.faces
+		else:
+			_apply_collision(c, origin, buf.faces)
 		c.ready = true
 		return
 	if c.node == null:
@@ -524,6 +533,18 @@ func _apply_collision(c: Chunk, origin: Vector3, faces: PackedVector3Array) -> v
 		c.shape.shape = sh
 	else:
 		c.shape.shape = null
+
+
+## Tests: make the collision bodies held back by defer_bodies, in chunk order, and stop holding back.
+func flush_bodies() -> void:
+	defer_bodies = false
+	var keys := _deferred_faces.keys()
+	keys.sort()
+	for k in keys:
+		var c: Chunk = chunks.get(k)
+		if c != null and c.body == null:
+			_apply_collision(c, Vector3(k.x * CH, 0, k.y * CH), _deferred_faces[k])
+	_deferred_faces.clear()
 
 
 ## Rebuild a chunk on the spot (sync_mesh). Needs the chunk and its four neighbours' data.

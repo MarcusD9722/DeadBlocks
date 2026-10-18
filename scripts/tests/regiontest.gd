@@ -1,5 +1,6 @@
 extends Node
 ## Region-order test: `-- --regiontest --server-mode --seed=4242 [--region-order=reverse]`
+## [--regiontest-dump=FILE] writes what goes into the hash, one line per zombie and edit.
 ## Two groups of zombies besiege two walled stand-in players 300 m apart for a fixed number of
 ## physics ticks. It prints a hash of where every zombie ended up and of every block hit, in order.
 ## The hash must be the same whether the Sim processes regions forwards or in reverse
@@ -26,6 +27,7 @@ func _run() -> void:
 	var order := "reverse" if G.arg_value("--region-order=") == "reverse" else "forward"
 	sim.reverse_regions = order == "reverse"
 	sim.keep_edit_log = true
+	w.defer_bodies = true  # made in a fixed order once the world is loaded (flush_bodies)
 	while g.state == "loading":
 		await _wait(0.25)
 	g.start_game()
@@ -47,6 +49,7 @@ func _run() -> void:
 		return
 	# From here on, edited chunks are rebuilt on the spot, not on worker threads, so both runs see
 	# exactly the same collision at exactly the same tick.
+	w.flush_bodies()
 	w.sync_mesh = true
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 1234
@@ -89,6 +92,10 @@ func _run() -> void:
 		hits += vp.hits
 		parts.append("h%d" % vp.hits)
 	ctx.update("\n".join(parts).to_utf8_buffer())
+	if G.arg_value("--regiontest-dump=") != "":  # to diff two runs line by line
+		var f := FileAccess.open(G.arg_value("--regiontest-dump="), FileAccess.WRITE)
+		f.store_string("\n".join(parts) + "\n")
+		f.close()
 	var broken := 0
 	for e in sim.edit_log:
 		if w.get_block(e[0], e[1], e[2]) == Blocks.AIR:

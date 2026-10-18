@@ -3,8 +3,8 @@
 # line, any FAIL line, or any ERROR / SCRIPT ERROR line in its log (the autotest alone can say
 # fails=0 while thousands of errors scroll past).
 # Usage: GODOT=/path/to/godot ./tools/test_all.sh [--quick]
-#   --quick skips the exports, the Pi terrain check, the Pi server network test and the benchmark
-#   smoke run.
+#   --quick skips the exports, the Pi terrain check, the Pi server network test, the Pi package
+#   test and the benchmark smoke run.
 # Logs: build/test_logs/<stage>.log. Don't run benchmarks at the same time.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -62,6 +62,8 @@ if [ "$QUICK" -eq 0 ]; then
 	if command -v qemu-aarch64-static >/dev/null && [ -d /usr/aarch64-linux-gnu ]; then
 		stage nettest_pi_server "NETTEST ALL DONE fails=0" 1800 env GODOT="$GODOT" NETTEST_LOGS="$LOG_DIR/nettest_pi" NETTEST_SOAK_S=20 NETTEST_HORDE_S=30 NETTEST_CRASHES=3 \
 			./tools/run_nettest.sh qemu-aarch64-static -L /usr/aarch64-linux-gnu build/server/DeadBlocksServer.arm64 --headless --
+		# The Pi package: install.sh, dbctl and update.sh, with the arm64 server under qemu.
+		stage pi_package "PIPKG DONE fails=0" 900 env GODOT="$GODOT" ./tools/test_pi_package.sh
 	fi
 	stage bench_smoke "=== END ===" 900 "$GODOT" --headless --path . -- --bench --server-mode --bench-secs=4 --seed=4242 --out="$LOG_DIR/bench_smoke.txt"
 fi

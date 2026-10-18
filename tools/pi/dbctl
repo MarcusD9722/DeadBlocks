@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+# dbctl: control the Dead Blocks server on this Pi. Installed by install.sh next to the server
+# (~/deadblocks-server/dbctl, linked as /usr/local/bin/dbctl).
+#
+#   dbctl status              is it running, who is online, day and time, last save
+#   dbctl say TEXT            message to everyone in the game
+#   dbctl kick NAME           throw a player out (they can join again)
+#   dbctl reset-pin NAME      forgotten PIN: their next sign-in sets a new one
+#   dbctl save                save now (it also saves every minute by itself)
+#   dbctl backup              save a copy of the world into backups/
+#   dbctl backups             list the backups
+#   dbctl restore [FILE]      stop, put a backup back (default: the newest), start again
+#   dbctl stop | start | restart
+#   dbctl logs                follow the server log (Ctrl+C to leave)
+#   dbctl version
+#
+# The server is never stopped with a signal (that loses everything since the last save): stop
+# drops a "stop" file into control/, the server saves and quits by itself.
+# (Internal: "dbctl halt" is that stop without systemd; the service's ExecStop runs it.
+# "dbctl watchdog", run every 15 s by deadblocks-watchdog.timer, restarts a server that has
+# stopped responding: one whose world.lock, rewritten every 10 s, is older than 45 s.)
+set -uo pipefail
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+DATA="${DB_DATA:-$DIR}"
+SYSTEMCTL="${DB_SYSTEMCTL:-sudo systemctl}"
+SERVICE=deadblocks
+
+cfg() {  # cfg KEY DEFAULT: a value from server.cfg
+	local v=""
+	[ -f "$DATA/server.cfg" ] && v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$DATA/server.cfg" | tail -1 | sed 's/[[:space:]]*$//')
+	echo "${v:-$2}"
+}
+WORLD=$(cfg world main)
+WORLD_DIR="$DATA/worlds/$WORLD"
+LOCK="$WORLD_DIR/world.lock"
+
+server_pid() {  # the running server's process id, or nothing
+	[ -f "$LOCK" ] || return 1
+	local pid
+	pid=$(sed -n 's/^pid \([0-9]*\).*/\1/p' "$LOCK")
+	[ -n "$pid" ] && [ -d "/proc/$pid" ] && echo "$pid"
+}
+
+has_service() {
+	[ -z "${DB_SYSTEMCTL:-}" ] && [ ! -f /etc/systemd/system/$SERVICE.service ] && return 1
+	return 0
+}
+
+# post CMD...: drop a command file for the server (it reads control/ once a second); prints its path
+post() {
+	mkdir -p "$DATA/control"
+	local f
+	f="$DATA/control/$(date +%s%N)-$$.cmd"
+	printf '%s\n' "$*" > "$f.tmp" && mv "$f.tmp" "$f"
+	echo "$f"
+}
+
+# send CMD...: hand a command to the running server and wait until it has read it
+send() {
+	if ! server_pid > /dev/null; then
+		echo "The server isn't running." >&2
+		return 1
+	fi
+	local f
+	f=$(post "$@")
+	for _ in $(seq 1 50); do
+		[ -f "$f" ] || return 0
+		sleep 0.1
+	done
+	echo "The server didn't pick up the command within 5 s (is it frozen?)." >&2
+	return 1
+}
+
+offline_backup() {  # zip the world folder ourselves while the server is stopped
+	local zip
+	zip="$DATA/backups/$WORLD-$(date +%Y-%m-%d-%H%M%S)-offline.zip"
+	mkdir -p "$DATA/backups"
+	python3 - "$WORLD_DIR" "$zip" <<'PY' || return 1
+import os, sys, zipfile
+src, dest = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(dest + ".tmp", "w", zipfile.ZIP_DEFLATED) as z:
+    for root, _, files in os.walk(src):
+        if os.path.basename(root) == "damaged":
+            continue
+        for f in files:
+            if f.endswith(".tmp") or f == "world.lock":
+                continue
+            p = os.path.join(root, f)
+            z.write(p, os.path.relpath(p, src))
+os.replace(dest + ".tmp", dest)
+PY
+	echo "Backup: $zip"
+}
+
+halt() {  # stop without systemd: ask the server to save and quit, and wait for it
+	local pid
+	pid=$(server_pid) || { echo "The server isn't running."; return 0; }
+	post stop > /dev/null  # a server that is still starting reads it once it is up
+	for _ in $(seq 1 600); do
+		[ -d "/proc/$pid" ] || { echo "The server saved and stopped."; return 0; }
+		sleep 0.1
+	done
+	echo "The server didn't stop within 60 s." >&2
+	return 1
+}
+
+watchdog() {
+	local pid st age
+	pid=$(server_pid) || return 0
+	st=$(cut -d' ' -f3 "/proc/$pid/stat" 2>/dev/null)
+	[ "$st" = T ] && return 0  # stopped on purpose (a debugger, kill -STOP)
+	age=$(( $(date +%s) - $(stat -c %Y "$LOCK") ))
+	[ "$age" -le "${DB_WATCHDOG_S:-45}" ] && return 0
+	echo "watchdog: the server (process $pid) has not responded for $age s; restarting it (the world goes back to its last save, at most a minute ago)"
+	logger -t deadblocks "watchdog: restarted the server: no response for $age s" 2>/dev/null || true
+	kill -9 "$pid"  # systemd starts it again (Restart=on-failure)
+}
+
+latest_log() {  # the last N server log lines
+	if [ -n "${DB_LOG:-}" ]; then
+		tail -n "$1" "$DB_LOG" 2>/dev/null
+	else
+		journalctl -u $SERVICE -n "$1" --no-pager -o cat 2>/dev/null || sudo journalctl -u $SERVICE -n "$1" --no-pager -o cat 2>/dev/null
+	fi
+}
+
+status() {
+	local pid
+	if pid=$(server_pid); then
+		echo "Dead Blocks server: running (process $pid), UDP port $(cfg port 24650), world \"$WORLD\""
+	else
+		echo "Dead Blocks server: NOT running"
+		has_service && $SYSTEMCTL --no-pager status $SERVICE 2>/dev/null | sed -n '1,4p'
+		echo "Last log lines:"
+		latest_log 8 | sed 's/^/  /'
+		return 1
+	fi
+	if [ -f "$DATA/status.json" ]; then
+		python3 - "$DATA/status.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+players = s.get("players", [])
+print("  version %s, up %d min" % (s.get("version", "?"), s.get("uptime_s", 0) // 60))
+print("  online: %s" % (", ".join(players) if players else "nobody (the clock is paused)"))
+print("  day %s, %s%s, %s zombies" % (s.get("day"), s.get("time"), ", BLOOD MOON" if s.get("blood_moon") else "", s.get("zombies")))
+print("  last save: %s%s" % (s.get("last_save") or "not yet", "" if s.get("last_save_ok", True) else "  (SAVING FAILED - is the disk full?)"))
+for w in s.get("warnings", []):
+    print("  WARNING: " + w)
+PY
+		echo "  (updated $(( $(date +%s) - $(stat -c %Y "$DATA/status.json") )) s ago; it is written every minute)"
+	fi
+}
+
+restore() {
+	local zip="${1:-}"
+	if [ -z "$zip" ]; then
+		zip=$(ls -1t "$DATA/backups"/"$WORLD"-*.zip 2>/dev/null | head -1)
+		[ -n "$zip" ] || { echo "No backups in $DATA/backups." >&2; return 1; }
+	fi
+	[ -f "$zip" ] || zip="$DATA/backups/$zip"
+	[ -f "$zip" ] || { echo "No such backup: $1" >&2; return 1; }
+	echo "Restoring $(basename "$zip") into world \"$WORLD\"."
+	local was_running=0
+	if server_pid > /dev/null; then
+		was_running=1
+		if has_service; then $SYSTEMCTL stop $SERVICE; else halt; fi
+	fi
+	server_pid > /dev/null && { echo "The server is still running; not restoring." >&2; return 1; }
+	local keep
+	keep="$WORLD_DIR.before-restore-$(date +%Y-%m-%d-%H%M%S)"
+	[ -d "$WORLD_DIR" ] && mv "$WORLD_DIR" "$keep" && echo "The world as it was is kept in $keep"
+	mkdir -p "$WORLD_DIR"
+	python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$zip" "$WORLD_DIR" || return 1
+	echo "Restored."
+	if [ "$was_running" -eq 1 ]; then
+		if has_service; then $SYSTEMCTL start $SERVICE && echo "Server started again."; else echo "Start the server again."; fi
+	fi
+}
+
+version() {
+	if [ -f "$DATA/install.conf" ]; then
+		# shellcheck disable=SC1091
+		. "$DATA/install.conf"
+		if [ "${MODE:-}" = "git" ]; then
+			"$GODOT" --headless --path "$REPO" -- --version 2>/dev/null | grep "^Dead Blocks"
+			return
+		fi
+	fi
+	${DB_EXEC_PREFIX:-} "$DIR/DeadBlocksServer.arm64" --headless -- --version 2>/dev/null | grep "^Dead Blocks"
+}
+
+cmd="${1:-status}"
+shift || true
+case "$cmd" in
+	status) status ;;
+	say)
+		[ $# -gt 0 ] || { echo "Usage: dbctl say TEXT" >&2; exit 2; }
+		send say "$*" && echo "Said: $*" ;;
+	kick)
+		[ $# -eq 1 ] || { echo "Usage: dbctl kick NAME" >&2; exit 2; }
+		send kick "$1" && echo "Asked the server to kick $1." ;;
+	reset-pin)
+		[ $# -eq 1 ] || { echo "Usage: dbctl reset-pin NAME" >&2; exit 2; }
+		send reset-pin "$1" && echo "$1's PIN is reset: the next time they join, the PIN they type becomes their new one." ;;
+	save) send save && echo "Saved." ;;
+	backup)
+		if server_pid > /dev/null; then
+			send backup && echo "Backup asked for; it is in $DATA/backups."
+		else
+			offline_backup
+		fi ;;
+	backups) ls -1t "$DATA/backups" 2>/dev/null | head -40 ;;
+	restore) restore "${1:-}" ;;
+	halt) halt ;;
+	watchdog) watchdog ;;
+	stop)
+		if has_service; then $SYSTEMCTL stop $SERVICE && echo "Stopped (saved)."; else halt; fi ;;
+	start)
+		has_service || { echo "The service isn't installed; run install.sh." >&2; exit 1; }
+		$SYSTEMCTL start $SERVICE && echo "Started." ;;
+	restart)
+		has_service || { echo "The service isn't installed; run install.sh." >&2; exit 1; }
+		$SYSTEMCTL restart $SERVICE && echo "Restarted (saved first)." ;;
+	logs)
+		if [ -n "${DB_LOG:-}" ]; then tail -f "$DB_LOG"; else journalctl -u $SERVICE -f -o cat 2>/dev/null || sudo journalctl -u $SERVICE -f -o cat; fi ;;
+	version) version ;;
+	help|-h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+	*) echo "Unknown command: $cmd (try: dbctl help)" >&2; exit 2 ;;
+esac

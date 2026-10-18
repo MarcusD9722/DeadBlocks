@@ -1,0 +1,8 @@
+# Daily backup of the Dead Blocks world (run by deadblocks-backup.timer).
+[Unit]
+Description=Dead Blocks daily backup
+
+[Service]
+Type=oneshot
+User=@USER@
+ExecStart=@HOME@/dbctl backup

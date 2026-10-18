@@ -1,0 +1,11 @@
+# Every 15 s: is the Dead Blocks server still responding? (deadblocks-watchdog.service)
+[Unit]
+Description=Dead Blocks server watchdog
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

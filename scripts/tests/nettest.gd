@@ -772,17 +772,7 @@ func _run_fighter() -> void:
 	p.velocity = Vector3.ZERO
 	await _wait(0.5)
 	await _until(func(): return p.is_on_floor(), 5.0)
-	c = _base()
-	_select(Blocks.DIRT)
-	var ring := []
-	for dy in [0, 1]:
-		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1), Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
-			var b := Vector3i(c.x + d.x, c.y + dy, c.z + d.y)
-			ring.append(b)
-			if G.world.get_blockv(b) == Blocks.AIR and not p.try_place(b, Blocks.DIRT):
-				print("NETTEST wall cell %s not placed here: below %d, we stand at %s" % [b, G.world.get_blockv(b + Vector3i.DOWN), p.global_position])
-			await _wait(0.1)
-	await _wait(1.0)
+	var ring: Array = await _wall_in()
 	var walled := ring.filter(func(b): return G.world.get_blockv(b) != Blocks.AIR).size()
 	check(walled >= 14, "walled ourselves in (%d of 16 around us are solid)" % walled)
 	G.net.send_chat("/spawn horde 4")
@@ -801,6 +791,34 @@ func _run_fighter() -> void:
 	G.net.send_chat("NT fdone")
 	await _wait(1.0)
 	print("NETTEST mob bytes: %d" % int(G.net.bytes_in.get(Proto.S_MOBS, 0)))
+
+
+## A dirt ring two high around the block we stand on; returns its 16 cells. Like a player
+## would: a cell over open air gets a block under it first, and cells the server refused
+## ("nothing to build on" until a neighbour is there) are tried again.
+func _wall_in() -> Array:
+	var p = G.player
+	var c := _base()
+	_select(Blocks.DIRT)
+	var ring := []
+	for dy in [0, 1]:
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1), Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
+			ring.append(Vector3i(c.x + d.x, c.y + dy, c.z + d.y))
+	var w = G.world
+	for attempt in 3:
+		for b in ring:
+			if w.get_blockv(b) != Blocks.AIR:
+				continue
+			var below: Vector3i = b + Vector3i.DOWN
+			if b.y == c.y and w.get_blockv(below) == Blocks.AIR and w.get_blockv(below + Vector3i.DOWN) != Blocks.AIR:
+				p.try_place(below, Blocks.DIRT)
+				await _wait(0.1)
+			p.try_place(b, Blocks.DIRT)
+			await _wait(0.1)
+		await _wait(1.0)  # the server's answers (and corrections) arrive
+		if ring.all(func(b): return w.get_blockv(b) != Blocks.AIR):
+			break
+	return ring
 
 
 func _run_zwatch() -> void:

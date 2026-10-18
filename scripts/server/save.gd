@@ -375,7 +375,8 @@ func _remove_tmp_files() -> void:
 
 # ------------------------------------------------------------ lock, backups, control, status
 
-## The lock file holds this server's process id and is rewritten every 30 s. It is left over
+## The lock file holds this server's process id and is rewritten every 10 s (dbctl's watchdog
+## restarts a server whose lock goes quiet: it has stopped responding). It is left over
 ## from a crash if that process no longer exists, or if it hasn't been touched for LOCK_STALE_S;
 ## then it is taken over.
 func _take_lock() -> bool:
@@ -496,7 +497,7 @@ func tick(delta: float) -> Dictionary:
 	var due := {}
 	_lock_t -= delta
 	if _lock_t <= 0.0:
-		_lock_t = 30.0
+		_lock_t = 10.0
 		_touch_lock()
 	_control_t -= delta
 	if _control_t <= 0.0:

@@ -1,0 +1,8 @@
+# Restarts the Dead Blocks server if it stops responding (run by deadblocks-watchdog.timer).
+[Unit]
+Description=Dead Blocks server watchdog
+
+[Service]
+Type=oneshot
+User=@USER@
+ExecStart=@HOME@/dbctl watchdog

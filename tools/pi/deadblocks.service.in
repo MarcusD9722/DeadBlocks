@@ -1,0 +1,26 @@
+# Dead Blocks game server. Installed by install.sh (@HOME@ is the server folder).
+[Unit]
+Description=Dead Blocks game server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@HOME@
+ExecStart=@EXEC@
+# Never a bare signal: headless Godot dies at once on SIGTERM without saving. dbctl halt asks the
+# server to save and quit, and waits for it.
+ExecStop=@HOME@/dbctl halt
+TimeoutStopSec=90
+KillMode=mixed
+# Start again after a crash, but not after a refusal to start (exit code 1: a damaged world, a
+# port in use, another server on the world): dbctl status shows why.
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=1
+# Wins the CPU when it and the Minecraft server are busy at the same moment (default weight 100).
+CPUWeight=200
+
+[Install]
+WantedBy=multi-user.target

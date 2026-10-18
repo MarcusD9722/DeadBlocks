@@ -96,6 +96,7 @@ func start() -> bool:
 	mp.multiplayer_peer = peer
 	print("SERVER Dead Blocks %s listening on UDP %d | seed %d | max players %d | admins %s" % [
 		G.VERSION, port, G.game.seed_v, max_players, ", ".join(admins)])
+	print("SERVER physics runs on %s" % ("its own thread" if ProjectSettings.get_setting_with_override("physics/3d/run_on_separate_thread") else "the main thread"))
 	return true
 
 

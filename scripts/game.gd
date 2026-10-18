@@ -41,6 +41,12 @@ var _next_mob_id := 1
 
 
 func _ready() -> void:
+	if G.has_arg("--version"):
+		state = "quitting"
+		set_process(false)
+		set_physics_process(false)
+		set_process_unhandled_input(false)
+		return
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	randomize()
 	seed_v = randi() % 1000000
@@ -417,7 +423,6 @@ func start_game() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	if G.mode == "client":
 		hud.msg("Joined %s. Press T to chat, Esc for the player list." % G.net.host, Color(0.8, 1, 0.8))
-		hud.msg("Test build: zombies and animals come online in the next build.", Color(1, 0.9, 0.6))
 		return
 	hud.msg("Day 1. Gather wood, craft tools, and build shelter before 20:00.", Color(1, 1, 0.8))
 	hud.msg("Hold left click on a tree to collect logs.", Color(0.7, 1, 0.7))
