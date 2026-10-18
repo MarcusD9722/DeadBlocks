@@ -31,7 +31,6 @@ func _run() -> void:
 	while g.state == "loading":
 		await _wait(0.25)
 	g.start_game()
-	g.spawner_enabled = false
 	g.time = 12.0
 	for m in get_tree().get_nodes_in_group("mobs"):
 		m.queue_free()

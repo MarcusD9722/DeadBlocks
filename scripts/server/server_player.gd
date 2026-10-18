@@ -11,6 +11,8 @@ var flags := 0
 var dead := false
 ## Set when the player's game has loaded the world around it; only ready players count as online.
 var is_ready := false
+## Solo game: the pause menu is open (the world stops while every player has paused).
+var paused := false
 var admin := false
 ## Movement checking: the last accepted position and when it arrived, and the current move id
 ## (bumped on every server correction so in-flight moves from before it are ignored).

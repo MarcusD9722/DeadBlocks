@@ -37,7 +37,7 @@ stage() {
 
 "$GODOT" --headless --path . --import > "$LOG_DIR/import.log" 2>&1 || true
 
-stage autotest "AUTOTEST DONE fails=0" 600 "$GODOT" --headless --path . -- --autotest --seed=4242
+stage autotest "AUTOTEST DONE fails=0" 900 "$GODOT" --headless --path . -- --autotest --seed=4242
 stage savetest "SAVETEST DONE fails=0" 120 "$GODOT" --headless --path . -- --savetest
 stage regiontest_forward "REGIONTEST DONE" 600 "$GODOT" --headless --path . -- --regiontest --server-mode --seed=4242 --region-order=forward
 stage regiontest_reverse "REGIONTEST DONE" 600 "$GODOT" --headless --path . -- --regiontest --server-mode --seed=4242 --region-order=reverse

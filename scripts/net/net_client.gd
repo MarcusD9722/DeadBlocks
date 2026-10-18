@@ -231,6 +231,13 @@ func request_respawn() -> void:
 	_send(Proto.writer(Proto.C_RESPAWN).data_array)
 
 
+## Solo game: the pause menu opened or closed (the server stops or restarts the world).
+func send_pause(on: bool) -> void:
+	var m := Proto.writer(Proto.C_PAUSE)
+	m.put_u8(1 if on else 0)
+	_send(m.data_array)
+
+
 ## Where to draw a mob right now (like interpolated() for players). Empty if unknown.
 func mob_sample(id: int) -> Dictionary:
 	var o = mobs.get(id)
@@ -554,12 +561,14 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			var day := b.get_u16()
 			var t := b.get_float()
 			var horde := b.get_u8() == 1
+			var stopped := b.get_u8() == 1
 			var g = G.game
 			if g != null and G.mode == "client" and g.world != null:
 				g.day = day
 				g.time = t
 				g.horde_active = horde
 				g.was_night = g.is_night()
+				g.clock_stopped = stopped
 		Proto.S_CHAT:
 			var from := b.get_utf8_string()
 			chat.emit(from, b.get_utf8_string())

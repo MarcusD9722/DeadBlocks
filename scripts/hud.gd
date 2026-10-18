@@ -26,6 +26,9 @@ var title_menu: VBoxContainer
 var solo_btn: Button
 var join_panel: VBoxContainer
 var host_panel: VBoxContainer
+var solo_panel: VBoxContainer
+var s_world: Label
+var s_new: CheckBox
 var title_info: Array = []
 var f_addr: LineEdit
 var f_name: LineEdit
@@ -146,14 +149,26 @@ func _build_title() -> void:
 	title_menu.alignment = BoxContainer.ALIGNMENT_CENTER
 	title_menu.add_theme_constant_override("separation", 10)
 	vb.add_child(title_menu)
-	solo_btn = _button("Play solo", func(): G.game.start_game())
-	solo_btn.disabled = true
+	solo_btn = _button("Play solo", func(): _show_panel(solo_panel))
 	solo_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	title_menu.add_child(solo_btn)
 	for e in [["Host game", func(): _show_panel(host_panel)], ["Join server", func(): _show_panel(join_panel)], ["Quit", func(): get_tree().quit()]]:
 		var b := _button(e[0], e[1])
 		b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		title_menu.add_child(b)
+
+	solo_panel = _panel(vb, "PLAY SOLO")
+	s_world = _label("", 18, Color(0.85, 0.95, 0.7))
+	s_world.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	solo_panel.add_child(s_world)
+	s_new = CheckBox.new()
+	s_new.text = "Start a new world (the old one is kept in backups)"
+	s_new.focus_mode = Control.FOCUS_NONE
+	solo_panel.add_child(s_new)
+	var snote := _label("Your world is saved on this PC. Esc pauses the game.", 15, Color(0.75, 0.78, 0.8))
+	snote.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	solo_panel.add_child(snote)
+	_panel_buttons(solo_panel, "Play", _on_solo_pressed)
 
 	join_panel = _panel(vb, "JOIN A SERVER")
 	f_addr = _field(join_panel, "Server address", "e.g. 192.168.1.50 or myserver.duckdns.org", false)
@@ -251,19 +266,32 @@ func _panel_buttons(panel: VBoxContainer, ok_text: String, ok: Callable) -> void
 
 
 func _show_panel(p: Control) -> void:
+	_set_status("", false)  # an old error doesn't belong to the next form
 	if p == host_panel:
-		var info: Dictionary = G.host_world_info()
-		h_new.button_pressed = false
-		h_new.visible = not info.is_empty()
-		if info.is_empty():
-			h_world.text = "A new world will be made."
-		else:
-			var t := float(info.get("time", 7.0))
-			h_world.text = "Your world continues: day %d, %02d:%02d (saved %s)" % [int(info.get("day", 1)), int(t), int((t - int(t)) * 60.0),
-				Time.get_datetime_string_from_unix_time(int(info.get("saved", 0)), true)]
+		_world_choice(G.HOST_WORLD, h_world, h_new)
+	elif p == solo_panel:
+		_world_choice(G.SOLO_WORLD, s_world, s_new)
 	title_menu.visible = p == null
 	join_panel.visible = p == join_panel
 	host_panel.visible = p == host_panel
+	solo_panel.visible = p == solo_panel
+
+
+## "Your world continues: day 3, 14:20 (saved Oct 18, 21:05)", or that a new one will be made.
+func _world_choice(world: String, label: Label, new_box: CheckBox) -> void:
+	var info: Dictionary = G.world_info(world)
+	new_box.button_pressed = false
+	new_box.visible = not info.is_empty()
+	if info.is_empty():
+		label.text = "A new world will be made."
+		return
+	var t := float(info.get("time", 7.0))
+	# Saved times are UTC; show them in this PC's time zone.
+	var local := int(info.get("saved", 0)) + int(Time.get_time_zone_from_system().get("bias", 0)) * 60
+	var d := Time.get_datetime_dict_from_unix_time(local)
+	var months := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+	label.text = "Your world continues: day %d, %02d:%02d (saved %s %d, %02d:%02d)" % [int(info.get("day", 1)), int(t),
+		int((t - int(t)) * 60.0), months[int(d["month"]) - 1], int(d["day"]), int(d["hour"]), int(d["minute"])]
 
 
 func _set_status(text: String, is_error: bool) -> void:
@@ -350,6 +378,13 @@ func _on_host_pressed() -> void:
 		_set_status(err, true)
 
 
+func _on_solo_pressed() -> void:
+	_set_status("Starting your world...", false)
+	var err: String = await G.play_solo(s_new.button_pressed)
+	if err != "":
+		_set_status(err, true)
+
+
 func _load_client_cfg() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(CLIENT_CFG) != OK:
@@ -368,14 +403,12 @@ func _load_client_cfg() -> void:
 
 func set_loading(p: float) -> void:
 	if G.mode == "client":
-		_set_status("Loading the server's world...  %d%%" % int(p * 100.0), false)
-	else:
-		solo_btn.text = "Play solo   (generating world %d%%)" % int(p * 100.0)
+		_set_status("Loading %s...  %d%%" % ["your world" if G.solo else "the server's world", int(p * 100.0)], false)
 
 
+## The title screen's own world is ready (nothing to do: Play solo starts its own server).
 func show_ready() -> void:
-	solo_btn.disabled = false
-	solo_btn.text = "Play solo"
+	pass
 
 
 ## Client mode: just the logo and a loading line while the server's world is built.
@@ -457,7 +490,7 @@ func _build_pause() -> void:
 	row.add_theme_constant_override("separation", 12)
 	vb.add_child(row)
 	row.add_child(_button("Resume", func(): G.game.resume()))
-	pause_leave = _button("Leave Server", func(): G.end_client_session("You left the server."))
+	pause_leave = _button("Leave Server", func(): G.end_client_session("Your world is saved." if G.solo else "You left the server."))
 	row.add_child(pause_leave)
 	pause_quit = _button("Quit Game", func(): get_tree().quit())
 	row.add_child(pause_quit)
@@ -488,18 +521,21 @@ func _build_pause() -> void:
 
 func show_pause(on: bool) -> void:
 	pause_root.visible = on
-	var online := G.mode == "client"
-	pause_leave.visible = online
+	var online := G.mode == "client" and not G.solo
+	pause_leave.visible = G.mode == "client"
+	pause_leave.text = "Save and Quit to Title" if G.solo else "Leave Server"
 	pause_players.visible = online
 	seed_lbl.text = "World seed: %d" % G.game.seed_v
 	if online:
 		seed_lbl.text += "   ·   The world keeps running while this menu is open."
+	elif G.solo:
+		seed_lbl.text += "   ·   Your world is saved on this PC."
 	_refresh_pause_players()
 
 
 ## Online: who is playing, refreshed while the pause menu is open.
 func _refresh_pause_players() -> void:
-	if not pause_root.visible or G.mode != "client":
+	if not pause_root.visible or G.mode != "client" or G.solo:
 		return
 	var names: Array = [G.net.player_name + " (you)"]
 	for id in G.net.others:
@@ -614,10 +650,8 @@ func _on_slot(i: int) -> void:
 	var p = G.player
 	if i < 9:
 		p.select(i)
-	elif G.mode == "client":
-		G.net.request_swap(i, p.selected)
 	else:
-		p.inv.swap(i, p.selected)
+		G.net.request_swap(i, p.selected)
 	G.sfx.play("click", -8.0)
 	refresh_inventory()
 
@@ -709,26 +743,11 @@ func _recipe_row(r: Dictionary, stations: Array) -> Control:
 func _on_craft(r: Dictionary) -> void:
 	var p = G.player
 	var times := 5 if Input.is_key_pressed(KEY_SHIFT) else 1
-	if G.mode == "client":
-		# The server crafts; "+N item" shows when its inventory update arrives.
-		if Crafting.can_craft(p.inv, r, G.game.nearby_stations()):
-			G.sfx.play("craft", -4.0)
-			G.game.on_crafted(int(r["out"]))
-		G.net.request_craft(Crafting.RECIPES.find(r), times)
-		return
-	var made := 0
-	for k in times:
-		if not Crafting.can_craft(p.inv, r, G.game.nearby_stations()):
-			break
-		if not Crafting.craft(p.inv, r):
-			msg("Inventory full!", Color(1, 0.5, 0.4))
-			break
-		made += 1
-	if made > 0:
+	# The server crafts; "+N item" shows when its inventory update arrives.
+	if Crafting.can_craft(p.inv, r, G.game.nearby_stations()):
 		G.sfx.play("craft", -4.0)
-		pickup("+%d %s" % [made * int(r["n"]), Items.name_of(int(r["out"]))])
 		G.game.on_crafted(int(r["out"]))
-	refresh_inventory()
+	G.net.request_craft(Crafting.RECIPES.find(r), times)
 
 
 # ------------------------------------------------------------ messages
@@ -886,8 +905,9 @@ func _draw_online(vs: Vector2) -> void:
 		_text(Vector2(0, vs.y * 0.42 + 40), "The game keeps trying for a minute.   Esc: back to the title", 18,
 			Color(0.9, 0.9, 0.9), HORIZONTAL_ALIGNMENT_CENTER, vs.x)
 		return
-	var line := "%d online   ·   %d ms" % [G.net.others.size() + 1, G.net.ping_ms()]
-	_text(Vector2(vs.x - 320, 34), line, 16, Color(0.8, 1, 0.8, 0.8), HORIZONTAL_ALIGNMENT_RIGHT, 300)
+	if not G.solo:
+		var line := "%d online   ·   %d ms" % [G.net.others.size() + 1, G.net.ping_ms()]
+		_text(Vector2(vs.x - 320, 34), line, 16, Color(0.8, 1, 0.8, 0.8), HORIZONTAL_ALIGNMENT_RIGHT, 300)
 	var quiet: float = G.net.quiet_s()
 	if quiet > 1.5:
 		_text(Vector2(vs.x - 420, 56), "No answer from the server for %d s" % int(quiet), 16,

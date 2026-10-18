@@ -2,8 +2,8 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.6.0"
-const BUILD_NAME := "M1.6"
+const VERSION := "0.7.0"
+const BUILD_NAME := "M1.7"
 
 var game: Node = null
 var world: Node3D = null
@@ -17,8 +17,12 @@ var args: PackedStringArray = PackedStringArray()
 ## (render meshes, lights, mob models, sounds). Physics runs at 30 ticks/s.
 ## Set by --server-mode, --server, and the dedicated server build (feature "dedicated_server").
 var server_mode := false
-## "solo" (play alone), "client" (joined a server), or "server" (dedicated server, no window).
+## "solo" (the title screen's own world; the tests run in it too), "client" (joined a server,
+## including Play solo's server on this PC), or "server" (dedicated server, no window).
 var mode := "solo"
+## Play solo: we're the only player on a server this game started (127.0.0.1); the pause menu
+## stops its world.
+var solo := false
 ## Client mode: what the server told us when we joined (seed, position, clock, ...).
 var session := {}
 ## Client networking; lives here so the connection survives the scene reload into the server's world.
@@ -56,6 +60,11 @@ func _ready() -> void:
 		var t := preload("res://scripts/tests/nettest.gd").new()
 		t.name = "NetTest"
 		add_child(t)
+	elif has_arg("--autotest"):
+		# Lives here, not in the game scene, so it survives the reload into the solo game.
+		var at := preload("res://scripts/autotest.gd").new()
+		at.name = "AutoTest"
+		add_child(at)
 
 
 ## server.cfg keys (written by tools/pi/install.sh) and the flags they stand for.
@@ -112,6 +121,7 @@ func autojoin() -> void:
 
 
 func join(host: String, port: int, pname: String, pin_key: PackedByteArray, password_key: PackedByteArray) -> void:
+	solo = false  # play_solo sets it again once its server is up
 	net.join(host, port, pname, pin_key, password_key)
 
 
@@ -149,6 +159,7 @@ func end_client_session(notice: String) -> void:
 	stop_host()
 	session = {}
 	mode = "solo"
+	solo = false
 	title_notice = notice
 	get_tree().paused = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -158,11 +169,41 @@ func end_client_session(notice: String) -> void:
 ## Host game: start this same program as a dedicated server in the background, then join it.
 ## Closing the game stops the server; if the game crashes, the server notices the host is gone
 ## and stops by itself (--hosted-by).
-## The Host game world lives in this PC's game data folder (worlds/host, backups/).
+## The Host game and Play solo worlds live in this PC's game data folder (worlds/host,
+## worlds/solo, backups/).
 const HOST_WORLD := "host"
+const SOLO_WORLD := "solo"
+const SOLO_NAME := "Player"
+const SOLO_PIN := "0000"
 
 
 func host_game(pname: String, pin: String, password: String, port: int, new_world := false) -> String:
+	var err: String = await _launch_server(pname, pin, password, port, HOST_WORLD, new_world, [])
+	if err == "The server stopped right away.":
+		err += " Is something else using UDP port %d, or another game hosting? (Details: %s)" % [
+			port, ProjectSettings.globalize_path("user://logs/host_server.log")]
+	return err
+
+
+## Play solo: the same server as Host game, on this PC only (127.0.0.1, a random port and
+## password), one player, and its world stops while the pause menu is open. The world is kept
+## in worlds/solo (`world` is for the autotest's own).
+func play_solo(new_world := false, world := SOLO_WORLD) -> String:
+	var pw := ""
+	for i in 16:
+		pw += "abcdefghijkmnpqrstuvwxyz23456789"[randi() % 32]
+	var err := ""
+	for attempt in 3:  # a random port that happens to be taken: try another
+		var port := 20000 + randi() % 40000
+		err = await _launch_server(SOLO_NAME, SOLO_PIN, pw, port, world, new_world,
+			["--solo", "--bind=127.0.0.1", "--max-players=1"])
+		if err == "":
+			solo = true
+			return ""
+	return err + " (Details: %s)" % ProjectSettings.globalize_path("user://logs/host_server.log")
+
+
+func _launch_server(pname: String, pin: String, password: String, port: int, world: String, new_world: bool, extra: Array) -> String:
 	stop_host()
 	var exe := OS.get_executable_path()
 	var a := PackedStringArray()
@@ -171,11 +212,15 @@ func host_game(pname: String, pin: String, password: String, port: int, new_worl
 	# Its own log file, so it doesn't fight the game over godot.log.
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://logs"))
 	a.append_array(["--log-file", ProjectSettings.globalize_path("user://logs/host_server.log")])
+	var seed_arg := arg_value("--seed=")  # tests pick the seed; otherwise a new world gets a random one
 	a.append_array(["--headless", "--", "--server", "--port=%d" % port, "--password=%s" % password,
-		"--admins=%s" % pname, "--hosted-by=%s" % pname, "--seed=%d" % (randi() % 1000000),
-		"--data=%s" % ProjectSettings.globalize_path("user://"), "--world=%s" % HOST_WORLD])
+		"--admins=%s" % pname, "--hosted-by=%s" % pname, "--seed=%s" % (seed_arg if seed_arg != "" else str(randi() % 1000000)),
+		"--data=%s" % ProjectSettings.globalize_path("user://"), "--world=%s" % world])
+	if arg_value("--day-minutes=") != "":
+		a.append("--day-minutes=" + arg_value("--day-minutes="))
 	if new_world:
 		a.append("--new-world")
+	a.append_array(PackedStringArray(extra))
 	host_pid = OS.create_process(exe, a)
 	if host_pid <= 0:
 		host_pid = 0
@@ -184,8 +229,7 @@ func host_game(pname: String, pin: String, password: String, port: int, new_worl
 	await get_tree().create_timer(1.5).timeout
 	if not OS.is_process_running(host_pid):
 		host_pid = 0
-		return "The server stopped right away. Is something else using UDP port %d, or another game hosting? (Details: %s)" % [
-			port, ProjectSettings.globalize_path("user://logs/host_server.log")]
+		return "The server stopped right away."
 	join("127.0.0.1", port, pname, Proto.pin_key(pname, pin), Proto.password_key(password))
 	return ""
 
@@ -210,10 +254,10 @@ func stop_host() -> void:
 	host_pid = 0
 
 
-## The Host game world on this PC, if there is one: {day, time, saved (unix time)}.
-static func host_world_info() -> Dictionary:
+## A Host game or Play solo world on this PC, if there is one: {day, time, saved (unix time)}.
+static func world_info(world: String) -> Dictionary:
 	var meta = preload("res://scripts/server/save.gd")._read_json(
-		ProjectSettings.globalize_path("user://worlds").path_join(HOST_WORLD).path_join("world.json"))
+		ProjectSettings.globalize_path("user://worlds").path_join(world).path_join("world.json"))
 	return meta if meta != null else {}
 
 

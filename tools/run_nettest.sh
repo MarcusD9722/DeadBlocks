@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 GODOT="${GODOT:-godot}"
 LOG_DIR="${NETTEST_LOGS:-$PWD/build/test_logs/nettest}"
 mkdir -p "$LOG_DIR"
-rm -f "$LOG_DIR"/*.log
+rm -f "$LOG_DIR"/*.log "$LOG_DIR"/server_stacks.txt
 # Every test server saves into its own folder here, so they never share a world (or its lock).
 rm -rf "${LOG_DIR:?}/data"
 mkdir -p "$LOG_DIR/data"

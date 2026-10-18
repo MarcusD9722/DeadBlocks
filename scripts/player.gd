@@ -37,7 +37,6 @@ var spawn_point := Vector3.ZERO
 var sprinting := false
 var held_id := -1
 var hints := {}
-var _rng := RandomNumberGenerator.new()
 
 
 func _ready() -> void:
@@ -105,7 +104,6 @@ func _ready() -> void:
 	add_child(mine_crack)
 
 	inv = Inventory.new()
-	_rng.randomize()
 
 
 func _wire_cube(h: float) -> ImmediateMesh:
@@ -229,17 +227,6 @@ func _process(delta: float) -> void:
 			stamina = maxf(0.0, stamina - 16.0 * delta)
 		else:
 			stamina = minf(100.0, stamina + 20.0 * delta)
-	if G.mode != "client" and (st == "playing" or st == "menu"):
-		# Online, hunger and healing run on the server (S_STATS).
-		var drain := 0.065 + (0.12 if sprinting else 0.0)
-		food = maxf(0.0, food - drain * delta)
-		if food <= 0.0:
-			health -= 1.0 * delta
-			if health <= 0.0:
-				die()
-				return
-		elif food > 45.0 and health < max_health:
-			health = minf(max_health, health + 0.5 * delta)
 	if st == "playing":
 		_handle_mining(delta)
 	else:
@@ -303,10 +290,7 @@ func _handle_mining(delta: float) -> void:
 
 
 func attack(mob: Node) -> void:
-	if G.mode == "client":
-		G.net.request_attack(mob.net_id, selected)  # the server checks reach and deals the damage
-	else:
-		mob.hurt(Items.damage(cur_id()), global_position, self)
+	G.net.request_attack(mob.net_id, selected)  # the server checks reach and deals the damage
 	attack_cd = 0.45
 	swing = 1.0
 	G.sfx.play("hit", -3.0)
@@ -315,28 +299,12 @@ func attack(mob: Node) -> void:
 func break_block(p: Vector3i, id: int) -> void:
 	G.world.set_block(p, Blocks.AIR)
 	G.sfx.play("break", -4.0)
-	if G.mode == "client":
-		# The block is gone on our screen right away; the server decides what drops (or puts
-		# the block back if someone else got there first).
-		G.net.request_break(p, id, selected)
-	else:
-		var got := Rules.collect(id, cur_id(), _rng)
-		if int(got["need_tier"]) > 0:
-			G.hud.msg(Rules.too_hard_text(got["need_tier"]), Color(1, 0.8, 0.5))
-			return
-		for d in got["items"]:
-			give(int(d[0]), int(d[1]))
+	# The block is gone on our screen right away; the server decides what drops (or puts the
+	# block back if someone else got there first).
+	G.net.request_break(p, id, selected)
 	if id == Blocks.LOG and not hints.has("log"):
 		hints["log"] = true
 		G.hud.msg("Press E to open crafting. Make Planks, then a Workbench.", Color(0.7, 1, 0.7))
-
-
-func give(id: int, n: int) -> void:
-	var left := inv.add(id, n)
-	if n - left > 0:
-		G.hud.pickup("+%d %s" % [n - left, Items.name_of(id)])
-	if left > 0:
-		G.hud.msg("Inventory full!", Color(1, 0.5, 0.4))
 
 
 func use_item() -> void:
@@ -362,11 +330,7 @@ func consume(id: int) -> void:
 	if f <= 0.0 and h > 0.0 and health >= max_health:
 		G.hud.msg("You're already at full health.")
 		return
-	if G.mode == "client":
-		G.net.request_eat(selected)  # the server answers with S_ATE -> ate()
-		return
-	inv.remove_at(selected, 1)
-	ate(id)
+	G.net.request_eat(selected)  # the server answers with S_ATE -> ate()
 
 
 func ate(id: int) -> void:
@@ -400,10 +364,7 @@ func try_place(p: Vector3i, id: int) -> bool:
 			if _overlap(mp + Vector3(-0.4, 0, -0.4), mp + Vector3(0.4, 1.9, 0.4), bmin, bmax):
 				return false
 	G.world.set_block(p, id)
-	if G.mode == "client":
-		G.net.request_place(p, id, selected)  # shown now; the server confirms or undoes it
-	else:
-		inv.remove_at(selected, 1)
+	G.net.request_place(p, id, selected)  # shown now; the server confirms or undoes it
 	G.sfx.play("place", -4.0)
 	swing = 1.0
 	if id == Blocks.WORKBENCH and not hints.has("bench"):

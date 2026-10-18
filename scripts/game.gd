@@ -10,13 +10,13 @@ var time := 7.0
 var seed_v := 0
 var kills := 0
 var horde_active := false
+## Client: the server's clock is stopped (nobody playing, or our solo game is paused).
+var clock_stopped := false
 var was_night := false
 var warned := {}
 var spawn_timer := 2.0
 var animal_timer := 1.0
 var spawn_pos := Vector3.ZERO
-## Natural zombie/animal spawning. The benchmark turns it off to control the mob count itself.
-var spawner_enabled := true
 ## Positions the world keeps loaded besides the local player (benchmark explorers now, remote players later).
 var extra_stream_points: Array = []
 
@@ -108,7 +108,6 @@ func _ready() -> void:
 	spawn_pos = _find_spawn()
 	if G.mode == "client":
 		spawn_pos = G.session["pos"]
-		spawner_enabled = false
 		day = int(G.session["day"])
 		time = float(G.session["time"])
 		horde_active = bool(G.session["horde"])
@@ -125,9 +124,6 @@ func _ready() -> void:
 	if G.mode == "client":
 		player.spawn_point = G.session["spawn"]
 		player.set_look(float(G.session["yaw"]), -0.1)
-	if G.mode != "client":  # online, the server sends the inventory
-		player.inv.add(Items.BERRIES, 3)
-		player.inv.add(Blocks.TORCH, 2)
 
 	hud = preload("res://scripts/hud.gd").new()
 	add_child(hud)
@@ -139,10 +135,7 @@ func _ready() -> void:
 		hud.show_loading_overlay(true)
 		G.net.attach(world)
 
-	if G.has_arg("--autotest"):
-		var t := preload("res://scripts/autotest.gd").new()
-		add_child(t)
-	elif G.has_arg("--bench"):
+	if G.has_arg("--bench"):
 		var b := preload("res://scripts/bench.gd").new()
 		add_child(b)
 	elif G.has_arg("--regiontest"):
@@ -202,7 +195,6 @@ func _ready_server() -> void:
 	sim.name = "Sim"
 	add_child(sim)
 	spawn_pos = _find_spawn()
-	spawner_enabled = false  # the server has its own spawner (_server_spawner)
 	var ns := preload("res://scripts/net/net_server.gd").new()
 	ns.name = "NetServer"
 	ns.saver = saver
@@ -270,8 +262,8 @@ func _process(delta: float) -> void:
 	match state:
 		"server":
 			world.update_centers(G.net_server.player_positions())
-			# Time, spawning and the mobs stop while nobody is online.
-			if G.net_server.online_count() > 0:
+			# Time, spawning and the mobs stop while nobody is online (or a solo game is paused).
+			if not G.net_server.world_paused:
 				_tick_time(delta)
 				if not G.has_arg("--no-spawns"):
 					_server_spawner(delta)
@@ -296,7 +288,6 @@ func _process(delta: float) -> void:
 		"playing", "menu", "chat":
 			world.update_centers(_stream_points())
 			_tick_time(delta)
-			_spawner(delta)
 		"paused", "reconnecting":
 			# Online, the pause menu doesn't stop the world.
 			world.update_centers(_stream_points())
@@ -392,24 +383,18 @@ func _unhandled_input(event: InputEvent) -> void:
 				else:
 					DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 			KEY_F6:
-				if state == "playing":
-					if G.mode == "client":
-						G.net.send_chat("/dusk")
-					else:
-						skip_time(false)
+				if state == "playing" and G.mode == "client":
+					G.net.send_chat("/dusk")  # admins only (in Play solo you are one)
 			KEY_F7:
-				if state == "playing":
-					if G.mode == "client":
-						G.net.send_chat("/bloodmoon")
-					else:
-						skip_time(true)
+				if state == "playing" and G.mode == "client":
+					G.net.send_chat("/bloodmoon")
 	elif event is InputEventMouseButton and event.pressed:
 		if state == "playing" and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and state == "playing" and G.mode != "client":
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and state == "playing" and (G.mode != "client" or G.solo):
 		pause()
 
 
@@ -421,17 +406,22 @@ func start_game() -> void:
 	state = "playing"
 	hud.hide_title()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	if G.mode == "client":
+	if G.solo and day == 1 and time < 7.5:
+		hud.msg("Day 1. Gather wood, craft tools, and build shelter before 20:00.", Color(1, 1, 0.8))
+		hud.msg("Hold left click on a tree to collect logs.", Color(0.7, 1, 0.7))
+	elif G.solo:
+		hud.msg("Welcome back. Day %d, %02d:%02d." % [day, int(time), int((time - int(time)) * 60.0)], Color(1, 1, 0.8))
+	elif G.mode == "client":
 		hud.msg("Joined %s. Press T to chat, Esc for the player list." % G.net.host, Color(0.8, 1, 0.8))
-		return
-	hud.msg("Day 1. Gather wood, craft tools, and build shelter before 20:00.", Color(1, 1, 0.8))
-	hud.msg("Hold left click on a tree to collect logs.", Color(0.7, 1, 0.7))
 
 
 func pause() -> void:
 	state = "paused"
-	# Online the world keeps running for everyone, so only the menu opens.
-	if G.mode != "client":
+	# Online the world keeps running for everyone, so only the menu opens; Play solo's server
+	# stops its world.
+	if G.solo:
+		G.net.send_pause(true)
+	elif G.mode != "client":
 		get_tree().paused = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	hud.show_pause(true)
@@ -440,6 +430,8 @@ func pause() -> void:
 func resume() -> void:
 	state = "playing"
 	get_tree().paused = false
+	if G.solo:
+		G.net.send_pause(false)
 	hud.show_pause(false)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -581,6 +573,8 @@ func horde_text() -> String:
 
 
 func _tick_time(delta: float) -> void:
+	if G.mode == "client" and clock_stopped:
+		return
 	var prev := time
 	time += delta * 24.0 / (day_minutes * 60.0)
 	if time >= 24.0:
@@ -698,39 +692,7 @@ func _update_sky() -> void:
 
 # ------------------------------------------------------------ spawning
 
-func _spawner(delta: float) -> void:
-	if player.dead or not spawner_enabled:
-		return
-	spawn_timer -= delta
-	animal_timer -= delta
-	var zs := get_tree().get_nodes_in_group("zombies")
-	for z in zs:
-		if z.global_position.distance_to(player.global_position) > 72.0:
-			z.queue_free()
-	var night := is_night()
-	var cap := 2
-	var interval := 9.0
-	if horde_active:
-		cap = 22 + mini(day, 28)
-		interval = 1.0
-	elif night:
-		cap = mini(5 + day, 16)
-		interval = 3.0
-	if spawn_timer <= 0.0:
-		spawn_timer = interval
-		if zs.size() < cap:
-			var kind := "horde" if horde_active else ("night" if night else "day")
-			spawn_zombie(kind)
-	if animal_timer <= 0.0:
-		animal_timer = 6.0
-		if not night and get_tree().get_nodes_in_group("animals").size() < 6:
-			_spawn_animal()
-	for a in get_tree().get_nodes_in_group("animals"):
-		if a.global_position.distance_to(player.global_position) > 80.0:
-			a.queue_free()
-
-
-## Server: the solo spawner's rules around every player who is online and alive, with at most
+## Server: the spawning rules around every player who is online and alive, with at most
 ## MAX_ZOMBIES zombies in the whole world.
 const MAX_ZOMBIES := 120
 

@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 4
+const PROTOCOL := 5
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -54,6 +54,7 @@ const C_EAT := 37        # seq, slot u8
 const C_ATTACK := 38     # seq, mob id u16, slot u8 (the weapon)
 const C_FALL := 39       # damage u8 from a fall (movement is the client's)
 const C_RESPAWN := 40    # after dying
+const C_PAUSE := 41      # paused u8: the pause menu is open (a solo game's server stops its world)
 
 # Player record flags
 const F_SPRINT := 1

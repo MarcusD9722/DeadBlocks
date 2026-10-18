@@ -1,46 +1,50 @@
-extends Node
-## Automated playtest used during development: `-- --autotest [--shots=DIR]`
-
-var shots_dir := ""
-var fails := 0
+extends "res://scripts/tests/nettest.gd"
+## Automated playtest: `-- --autotest [--seed=4242] [--shots=DIR]`.
+## Presses Play solo (a new world called "autotest", so the player's own solo world is left
+## alone) and plays it through the real client against the game's own local server: mining,
+## crafting at a workbench, a pickaxe, eating, a horde breaking a wall, fighting, death and
+## respawn, a Blood Moon and its dawn, boars, the pause menu stopping the world, and quitting
+## and continuing with everything still there.
+## Prints AUTOTEST PASS/FAIL lines and ends with `AUTOTEST DONE fails=N`.
 
 
 func _ready() -> void:
-	process_mode = Node.PROCESS_MODE_ALWAYS
-	shots_dir = G.arg_value("--shots=")
-	_run()
+	tag = "AUTOTEST"
+	role = "autotest"
+	super()
 
 
-func _wait(s: float) -> void:
-	await get_tree().create_timer(s, true, false, true).timeout
-
-
-func _shot(name: String) -> void:
-	if shots_dir == "" or DisplayServer.get_name() == "headless":
+func _run() -> void:
+	var t0 := Time.get_ticks_msec()
+	check(await _until(func(): return G.game != null and is_instance_valid(G.game) and G.hud != null, 60.0), "the title screen is up")
+	await _wait(1.0)
+	await _shot("00_title")
+	var err: String = await G.play_solo(true, "autotest")
+	check(err == "", "Play solo started its server (%s)" % err)
+	if not await _until(_playing, 120.0):
+		check(false, "the solo game started (%s)" % ", ".join(_errors))
+		await _finish()
 		return
-	await RenderingServer.frame_post_draw
-	var img := get_viewport().get_texture().get_image()
-	img.save_png(shots_dir + "/" + name + ".png")
-	print("SHOT ", name)
+	print("LOAD_SECONDS %.1f seed=%d" % [(Time.get_ticks_msec() - t0) / 1000.0, G.game.seed_v])
+	check(G.solo and G.mode == "client", "Play solo runs on its own server")
+	await _play()
+	await _continue_later()
+	print("FPS ", Engine.get_frames_per_second())
+	await _finish()
 
 
-func check(cond: bool, what: String) -> void:
-	if cond:
-		print("PASS ", what)
-	else:
-		fails += 1
-		print("FAIL ", what)
-
-
-func _find_block(id: int, radius: int) -> Vector3i:
+## Find the nearest block `id` within `radius` of the player whose middle is within `reach` of
+## the camera (the server only lets us mine what we can reach).
+func _find_block(id: int, radius: int, reach := 1e9) -> Vector3i:
 	var c: Vector3 = G.player.global_position
+	var eye: Vector3 = G.player.cam.global_position
 	var best := Vector3i(0, -999, 0)
 	var bd := 1e9
 	for y in range(-6, 12):
 		for z in range(-radius, radius + 1):
 			for x in range(-radius, radius + 1):
 				var p := Vector3i(floori(c.x) + x, floori(c.y) + y, floori(c.z) + z)
-				if G.world.get_blockv(p) == id:
+				if G.world.get_blockv(p) == id and (Vector3(p) + Vector3(0.5, 0.5, 0.5)).distance_to(eye) < reach:
 					var d := Vector3(p).distance_to(c)
 					if d < bd:
 						bd = d
@@ -48,216 +52,242 @@ func _find_block(id: int, radius: int) -> Vector3i:
 	return best
 
 
-func _run() -> void:
+func _play() -> void:
 	var g = G.game
 	var p = G.player
 	var w = G.world
-	var t0 := Time.get_ticks_msec()
-	while g.state == "loading":
-		await _wait(0.25)
-	print("LOAD_SECONDS ", (Time.get_ticks_msec() - t0) / 1000.0, " chunks=", w.chunks.size(), " seed=", g.seed_v)
-	await _shot("00_title")
-	g.start_game()
-	await _wait(2.0)
-	check(p.is_on_floor(), "player standing on ground at spawn " + str(p.global_position))
-	var spawn: Vector3 = p.global_position
-
-	# Count what the generator produced near spawn
-	var counts := {}
-	var cpos := Vector3i(floori(spawn.x), 0, floori(spawn.z))
-	for y in 64:
-		for z in range(-24, 24):
-			for x in range(-24, 24):
-				var b: int = w.get_block(cpos.x + x, y, cpos.z + z)
-				counts[b] = counts.get(b, 0) + 1
-	var names := []
-	for k in counts:
-		names.append("%s=%d" % [Blocks.NAMES[k], counts[k]])
-	print("BLOCK_COUNTS ", ", ".join(names))
-
+	check(await _until(func(): return p.is_on_floor(), 15.0), "standing on ground at spawn %s" % str(p.global_position))
+	check(await _until(func(): return _count(Items.BERRIES) == 3 and _count(Blocks.TORCH) == 2, 10.0), "the server gave the starter kit")
 	p.set_look(0.6, -0.12)
 	await _wait(0.6)
 	await _shot("01_day_view")
-	p.set_look(2.6, -0.05)
-	await _wait(0.4)
-	await _shot("02_day_view_b")
 
-	# Mining a log by hand
-	var log_p := _find_block(Blocks.LOG, 20)
+	# A log by hand: walk to the nearest tree first.
+	var log_p := _find_block(Blocks.LOG, 24)
 	check(log_p.y > -900, "found a tree near spawn")
 	if log_p.y > -900:
-		p.break_block(log_p, Blocks.LOG)
-		await _wait(0.3)
-		check(w.get_blockv(log_p) == 0, "log removed from world")
-		check(p.inv.count(Blocks.LOG) == 1, "log added to inventory")
+		await _walk_to(Vector3(log_p) + Vector3(0.5, 0, 0.5), 2.5, 20.0)
+		await _until(func(): return p.is_on_floor(), 5.0)
+		log_p = _find_block(Blocks.LOG, 6, 5.5)
+		check(log_p.y > -900, "a log within reach")
+		if log_p.y > -900:
+			_look_at(Vector3(log_p) + Vector3(0.5, 0.5, 0.5))
+			p.break_block(log_p, Blocks.LOG)
+			check(await _until(func(): return _server_count(Blocks.LOG) == 1, 5.0), "a log in the server's copy of our inventory")
+			check(w.get_blockv(log_p) == Blocks.AIR, "the log is gone")
 
-	# Crafting chain
-	p.inv.add(Blocks.LOG, 5)
-	var st: Array = g.nearby_stations()
-	for r in Crafting.RECIPES:
-		if int(r["out"]) == Blocks.PLANKS:
-			Crafting.craft(p.inv, r)
-			Crafting.craft(p.inv, r)
-			Crafting.craft(p.inv, r)
-		if int(r["out"]) == Items.STICK:
-			Crafting.craft(p.inv, r)
-	check(p.inv.count(Blocks.PLANKS) == 10, "crafted planks (have %d)" % p.inv.count(Blocks.PLANKS))
-	check(p.inv.count(Items.STICK) == 4, "crafted sticks")
-	var bench_r: Dictionary = {}
-	var pick_r: Dictionary = {}
-	for r in Crafting.RECIPES:
-		if int(r["out"]) == Blocks.WORKBENCH:
-			bench_r = r
-		if int(r["out"]) == Items.WOOD_PICK:
-			pick_r = r
-	check(not Crafting.can_craft(p.inv, pick_r, st), "pickaxe needs a workbench")
-	check(Crafting.craft(p.inv, bench_r), "crafted workbench")
-
-	# Place the workbench by aiming at the ground in front
-	p.inv.swap(0, _slot_of(p.inv, Blocks.WORKBENCH))
-	p.select(0)
+	# Crafting: planks and sticks, nothing without a workbench, then a pickaxe at one.
+	G.net.send_chat("/give log 5")
+	check(await _until(func(): return _count(Blocks.LOG) >= 6, 10.0), "/give works in solo (we're the admin)")
+	G.net.request_craft(_recipe(Blocks.PLANKS), 3)
+	G.net.request_craft(_recipe(Items.STICK), 1)
+	check(await _until(func(): return _count(Blocks.PLANKS) == 10 and _count(Items.STICK) == 4, 5.0),
+		"crafted planks and sticks (%d planks, %d sticks)" % [_count(Blocks.PLANKS), _count(Items.STICK)])
+	G.net.request_craft(_recipe(Items.WOOD_PICK), 1)
+	await _wait(1.0)
+	check(_count(Items.WOOD_PICK) == 0, "no pickaxe without a workbench")
+	G.net.request_craft(_recipe(Blocks.WORKBENCH), 1)
+	check(await _until(func(): return _count(Blocks.WORKBENCH) == 1, 5.0), "crafted a workbench")
+	await _hold(Blocks.WORKBENCH)
 	p.set_look(0.0, -1.1)
 	await _wait(0.3)
 	p._update_target()
-	check(p.target.get("hit", false), "aiming at ground")
-	var placed: bool = p.place(Blocks.WORKBENCH)
-	check(placed, "placed workbench")
-	await _wait(0.3)
-	st = g.nearby_stations()
-	check(st.has("workbench"), "workbench detected nearby")
-	check(Crafting.craft(p.inv, pick_r), "crafted wooden pickaxe with bench")
+	check(p.target.get("hit", false), "aiming at the ground")
+	var bench_at := Vector3i(0, -1, 0)
+	if p.target.get("hit", false):
+		bench_at = p.target["pos"] + p.target["normal"]
+	check(p.place(Blocks.WORKBENCH), "placed the workbench")
+	check(await _until(func(): return _server_count(Blocks.WORKBENCH) == 0 and w.get_blockv(bench_at) == Blocks.WORKBENCH, 5.0), "the server placed it")
+	check(g.nearby_stations().has("workbench"), "the workbench counts as nearby")
+	G.net.request_craft(_recipe(Items.WOOD_PICK), 1)
+	check(await _until(func(): return _count(Items.WOOD_PICK) == 1, 5.0), "crafted a wooden pickaxe at the workbench")
 
-	# Mine stone with the pickaxe
-	var stone_p := _find_block(Blocks.STONE, 10)
+	# Stone with the pickaxe gives cobblestone.
+	var stone_p := _find_block(Blocks.STONE, 6, 6.3)
+	if stone_p.y < -900:
+		# Dig a shaft beside us down to the stone under the dirt.
+		await _hold(Items.WOOD_PICK)
+		var col := _base() + Vector3i(1, 0, 0)
+		for i in range(1, 8):
+			var b := col + Vector3i(0, -i, 0)
+			var id: int = w.get_blockv(b)
+			if id == Blocks.STONE:
+				break
+			if id != Blocks.AIR:
+				_look_at(Vector3(b) + Vector3(0.5, 0.5, 0.5))
+				p.break_block(b, id)
+				await _wait(p._break_time(id) + 0.4)
+		stone_p = _find_block(Blocks.STONE, 6, 6.3)
+		if stone_p.y < -900:
+			print("AUTOTEST no stone: we stand at %s, the shaft at %s holds %s" % [p.global_position, col,
+				range(0, 9).map(func(i): return Blocks.NAMES[w.get_blockv(col + Vector3i(0, -i, 0))])])
+	check(stone_p.y > -900, "stone within reach")
 	if stone_p.y > -900:
-		p.select(_slot_of(p.inv, Items.WOOD_PICK))
-		check(p._break_time(Blocks.STONE) < 3.0, "pickaxe mines stone faster (%.2fs)" % p._break_time(Blocks.STONE))
+		await _hold(Items.WOOD_PICK)
+		check(p._break_time(Blocks.STONE) < 3.0, "the pickaxe mines stone faster (%.2f s)" % p._break_time(Blocks.STONE))
+		await _wait(p._break_time(Blocks.STONE) + 0.5)
+		_look_at(Vector3(stone_p) + Vector3(0.5, 0.5, 0.5))
 		p.break_block(stone_p, Blocks.STONE)
-		check(p.inv.count(Blocks.COBBLE) == 1, "stone drops cobblestone")
+		check(await _until(func(): return _count(Blocks.COBBLE) == 1, 5.0), "stone drops cobblestone")
 
-	# Eating
-	p.food = 50.0
-	p.select(_slot_of(p.inv, Items.BERRIES))
+	# Eating: health and food are the server's, so first a fall to have something to heal.
+	p.global_position += Vector3(0, 10, 0)
+	check(await _until(func(): return p.health < 90.0, 8.0), "a fall hurts (health %.0f)" % p.health)
+	await _until(func(): return p.is_on_floor(), 5.0)
+	var hp_low: float = p.health
+	await _hold(Items.BERRIES)
 	p.consume(Items.BERRIES)
-	check(absf(p.food - 60.0) < 0.5, "eating berries restores food")
-
-	# Inventory screen
+	check(await _until(func(): return p.health > hp_low and _count(Items.BERRIES) == 2, 5.0), "ate berries (health %.0f -> %.0f)" % [hp_low, p.health])
 	g.open_inventory()
 	await _wait(0.5)
-	await _shot("03_inventory")
+	await _shot("02_inventory")
 	g.close_inventory()
 
-	# Zombie wall test: wall of cobble between player and zombie
-	var fwd := Vector3(0, 0, -1)
-	p.set_look(0.0, -0.05)
-	var base: Vector3 = p.global_position
-	var fy := floori(base.y)
-	var wall := []
-	for dx in range(-2, 3):
-		for dy in range(0, 2):
-			var wp := Vector3i(floori(base.x) + dx, fy + dy, floori(base.z) - 3)
-			w.set_block(wp, Blocks.PLANKS)
-			wall.append(wp)
-	await _wait(0.5)
-	var zp := Vector3(floori(base.x) + 0.5, fy + 0.1, floori(base.z) - 6.5)
-	for dy in range(0, 3):
-		w.set_block(Vector3i(floori(zp.x), fy + dy, floori(zp.z)), 0)
-		w.set_block(Vector3i(floori(zp.x), fy + dy, floori(zp.z) + 1), 0)
-		w.set_block(Vector3i(floori(zp.x), fy + dy, floori(zp.z) + 2), 0)
-	w.set_block(Vector3i(floori(zp.x), fy - 1, floori(zp.z)), Blocks.DIRT)
-	w.set_block(Vector3i(floori(zp.x), fy - 1, floori(zp.z) + 1), Blocks.DIRT)
-	w.set_block(Vector3i(floori(zp.x), fy - 1, floori(zp.z) + 2), Blocks.DIRT)
-	await _wait(0.4)
-	var z = g.spawn_zombie("night", zp)
-	check(z != null, "spawned test zombie")
-	g.time = 21.0
-	g.was_night = true
-	g._update_sky()
-	p.flashlight.visible = true
-	var hp0: float = p.health
+	# The pause menu stops the world (only in solo).
+	g.pause()
+	check(await _until(func(): return g.clock_stopped, 3.0), "the pause menu stops the clock")
+	var t_paused: float = g.time
 	await _wait(3.0)
-	await _shot("04_night_zombie_at_wall")
-	var damaged := false
-	for wp in wall:
-		if w.damage.has(wp) or w.get_blockv(wp) == 0:
-			damaged = true
-	check(damaged, "zombie damaged the wall")
-	await _wait(8.0)
-	var broke := false
-	for wp in wall:
-		if w.get_blockv(wp) == 0:
-			broke = true
-	check(broke, "zombie broke through a wall block")
-	for i in 6:
-		if is_instance_valid(z):
-			print("  t+%d zombie=%s player=%s hp=%.0f blocked_cells=%s" % [i, str(z.global_position), str(p.global_position), p.health, str(wall.map(func(q): return w.get_blockv(q)))])
-		await _wait(1.0)
-	check(p.health < hp0, "zombie reached and hurt the player (hp %.0f)" % p.health)
-	if is_instance_valid(z):
-		var zhp: float = z.hp
-		p.attack(z)
-		check(z.hp < zhp or z.dead, "player can hit zombie")
-	await _shot("05_zombie_close")
-	# Lights and defenses at night
-	var here := Vector3i(floori(p.global_position.x), floori(p.global_position.y), floori(p.global_position.z))
-	w.set_block(here + Vector3i(-2, 0, 1), Blocks.TORCH)
-	w.set_block(here + Vector3i(2, 0, 1), Blocks.CAMPFIRE)
-	w.set_block(here + Vector3i(0, 0, 3), Blocks.SPIKES)
-	w.set_block(here + Vector3i(1, 0, 3), Blocks.SPIKES)
-	p.flashlight.visible = false
-	p.set_look(PI, -0.35)
-	await _wait(1.0)
-	await _shot("05b_torch_campfire_spikes")
-	p.flashlight.visible = true
+	check(is_equal_approx(g.time, t_paused), "time stands still while paused (%.4f, %.4f)" % [t_paused, g.time])
+	await _shot("03_paused")
+	g.resume()
+	check(await _until(func(): return not g.clock_stopped and g.time > t_paused, 8.0), "time runs again after Resume")
 
-	# Blood moon
-	p.health = 100.0
-	g.skip_time(true)
-	await _wait(5.0)
-	check(g.horde_active, "blood moon started on day %d" % g.day)
-	await _wait(6.0)
-	var zc := get_tree().get_nodes_in_group("zombies").size()
-	check(zc >= 4, "horde zombies spawning (%d)" % zc)
+	# Boars: hunt one for meat (in daylight, before any zombies are about).
+	var boars0: Array = _mob_ids([Proto.MOB_BOAR])
+	G.net.send_chat("/spawn boar 3")
+	check(await _until(func(): return _mob_ids([Proto.MOB_BOAR]).size() > boars0.size(), 10.0), "boars appear")
+	var boars := _mob_ids([Proto.MOB_BOAR])
+	boars.sort_custom(func(a, b): return _mob_dist(a) < _mob_dist(b))
+	if not boars.is_empty():
+		var meat0 := _count(Items.RAW_MEAT)
+		G.net.send_chat("/give stone_sword")
+		await _until(func(): return _count(Items.STONE_SWORD) == 1, 10.0)
+		await _hold(Items.STONE_SWORD)
+		check(await _hunt(boars[0], 40.0), "hunted down a boar")
+		check(await _until(func(): return _count(Items.RAW_MEAT) > meat0, 5.0), "the boar drops raw meat")
+		await _shot("07_boar")
+
+	# Night: wall ourselves in with dirt; a horde breaks in, hurts us, and we fight back.
+	G.net.send_chat("/give dirt 40")
+	check(await _until(func(): return _count(Blocks.DIRT) >= 40 and _count(Items.STONE_SWORD) == 1, 10.0), "/give dirt (and we have the sword)")
+	G.net.send_chat("/dusk")
+	check(await _until(func(): return g.time >= 19.9, 10.0), "F6 / /dusk skips to the evening (%.2f)" % g.time)
+	await _until(func(): return p.is_on_floor(), 5.0)
+	p.global_position = Vector3(floori(p.global_position.x) + 0.5, p.global_position.y, floori(p.global_position.z) + 0.5)
+	p.velocity = Vector3.ZERO
+	await _wait(0.5)
+	await _until(func(): return p.is_on_floor(), 5.0)
+	var ring: Array = await _wall_in()
+	var solid := func(): return ring.filter(func(b): return w.get_blockv(b) != Blocks.AIR)
+	check(solid.call().size() >= 14, "walled ourselves in (%d of 16 solid)" % solid.call().size())
+	var walled: Array = solid.call()
+	var before: Array = G.net.mobs.keys()
+	G.net.send_chat("/spawn horde 4")
+	check(await _until(func(): return _mob_ids([Proto.MOB_HORDE]).size() >= 3, 10.0), "a horde appears")
+	await _wait(2.0)
+	await _shot("04_night_horde")
+	check(await _until(func(): return int(G.net.bytes_in.get(Proto.S_CRACKS, 0)) > 0, 75.0), "the horde cracks blocks")
+	var hp0: float = p.health
+	check(await _until(func(): return walled.any(func(b): return w.get_blockv(b) == Blocks.AIR) or p.health < hp0, 90.0),
+		"the horde breaks through (or reaches us)")
+	check(await _until(func(): return p.health < hp0 or p.dead, 60.0), "a zombie hurts us (health %.0f)" % p.health)
+	if not p.dead:
+		await _hold(Items.STONE_SWORD)
+		var near := _mob_ids([Proto.MOB_HORDE]).filter(func(id): return not before.has(id))
+		near.sort_custom(func(a, b): return _mob_dist(a) < _mob_dist(b))
+		var kills0: int = g.kills
+		if not near.is_empty():
+			check(await _fight(near[0], 20.0), "killed a horde zombie")
+			check(await _until(func(): return g.kills > kills0, 5.0), "the kill is counted (%d)" % g.kills)
+	# Dying and respawning: a 40 m fall always kills.
+	if not p.dead:
+		p.global_position += Vector3(0, 40, 0)
+	check(await _until(func(): return p.dead, 15.0), "died (health %.0f)" % p.health)
+	check(g.state == "dead", "the death screen shows")
+	await _shot("05_dead")
+	await _wait(1.0)
+	g.respawn()
+	check(await _until(func(): return not p.dead and p.health >= 99.0 and g.state == "playing", 10.0), "respawned with full health")
+
+	# Blood Moon, then dawn.
+	G.net.send_chat("/bloodmoon")
+	check(await _until(func(): return g.horde_active, 20.0), "F7 / /bloodmoon: the Blood Moon starts (day %d)" % g.day)
+	check(await _until(func(): return _mob_ids([Proto.MOB_HORDE]).size() >= 4, 25.0), "the horde comes (%d)" % _mob_ids([Proto.MOB_HORDE]).size())
 	p.set_look(PI, -0.05)
 	await _wait(0.3)
 	await _shot("06_blood_moon")
-
-	# Dawn
-	print("  state before dawn: ", g.state, " player dead=", p.dead)
 	if p.dead:
 		g.respawn()
-	g.time = 5.98
-	await _wait(2.0)
-	check(not g.horde_active, "horde ends at dawn")
-	g.time = 9.0
-	g._update_sky()
-	p.flashlight.visible = false
-	await _wait(0.5)
+		await _until(func(): return g.state == "playing", 10.0)
+	G.net.send_chat("/time 5.98")
+	check(await _until(func(): return not g.horde_active, 20.0), "the horde ends at dawn")
 
-	# Animals
-	for i in 6:
-		g._spawn_animal()
+## Chase mob `id` and hit it until it dies (a boar runs away once it is hit).
+func _hunt(id: int, secs: float) -> bool:
+	var p = G.player
+	var t0 := Time.get_ticks_msec()
+	var ok := false
+	while Time.get_ticks_msec() - t0 < secs * 1000.0:
+		if not G.net.mobs.has(id):
+			break  # gone without dying: it got away
+		if int(G.net.mobs[id]["samples"].back()[4]) & Proto.MF_DEAD:
+			ok = true
+			break
+		var s: Dictionary = G.net.mob_sample(id)
+		if not s.is_empty():
+			var d: Vector3 = s["pos"] - p.global_position
+			var far := Vector2(d.x, d.z).length() > 2.2
+			for a in ["move_forward", "sprint"]:
+				if far:
+					Input.action_press(a)
+				else:
+					Input.action_release(a)
+			if far and p.is_on_floor() and p.get_real_velocity().length() < 1.0:
+				Input.action_press("jump")
+			else:
+				Input.action_release("jump")
+			_look_at(s["pos"] + Vector3(0, 0.5, 0))
+			if _mob_dist(id) < 3.4:
+				p.attack_cd = 0.0
+				G.net.request_attack(id, p.selected)
+		await _wait(0.35)
+	for a in ["move_forward", "sprint", "jump"]:
+		Input.action_release(a)
+	return ok
+
+
+## Save and quit to the title, then Play solo again: the same world continues.
+func _continue_later() -> void:
+	var g = G.game
+	var game_id: int = g.get_instance_id()
+	var p = G.player
+	if p.dead:
+		await _wait(1.0)
+		g.respawn()
+		await _until(func(): return g.state == "playing", 10.0)
+	var pos: Vector3 = p.global_position
+	var picks := _count(Items.WOOD_PICK)
+	var day: int = g.day
+	await _until(func(): return p.is_on_floor(), 5.0)
+	pos = p.global_position
+	await _wait(0.5)  # our last position reaches the server
+	G.end_client_session("Your world is saved.")
+	check(await _until(func(): return G.mode == "solo" and is_instance_valid(G.game) and G.game.get_instance_id() != game_id and G.hud != null, 20.0),
+		"Save and Quit goes back to the title")
+	check(G.host_pid == 0, "the solo server stopped")
+	var info: Dictionary = G.world_info("autotest")
+	check(int(info.get("day", 0)) == day, "the title knows the saved world (day %s)" % info.get("day", "?"))
+	var err: String = await G.play_solo(false, "autotest")
+	check(err == "", "Play solo again (%s)" % err)
+	# A zombie left over from the night may have killed us just before we quit: then we come
+	# back to the death screen, still in the same place.
+	var back := func(): return G.net.is_online() and is_instance_valid(G.game) and G.game.state in ["playing", "dead"] and G.player != null
+	if not await _until(back, 120.0):
+		check(false, "the solo game started again (%s)" % ", ".join(_errors))
+		return
+	p = G.player
+	check(G.game.day == day, "the same day (%d)" % G.game.day)
+	check(p.global_position.distance_to(pos) < 1.5, "back where we left (off by %.2f m)" % p.global_position.distance_to(pos))
+	check(await _until(func(): return _count(Items.WOOD_PICK) == picks and _count(Items.STONE_SWORD) == 1, 10.0), "the same things in the inventory")
 	await _wait(1.0)
-	var an := get_tree().get_nodes_in_group("animals")
-	check(an.size() > 0, "animals spawn (%d)" % an.size())
-	if an.size() > 0:
-		var a = an[0]
-		var meat0: int = p.inv.count(Items.RAW_MEAT)
-		a.hurt(25.0, p.global_position, p)
-		await _wait(1.2)
-		check(p.inv.count(Items.RAW_MEAT) > meat0, "boar drops raw meat")
-		p.global_position = an[min(1, an.size() - 1)].global_position + Vector3(0, 0, 3)
-		p.look_at_mob(an[min(1, an.size() - 1)])
-		await _wait(0.6)
-		await _shot("07_boar")
-
-	print("FPS ", Engine.get_frames_per_second())
-	print("AUTOTEST DONE fails=", fails)
-	get_tree().quit()
-
-
-func _slot_of(inv: Inventory, id: int) -> int:
-	for i in Inventory.SIZE:
-		if inv.id_at(i) == id:
-			return i
-	return 0

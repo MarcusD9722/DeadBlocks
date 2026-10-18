@@ -160,7 +160,6 @@ func _run() -> void:
 	while g.state == "loading":
 		await _wait(0.25)
 	g.start_game()
-	g.spawner_enabled = false
 	g.player.max_health = 1000000.0
 	_clear_mobs()
 	var r := G.arg_value("--radius=")

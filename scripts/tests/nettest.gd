@@ -10,7 +10,7 @@ extends Node
 ##                position (where this name last left the server)
 ##   hold         join and stay online until killed (crash and full-server tests)
 ##   reject:TEXT  expect the server to refuse the login with a reason containing TEXT
-##   screens      no --connect: screenshot the title, Join and Host screens (with --shots=DIR)
+##   screens      no --connect: screenshot the title, Join, Host and Play solo screens (with --shots=DIR)
 ##   host         no --connect: press "Host game" (port from --nettest-port=), check we're in
 ##                and the admin, then quit; the script checks the background server stopped too.
 ##                With --nettest-crash, stay until killed (the server must then stop by itself).
@@ -37,6 +37,8 @@ extends Node
 ##                the server's
 
 var role := ""
+## Printed in front of every result line (autotest.gd, built on this, prints AUTOTEST).
+var tag := "NETTEST"
 var fails := 0
 var _errors: Array = []      # error statuses from NetClient
 var _chats: Array = []       # [from, text]
@@ -46,7 +48,8 @@ var _done := false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	role = G.arg_value("--nettest=")
+	if role == "":
+		role = G.arg_value("--nettest=")
 	G.net.status.connect(_on_status)
 	G.net.chat.connect(func(from: String, text: String): _chats.append([from, text]))
 	G.net.notice.connect(_on_notice)
@@ -56,7 +59,9 @@ func _ready() -> void:
 	elif role == "soak" or role == "horde" or role == "crasher":
 		limit = 120.0 + float(G.arg_value("--nettest-soak="))
 	elif role == "fighter" or role == "zwatch":
-		limit = 240.0
+		limit = 360.0
+	elif role == "autotest":
+		limit = 600.0
 	get_tree().create_timer(limit, true, false, true).timeout.connect(_on_timeout)
 	_run.call_deferred()
 
@@ -74,10 +79,10 @@ func _on_notice(text: String, _col: Color) -> void:
 
 func check(cond: bool, what: String) -> void:
 	if cond:
-		print("NETTEST PASS ", what)
+		print("%s PASS %s" % [tag, what])
 	else:
 		fails += 1
-		print("NETTEST FAIL ", what)
+		print("%s FAIL %s" % [tag, what])
 
 
 ## With --shots=DIR and a real display: save a screenshot.
@@ -181,7 +186,7 @@ func _finish() -> void:
 	if _done:
 		return
 	_done = true
-	print("NETTEST DONE fails=%d" % fails)
+	print("%s DONE fails=%d" % [tag, fails])
 	G.net.leave()
 	await _wait(0.3)
 	get_tree().quit(0 if fails == 0 else 1)
@@ -339,6 +344,9 @@ func _run_screens() -> void:
 	h._show_panel(h.host_panel)
 	await _wait(0.3)
 	await _shot("4_host")
+	h._show_panel(h.solo_panel)
+	await _wait(0.3)
+	await _shot("5_solo")
 
 
 func _run_host() -> void:
@@ -404,6 +412,20 @@ func _select(id: int) -> int:
 		if G.player.inv.id_at(i) == id:
 			G.player.select(i)
 			return i
+	return -1
+
+
+## Hold `id` in the hand: select it in the hotbar, or (a full hotbar puts new things in the
+## backpack) swap it into the selected slot first, as a player would. The selected slot, or -1.
+func _hold(id: int) -> int:
+	if _select(id) >= 0:
+		return G.player.selected
+	for i in range(9, Inventory.SIZE):
+		if G.player.inv.id_at(i) == id:
+			var slot: int = G.player.selected
+			G.net.request_swap(i, slot)
+			await _until(func(): return G.net.inv_slots[slot] != null and int(G.net.inv_slots[slot]["id"]) == id, 5.0)
+			return slot
 	return -1
 
 
@@ -778,7 +800,8 @@ func _run_fighter() -> void:
 	G.net.send_chat("/spawn horde 4")
 	check(await _until(func(): return _mob_ids([Proto.MOB_HORDE]).size() >= 3, 10.0), "a horde appears")
 	# Zombies that spawned behind a cliff dig their way over; any digging shows as cracks too.
-	check(await _until(func(): return int(G.net.bytes_in.get(Proto.S_CRACKS, 0)) > 0, 75.0), "the horde cracks blocks")
+	# (Up to 150 s: the arm64 server under qemu runs well behind real time.)
+	check(await _until(func(): return int(G.net.bytes_in.get(Proto.S_CRACKS, 0)) > 0, 150.0), "the horde cracks blocks")
 	# Dying: a 40 m fall always kills (the horde might take a while to dig in).
 	if not p.dead:
 		p.global_position += Vector3(0, 40, 0)
@@ -799,7 +822,7 @@ func _run_fighter() -> void:
 func _wall_in() -> Array:
 	var p = G.player
 	var c := _base()
-	_select(Blocks.DIRT)
+	await _hold(Blocks.DIRT)
 	var ring := []
 	for dy in [0, 1]:
 		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1), Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
@@ -837,7 +860,7 @@ func _run_zwatch() -> void:
 	check(await _until(func(): return G.net.mobs.has(zid), 5.0), "we see the same zombie (id %d)" % zid)
 	check(await _until(func(): return _chat_from(other, "NT zdone") != "", 60.0), "the fighter killed it")
 	check(await _until(func(): return not G.net.mobs.has(zid), 5.0), "it's gone for us too")
-	check(await _until(func(): return _chat_from(other, "NT fdone") != "", 150.0), "the fighter finished")
+	check(await _until(func(): return _chat_from(other, "NT fdone") != "", 240.0), "the fighter finished")
 
 
 func _run_horde() -> void:

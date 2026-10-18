@@ -1,6 +1,6 @@
 # M1 plan: multiplayer foundation
 
-Status: **approved by the owner; M1.1 to M1.6 done.** Merged from three independent drafts (simplest-first, performance-first, risk-first), each of which prototyped and measured parts of this in a scratch copy. Numbers marked *measured* come from those prototypes on the 4-core 2.1 GHz cloud machine unless they say "Pi".
+Status: **approved by the owner; M1.1 to M1.7 done.** Merged from three independent drafts (simplest-first, performance-first, risk-first), each of which prototyped and measured parts of this in a scratch copy. Numbers marked *measured* come from those prototypes on the 4-core 2.1 GHz cloud machine unless they say "Pi".
 
 ## Goals
 At the end of M1:
@@ -190,7 +190,11 @@ Not done here (needs the Pi): the benchmark with 7 networked bots and the physic
 - **Done when:** here, install.sh/update.sh pass a dry run and the arm64 server under qemu serves an x86 bot. On the Pi: the service is active, survives a reboot, and LAN + internet joins work.
 - **Marcus tries:** follow docs/pi-server.md (~15 minutes), run the networked benchmark and paste the results, join from his PC and from a phone hotspot or a friend's PC.
 
-### M1.7 Solo runs on the server code
+### M1.7 Solo runs on the server code — done
+Result (0.7.0): **Play solo** opens a panel like Host game (your world continues: day, time and when it was saved, in the PC's time zone; or "Start a new world", the old one going to backups) and then starts the same background server as Host game, with `--solo --bind=127.0.0.1 --max-players=1`, a random port (another one if it is taken) and a random password, the world in `worlds/solo` of the game's data folder, the player "Player" as its admin (so F6/F7, `/give` and `/spawn` work). With `--solo`, the pause menu sends `C_PAUSE` (PROTOCOL 5) and the server stops time, mobs, spawning and hunger while every player has paused (`active_count`), and says so in `S_TIME`'s paused byte, which the client now follows (`clock_stopped`) instead of ticking its clock on. Losing focus pauses a solo game too. The pause menu in solo has "Save and Quit to Title" and no player list. The old single-player paths are gone: the in-process spawner, local drops / placing / eating / crafting / item moves / hunger, the local starter kit and F6/F7 time skips; the in-process mode stays only as the title screen's backdrop and for the benchmark and region test. Since solo worlds only started saving here, there were no M1.5 solo worlds to carry over.
+The **autotest** is rebuilt on the network test client: it presses Play solo (a new world "autotest") and plays the solo game through the real client: the starter kit, a log by hand (walking to a tree), planks and sticks, no pickaxe without a workbench, a placed workbench and a pickaxe at it, stone to cobblestone, a fall and berries, the pause menu stopping the clock, `/dusk`, walling in, a horde cracking and breaking in, hurting and being killed, death and respawn, `/bloodmoon` and its horde, dawn ending it, hunting a boar for meat, then Save and Quit to Title, Play solo again and everything (day, place, items) still there. The whole session takes about 80 s here. Test helpers it brought along: `_wall_in` builds like a player (a block under a cell over open air, a second pass for refused cells) and `_hold` swaps an item out of the backpack when the hotbar is full.
+Not measured here: frame time (this machine has no GPU); the second process costs the PC some CPU for its own terrain generation, so Marcus compares Play solo with 0.6.0 by feel.
+
 - **Work:** Play solo becomes Host game bound to 127.0.0.1 (random port and password); the old single-player code paths are removed; the autotest drives a real client against the local server.
 - **Done when:** autotest green in the new mode; solo worlds from M1.5 still load; frame time within 10% of before.
 - **Marcus tries:** Play solo feels the same as before.

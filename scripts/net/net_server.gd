@@ -9,6 +9,8 @@ extends Node
 ##
 ## Options (command line): --port=N --password=S --max-players=N --admins=Name,Name
 ##   --hosted-by=Name (Host game: stop once that player is gone) --test-log (print TIME lines)
+##   --bind=IP (listen on one address only; Play solo uses 127.0.0.1)
+##   --solo (Play solo: the world stops while the player has the pause menu open)
 
 const ServerPlayer := preload("res://scripts/server/server_player.gd")
 const SNAP_EVERY := 2       # physics ticks per snapshot: 30 / 2 = 15 Hz
@@ -33,6 +35,9 @@ var max_players := Proto.MAX_PLAYERS
 var admins: PackedStringArray = PackedStringArray()
 var hosted_by := ""
 var test_log := false
+var solo := false
+## Time, mobs and spawning are stopped (nobody online, or in solo everyone paused).
+var world_paused := true
 
 var _nonces := {}           # peer id -> nonce
 var _live := {}             # peer ids with an open connection (logging in or playing)
@@ -70,6 +75,7 @@ func start() -> bool:
 	for a in G.arg_value("--admins=").split(",", false):
 		admins.append(a.strip_edges().to_lower())
 	hosted_by = G.arg_value("--hosted-by=").to_lower()
+	solo = G.has_arg("--solo")
 	_host_seen_ms = Time.get_ticks_msec()
 	test_log = G.has_arg("--test-log")
 	_terrain = Proto.terrain_hash(G.game.seed_v)
@@ -88,6 +94,8 @@ func start() -> bool:
 	mp.peer_disconnected.connect(_on_disconnected)
 	mp.peer_authentication_failed.connect(_on_disconnected)
 	mp.peer_packet.connect(_on_packet)
+	if G.arg_value("--bind=") != "":
+		peer.set_bind_ip(G.arg_value("--bind="))
 	# Spare slots for people being refused and for half-open attempts from reconnecting players.
 	var err := peer.create_server(port, max_players + 8, Proto.CHANNELS)
 	if err != OK:
@@ -106,6 +114,35 @@ func online_count() -> int:
 		if p.is_ready:
 			n += 1
 	return n
+
+
+## Players the world runs for: online, and (solo) not in the pause menu.
+func active_count() -> int:
+	var n := 0
+	for p in players.values():
+		if p.is_ready and not (solo and p.paused):
+			n += 1
+	return n
+
+
+## Stop or restart time, mobs and spawning when the number of active players goes to or from 0.
+func _update_world_paused(who: String) -> void:
+	var stop := active_count() == 0
+	if stop == world_paused:
+		return
+	world_paused = stop
+	G.game.set_mobs_paused(stop)
+	if stop:
+		if online_count() == 0:
+			print("SERVER nobody online: time paused at day %d %s" % [G.game.day, _clock()])
+		else:
+			print("SERVER %s paused the game at day %d %s" % [who, G.game.day, _clock()])
+	else:
+		print("SERVER %s is %s: time running again" % [who, "online" if online_count() == 1 and not solo else "playing"])
+	var t := _time_bytes()
+	for p in players.values():
+		if p.is_ready:
+			_send_raw(p.peer_id, t, MultiplayerPeer.TRANSFER_MODE_RELIABLE, Proto.CH_CONTROL)
 
 
 ## Where the players who could meet a zombie are (online and alive).
@@ -359,9 +396,8 @@ func _remove_player(id: int) -> void:
 		for k in sp.refuse_why:
 			parts.append("%s %d" % [k, sp.refuse_why[k]])
 		print("SERVER %s: %d of %d block requests refused this session (%s)" % [sp.player_name, sp.refused, sp.requests, ", ".join(parts)])
+	_update_world_paused(sp.player_name)
 	if online_count() == 0 and not _stopping:
-		print("SERVER nobody online: time paused at day %d %s" % [G.game.day, _clock()])
-		G.game.set_mobs_paused(true)
 		# Everything is quiet now: save it all, and back up (at most once an hour).
 		save_world(false)
 		if saver != null and saver.hours_since_backup() >= 1.0:
@@ -387,11 +423,13 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 				sp.is_ready = true
 				G.sim.add_player(sp)  # zombies can go after it now
 				_send_to(id, _time_bytes())
-				if online_count() == 1:
-					print("SERVER %s is online: time running again" % sp.player_name)
-					G.game.set_mobs_paused(false)
+				_update_world_paused(sp.player_name)
 		Proto.C_FALL:
 			sp.take_damage(float(b.get_u8()), Vector3.ZERO)
+		Proto.C_PAUSE:
+			sp.paused = b.get_u8() == 1
+			if solo:
+				_update_world_paused(sp.player_name)
 		Proto.C_RESPAWN:
 			if sp.dead:
 				sp.dead = false
@@ -601,7 +639,7 @@ func _tick_players(delta: float) -> void:
 	for sp in players.values():
 		if not sp.is_ready:
 			continue
-		if not sp.dead:
+		if not sp.dead and not world_paused:
 			var sprint: bool = (sp.flags & Proto.F_SPRINT) != 0
 			sp.food = maxf(0.0, sp.food - (0.065 + (0.12 if sprint else 0.0)) * delta)
 			if sp.food <= 0.0:
@@ -912,7 +950,7 @@ func _time_bytes() -> PackedByteArray:
 	t.put_u16(G.game.day)
 	t.put_float(G.game.time)
 	t.put_u8(1 if G.game.horde_active else 0)
-	t.put_u8(1 if online_count() == 0 else 0)
+	t.put_u8(1 if world_paused else 0)
 	return t.data_array
 
 
