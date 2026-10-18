@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 2
+const PROTOCOL := 3
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -29,10 +29,24 @@ const S_CHAT := 15       # from name, text
 const S_NOTICE := 16     # text, colour rgb u8 x3
 const S_CORRECT := 17    # move id u8, pos 3xf32: the server moved you (teleport or a rejected move)
 const S_BYE := 18        # reason: the server is about to close this connection (kick, signed in elsewhere)
+# World sync (see "Chunk subscriptions" below)
+const S_SUB := 19        # seq u32, fresh count u16 + keys, wait count u16 + keys
+const S_UNSUB := 20      # count u16 + keys
+const S_CHUNK := 21      # (bulk channel) seq u32, key, size u32, zstd(16 KB block array)
+const S_EDITS := 22      # seq u32, chunk count u16, per chunk: key, count u16, count x (index u16, block u8)
+const S_INV := 23        # ack u16 (last request seq handled), 36 x (item u16, count u8)
+const S_MSG := 24        # text, colour rgb u8 x3: a message in the middle of the screen
+const S_ATE := 25        # item u16: the server took the food; apply its food and healing
 # Client -> server
 const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8
 const C_READY := 31      # my chunks are loaded, count me as online
 const C_CHAT := 32       # text (a leading "/" is a command)
+# Requests the server checks. Each carries a seq u16; S_INV acknowledges the latest one handled.
+const C_BREAK := 33      # seq, block pos, block id the client sees u8, hotbar slot u8 (the tool)
+const C_PLACE := 34      # seq, block pos, block id u8, slot u8
+const C_SWAP := 35       # seq, slot a u8, slot b u8
+const C_CRAFT := 36      # seq, recipe index u8, times u8
+const C_EAT := 37        # seq, slot u8
 
 # Player record flags
 const F_SPRINT := 1
@@ -45,6 +59,17 @@ const F_AIRBORNE := 8
 const TERRAIN_CHUNKS := [Vector2i(0, 0), Vector2i(1, -1), Vector2i(-2, 3), Vector2i(37, -91)]
 
 const MAX_CHAT := 200
+
+## Chunk subscriptions: the server tells each client which chunks around it are untouched
+## (S_SUB "fresh": generate them from the seed) and which were edited ("wait": a copy follows
+## as S_CHUNK). From then on it sends that client every edit to those chunks (S_EDITS). Edit
+## batches are numbered; a chunk copy or subscription says which batch it already includes,
+## so an edit can never be applied twice or on top of newer data.
+const SUB_RADIUS := 9      # chunks around the player the server subscribes
+const UNSUB_RADIUS := 11   # ...and unsubscribes beyond this
+const CHUNK_BYTES := 16384 # 16 x 16 x 64 blocks
+## Reach the server allows for breaking and placing (the player's is 5 m; slack for lag).
+const REACH := 6.5
 
 ## ENet gives up on a connection after this much silence (ms): at least TIMEOUT_MIN_MS, at most
 ## TIMEOUT_MAX_MS. Generous, so a Wi-Fi hiccup doesn't drop anyone (Minecraft waits 30 s too).
@@ -141,6 +166,75 @@ static func yaw_to_u16(yaw: float) -> int:
 
 static func u16_to_yaw(v: int) -> float:
 	return v / 65535.0 * TAU
+
+
+static func put_key(b: StreamPeerBuffer, k: Vector2i) -> void:
+	b.put_32(k.x)
+	b.put_32(k.y)
+
+
+static func get_key(b: StreamPeerBuffer) -> Vector2i:
+	var x := b.get_32()
+	return Vector2i(x, b.get_32())
+
+
+static func put_keys(b: StreamPeerBuffer, keys: Array) -> void:
+	b.put_u16(keys.size())
+	for k in keys:
+		put_key(b, k)
+
+
+static func get_keys(b: StreamPeerBuffer) -> Array:
+	var out := []
+	for i in b.get_u16():
+		out.append(get_key(b))
+	return out
+
+
+## A block position: x s32, y u8, z s32.
+static func put_bpos(b: StreamPeerBuffer, p: Vector3i) -> void:
+	b.put_32(p.x)
+	b.put_u8(clampi(p.y, 0, 255))
+	b.put_32(p.z)
+
+
+static func get_bpos(b: StreamPeerBuffer) -> Vector3i:
+	var x := b.get_32()
+	var y := b.get_u8()
+	return Vector3i(x, y, b.get_32())
+
+
+## 36 slots of (item u16, count u8); empty slots are (0, 0).
+static func put_inventory(b: StreamPeerBuffer, slots: Array) -> void:
+	for s in slots:
+		if s == null:
+			b.put_u16(0)
+			b.put_u8(0)
+		else:
+			b.put_u16(int(s["id"]))
+			b.put_u8(int(s["n"]))
+
+
+static func get_inventory(b: StreamPeerBuffer) -> Array:
+	var out := []
+	for i in Inventory.SIZE:
+		var id := b.get_u16()
+		var n := b.get_u8()
+		out.append(null if id == 0 or n == 0 else {"id": id, "n": n})
+	return out
+
+
+static func pack_chunk(data: PackedByteArray) -> PackedByteArray:
+	return data.compress(FileAccess.COMPRESSION_ZSTD)
+
+
+static func unpack_chunk(packed: PackedByteArray) -> PackedByteArray:
+	return packed.decompress(CHUNK_BYTES, FileAccess.COMPRESSION_ZSTD)
+
+
+## True if 16-bit sequence number a is the same as or older than b (wraps around).
+static func seq_le(a: int, b: int) -> bool:
+	return ((b - a) & 0xffff) < 0x8000
 
 
 ## 19 bytes: net id u16, position 3xf32, yaw u16, pitch s16, flags u8.

@@ -2,8 +2,8 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.2.2"
-const BUILD_NAME := "M1.2"
+const VERSION := "0.3.0"
+const BUILD_NAME := "M1.3"
 
 var game: Node = null
 var world: Node3D = null
@@ -93,6 +93,7 @@ static func split_address(a: String) -> Array:
 ## Called by NetClient when the server's welcome arrives: reload into the server's world.
 func start_client_session(welcome: Dictionary) -> void:
 	session = welcome
+	net.detach()
 	mode = "client"
 	get_tree().paused = false
 	get_tree().call_deferred("reload_current_scene")
@@ -108,6 +109,7 @@ func resume_client_session(welcome: Dictionary) -> void:
 ## Back to the title screen with a message (disconnect, kick, server stopped).
 func end_client_session(notice: String) -> void:
 	net.leave()
+	net.detach()
 	stop_host()
 	session = {}
 	mode = "solo"

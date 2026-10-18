@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Multiplayer test: starts a dedicated server and headless clients on this machine and checks
 # login, refusals, movement sync, chat, admin commands, cheat correction, rejoining, crash
-# recovery, the player limit, that the clock stops while nobody is online, and riding out or
-# reconnecting after a frozen server.
+# recovery, the player limit, that the clock stops while nobody is online, riding out or
+# reconnecting after a frozen server, and building together (NETTEST_SOAK_S sets the length
+# of the 3-player building soak, default 20 s).
 # Usage: GODOT=/path/to/godot ./tools/run_nettest.sh [SERVER PREFIX...]
 #   The server runs as "$GODOT --headless --path . --" unless a prefix is given, for example
 #   qemu-aarch64-static -L /usr/aarch64-linux-gnu build/server/DeadBlocksServer.arm64 --headless --
@@ -55,7 +56,19 @@ report() {
 	else
 		fail "$1 (see $log)"
 		grep -E "NETTEST (FAIL|status)|ERROR" "$log" | head -8 | sed 's/^/    /'
+		grep -q "No answer from" "$log" && server_state
 	fi
+}
+
+# A client couldn't reach the server: is it still running, and is it busy, waiting or stopped?
+server_state() {
+	echo "    server process $SPID:"
+	ps -o pid=,stat=,pcpu=,etime= -p "$SPID" 2>/dev/null | sed 's/^/      /' || echo "      gone"
+	for t in /proc/"$SPID"/task/*; do
+		[ -r "$t/stat" ] && echo "      thread $(basename "$t"): state $(cut -d' ' -f3 "$t/stat") wchan $(cat "$t/wchan" 2>/dev/null)"
+	done | head -12
+	echo "      last log lines:"
+	tail -3 "$LOG_DIR/server.log" | sed 's/^/        /'
 }
 
 # time_values ONLINE: the clock values the server printed while ONLINE players were online
@@ -219,7 +232,45 @@ else
 	fail "server logged why alice dropped"
 fi
 
-for f in "$LOG_DIR"/server.log "$LOG_DIR"/hold_*.log "$LOG_DIR"/host_crash.log; do
+# 9. Building together, on a second server with room for the soak players and admins for /give:
+# mining and building seen by the other player, crafting at a workbench, eating, two players
+# breaking the same block, a late joiner getting the edited chunks, and a soak test.
+kill $SPID 2>/dev/null
+PORT=$((PORT + 3))
+"${SERVER[@]}" --server --port=$PORT --password=pw --max-players=8 --seed=4242 --test-log \
+	--admins=alice,soak1,soak2,soak3 > "$LOG_DIR/server_build.log" 2>&1 &
+SPID=$!
+if wait_line "$LOG_DIR/server_build.log" "listening on UDP" 120; then
+	client builder alice 1234 pw builder
+	A=$CPID
+	client watcher bob 5678 pw watcher
+	B=$CPID
+	wait $A
+	wait $B
+	report builder
+	report watcher
+	built=$(sed -n 's/^NETTEST built_chunk=//p' "$LOG_DIR/builder.log")
+	client builder_back alice 1234 pw join --nettest-has=110
+	wait $CPID
+	report builder_back
+	client late carol 1111 pw late --nettest-expect="$built"
+	wait $CPID
+	report late
+	SOAK_S=${NETTEST_SOAK_S:-20}
+	pids=()
+	for s in soak1 soak2 soak3; do
+		client "$s" "$s" 1111 pw soak --nettest-soak="$SOAK_S"
+		pids+=($CPID)
+	done
+	for pid in "${pids[@]}"; do wait "$pid"; done
+	for s in soak1 soak2 soak3; do report "$s"; done
+	grep -h "^NETTEST soak " "$LOG_DIR"/soak?.log | sed 's/^NETTEST /    /'
+	grep -h "requests refused" "$LOG_DIR/server_build.log" | sed 's/^SERVER /    server: /'
+else
+	fail "building server started (see $LOG_DIR/server_build.log)"
+fi
+
+for f in "$LOG_DIR"/server.log "$LOG_DIR"/server_build.log "$LOG_DIR"/hold_*.log "$LOG_DIR"/host_crash.log; do
 	if grep -q -E '^(ERROR|SCRIPT ERROR|USER ERROR)' "$f"; then
 		fail "no errors in $(basename "$f")"
 		grep -E '^(ERROR|SCRIPT ERROR|USER ERROR)' "$f" | head -5 | sed 's/^/    /'

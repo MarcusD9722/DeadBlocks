@@ -5,6 +5,9 @@ extends Node
 ## RemotePlayer nodes draw 100 ms in the past so movement looks smooth.
 ## If the connection drops while playing, it keeps logging back in for up to a minute; when the
 ## server answers with the same world, play simply continues (G.resume_client_session).
+## The server owns blocks and inventories: break / place / craft / eat / move requests go to it,
+## our own break or place shows at once as a guess, and the server's answer (edits, fixes, the
+## inventory) replaces the guess.
 
 signal status(text: String, is_error: bool)
 signal chat(from: String, text: String)
@@ -43,6 +46,16 @@ var others := {}
 var move_id := 0
 var _seq := 0
 var _tick := 0
+## The world this client keeps in sync (set by game.gd once the server's world exists); world
+## messages that arrive before that (during the scene reload) wait in _world_queue.
+var world_target: Node = null
+var _world_queue: Array = []
+## The inventory as the server last sent it, and our guesses since: [seq, "remove", slot] or
+## [seq, "swap", a, b], replayed on top until the server acknowledges that request.
+var inv_slots: Array = []
+var _inv_known := false
+var _req_seq := 0
+var _guesses: Array = []
 var _deadline := 0.0
 
 
@@ -128,6 +141,155 @@ func _status(text: String, is_error: bool) -> void:
 
 func send_ready() -> void:
 	_send(Proto.writer(Proto.C_READY).data_array)
+
+
+## game.gd: the client world exists now; feed it what arrived meanwhile.
+func attach(w: Node) -> void:
+	world_target = w
+	w.remote = true
+	var q := _world_queue
+	_world_queue = []
+	for data in q:
+		_on_world_packet(data)
+	_apply_inventory()
+
+
+func detach() -> void:
+	world_target = null
+	_world_queue.clear()
+
+
+func _world_ready() -> bool:
+	return world_target != null and is_instance_valid(world_target)
+
+
+func _next_seq() -> int:
+	_req_seq = (_req_seq + 1) & 0xffff
+	return _req_seq
+
+
+func request_break(p: Vector3i, expect: int, slot: int) -> void:
+	var m := Proto.writer(Proto.C_BREAK)
+	m.put_u16(_next_seq())
+	Proto.put_bpos(m, p)
+	m.put_u8(expect)
+	m.put_u8(slot)
+	_send(m.data_array)
+
+
+func request_place(p: Vector3i, id: int, slot: int) -> void:
+	var seq := _next_seq()
+	var m := Proto.writer(Proto.C_PLACE)
+	m.put_u16(seq)
+	Proto.put_bpos(m, p)
+	m.put_u8(id)
+	m.put_u8(slot)
+	_send(m.data_array)
+	_guesses.append([seq, "remove", slot])
+	_apply_inventory()
+
+
+func request_swap(a: int, b: int) -> void:
+	var seq := _next_seq()
+	var m := Proto.writer(Proto.C_SWAP)
+	m.put_u16(seq)
+	m.put_u8(a)
+	m.put_u8(b)
+	_send(m.data_array)
+	_guesses.append([seq, "swap", a, b])
+	_apply_inventory()
+
+
+func request_craft(recipe: int, times: int) -> void:
+	var m := Proto.writer(Proto.C_CRAFT)
+	m.put_u16(_next_seq())
+	m.put_u8(recipe)
+	m.put_u8(times)
+	_send(m.data_array)
+
+
+func request_eat(slot: int) -> void:
+	var m := Proto.writer(Proto.C_EAT)
+	m.put_u16(_next_seq())
+	m.put_u8(slot)
+	_send(m.data_array)
+
+
+## The player's inventory = the server's copy plus our guesses not yet acknowledged.
+func _apply_inventory() -> void:
+	var p = G.player
+	if not _inv_known or G.mode != "client" or p == null or not is_instance_valid(p):
+		return
+	var slots := []
+	for sl in inv_slots:
+		slots.append(null if sl == null else sl.duplicate())
+	for g in _guesses:
+		if g[1] == "remove":
+			var sl = slots[g[2]]
+			if sl != null:
+				sl["n"] = int(sl["n"]) - 1
+				if int(sl["n"]) <= 0:
+					slots[g[2]] = null
+		else:
+			var t = slots[g[2]]
+			slots[g[2]] = slots[g[3]]
+			slots[g[3]] = t
+	p.inv.slots = slots
+	p.inv.changed.emit()
+
+
+func _on_inventory(b: StreamPeerBuffer) -> void:
+	var ack := b.get_u16()
+	var slots := Proto.get_inventory(b)
+	_guesses = _guesses.filter(func(g): return not Proto.seq_le(g[0], ack))
+	if _inv_known and G.hud != null and is_instance_valid(G.hud):
+		# "+3 Planks" for whatever the server added (drops, crafting, /give).
+		var before := _counts(inv_slots)
+		var after := _counts(slots)
+		for id in after:
+			var gained: int = after[id] - int(before.get(id, 0))
+			if gained > 0:
+				G.hud.pickup("+%d %s" % [gained, Items.name_of(id)])
+	inv_slots = slots
+	_inv_known = true
+	_apply_inventory()
+
+
+static func _counts(slots: Array) -> Dictionary:
+	var c := {}
+	for sl in slots:
+		if sl != null:
+			c[int(sl["id"])] = int(c.get(int(sl["id"]), 0)) + int(sl["n"])
+	return c
+
+
+func _on_world_packet(data: PackedByteArray) -> void:
+	var w = world_target
+	var b := Proto.reader(data)
+	match data[0]:
+		Proto.S_SUB:
+			var seq := b.get_u32()
+			var fresh := Proto.get_keys(b)
+			w.net_subscribe(seq, fresh, Proto.get_keys(b))
+		Proto.S_UNSUB:
+			w.net_unsubscribe(Proto.get_keys(b))
+		Proto.S_CHUNK:
+			var seq := b.get_u32()
+			var k := Proto.get_key(b)
+			var size := b.get_u32()
+			var packed: PackedByteArray = b.get_data(size)[1]
+			w.net_chunk(seq, k, Proto.unpack_chunk(packed))
+		Proto.S_EDITS:
+			var seq := b.get_u32()
+			var groups := []
+			for i in b.get_u16():
+				var k := Proto.get_key(b)
+				var list := []
+				for j in b.get_u16():
+					var idx := b.get_u16()
+					list.append([idx, b.get_u8()])
+				groups.append([k, list])
+			w.net_edits(seq, groups)
 
 
 func send_chat(text: String) -> void:
@@ -312,10 +474,14 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			my_net_id = w["net_id"]
 			is_admin = w["admin"]
 			state = "online"
+			# A new session: the server subscribes us and sends the inventory from scratch.
+			_guesses.clear()
+			_inv_known = false
 			if reconnecting:
 				reconnecting = false
 				print("NET reconnected after %.1f s" % (_now() - _lost_at))
-				if G.mode == "client" and int(G.session.get("seed", -1)) == int(w["seed"]):
+				if G.mode == "client" and int(G.session.get("seed", -1)) == int(w["seed"]) and _world_ready():
+					world_target.net_reset()
 					G.resume_client_session(w)
 					return
 			print("NET joined %s:%d as %s" % [host, port, player_name])
@@ -357,6 +523,22 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			notice.emit(text, col)
 		Proto.S_BYE:
 			bye_reason = b.get_utf8_string()
+		Proto.S_SUB, Proto.S_UNSUB, Proto.S_CHUNK, Proto.S_EDITS:
+			if _world_ready():
+				_on_world_packet(data)
+			else:
+				_world_queue.append(data)
+		Proto.S_INV:
+			_on_inventory(b)
+		Proto.S_MSG:
+			var text := b.get_utf8_string()
+			var col := Color8(b.get_u8(), b.get_u8(), b.get_u8())
+			if G.hud != null and is_instance_valid(G.hud):
+				G.hud.msg(text, col)
+		Proto.S_ATE:
+			var id := b.get_u16()
+			if G.player != null and is_instance_valid(G.player):
+				G.player.ate(id)
 		Proto.S_CORRECT:
 			move_id = b.get_u8()
 			var pos := Proto.get_vec3(b)
@@ -397,7 +579,11 @@ func _physics_process(_delta: float) -> void:
 
 
 func _send(data: PackedByteArray, mode := MultiplayerPeer.TRANSFER_MODE_RELIABLE, ch := Proto.CH_CONTROL) -> void:
-	if mp != null and peer != null and (state == "online" or state == "waiting_welcome"):
+	if mp == null or peer == null or not (state == "online" or state == "waiting_welcome"):
+		return
+	# ENet may have closed the connection already, before we hear about it.
+	var sp := peer.get_peer(1)
+	if sp != null and sp.get_state() == ENetPacketPeer.STATE_CONNECTED:
 		mp.send_bytes(data, 1, mode, ch)
 
 

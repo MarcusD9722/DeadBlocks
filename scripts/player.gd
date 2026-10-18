@@ -37,6 +37,7 @@ var spawn_point := Vector3.ZERO
 var sprinting := false
 var held_id := -1
 var hints := {}
+var _rng := RandomNumberGenerator.new()
 
 
 func _ready() -> void:
@@ -104,6 +105,7 @@ func _ready() -> void:
 	add_child(mine_crack)
 
 	inv = Inventory.new()
+	_rng.randomize()
 
 
 func _wire_cube(h: float) -> ImmediateMesh:
@@ -262,14 +264,7 @@ func _update_target() -> void:
 
 
 func _break_time(id: int) -> float:
-	var hard: float = Blocks.HARDNESS[id]
-	if hard < 0.0:
-		return -1.0
-	var cur := cur_id()
-	var mult := 1.0
-	if Items.tool_type(cur) != "" and Items.tool_type(cur) == Blocks.TOOL[id]:
-		mult = Items.TIER_MULT[Items.tier(cur)]
-	return maxf(0.05, hard / mult)
+	return Rules.break_time(id, cur_id())
 
 
 func _handle_mining(delta: float) -> void:
@@ -282,10 +277,6 @@ func _handle_mining(delta: float) -> void:
 		mine_progress = 0.0
 		return
 	if not target.get("hit", false):
-		mine_progress = 0.0
-		return
-	if G.mode == "client":
-		_online_hint()
 		mine_progress = 0.0
 		return
 	var p: Vector3i = target["pos"]
@@ -317,31 +308,17 @@ func attack(mob: Node) -> void:
 func break_block(p: Vector3i, id: int) -> void:
 	G.world.set_block(p, Blocks.AIR)
 	G.sfx.play("break", -4.0)
-	var cur := cur_id()
-	var req: int = Blocks.REQ_TIER[id]
-	if req > 0 and (Items.tool_type(cur) != "pick" or Items.tier(cur) < req):
-		G.hud.msg("Too hard to collect. You need a %s pickaxe." % ("wooden" if req == 1 else "stone"), Color(1, 0.8, 0.5))
-		return
-	var drops := []
-	match id:
-		Blocks.GRASS:
-			drops = [[Blocks.DIRT, 1]]
-		Blocks.STONE:
-			drops = [[Blocks.COBBLE, 1]]
-		Blocks.COAL_ORE:
-			drops = [[Items.COAL, randi_range(1, 2)]]
-		Blocks.LEAVES:
-			var r := randf()
-			if r < 0.28:
-				drops = [[Items.FIBER, 1]]
-			elif r < 0.42:
-				drops = [[Items.STICK, 1]]
-		Blocks.BERRY_BUSH:
-			drops = [[Items.BERRIES, 2], [Items.FIBER, 1]]
-		_:
-			drops = [[id, 1]]
-	for d in drops:
-		give(int(d[0]), int(d[1]))
+	if G.mode == "client":
+		# The block is gone on our screen right away; the server decides what drops (or puts
+		# the block back if someone else got there first).
+		G.net.request_break(p, id, selected)
+	else:
+		var got := Rules.collect(id, cur_id(), _rng)
+		if int(got["need_tier"]) > 0:
+			G.hud.msg(Rules.too_hard_text(got["need_tier"]), Color(1, 0.8, 0.5))
+			return
+		for d in got["items"]:
+			give(int(d[0]), int(d[1]))
 	if id == Blocks.LOG and not hints.has("log"):
 		hints["log"] = true
 		G.hud.msg("Press E to open crafting. Make Planks, then a Workbench.", Color(0.7, 1, 0.7))
@@ -365,18 +342,7 @@ func use_item() -> void:
 	if Items.is_consumable(cur):
 		consume(cur)
 	elif Items.is_block(cur) and target.get("hit", false):
-		if G.mode == "client":
-			_online_hint()
-			return
 		place(cur)
-
-
-## Online test builds don't send block changes to the server yet (M1.3), so mining and
-## building are off instead of letting each player's world drift apart.
-func _online_hint() -> void:
-	if not hints.has("online_blocks"):
-		hints["online_blocks"] = true
-		G.hud.msg("Mining and building on servers come in the next build.", Color(1, 0.8, 0.5))
 
 
 func consume(id: int) -> void:
@@ -389,9 +355,17 @@ func consume(id: int) -> void:
 	if f <= 0.0 and h > 0.0 and health >= max_health:
 		G.hud.msg("You're already at full health.")
 		return
-	food = minf(100.0, food + f)
-	health = minf(max_health, health + h)
+	if G.mode == "client":
+		G.net.request_eat(selected)  # the server answers with S_ATE -> ate()
+		return
 	inv.remove_at(selected, 1)
+	ate(id)
+
+
+func ate(id: int) -> void:
+	var d := Items.info(id)
+	food = minf(100.0, food + float(d.get("food", 0.0)))
+	health = minf(max_health, health + float(d.get("heal", 0.0)))
 	G.sfx.play("eat", -4.0)
 
 
@@ -399,7 +373,11 @@ func place(id: int) -> bool:
 	var n: Vector3i = target["normal"]
 	if n == Vector3i.ZERO:
 		return false
-	var p: Vector3i = target["pos"] + n
+	return try_place(target["pos"] + n, id)
+
+
+## Place block `id` (from the selected slot) at p, if nothing is in the way.
+func try_place(p: Vector3i, id: int) -> bool:
 	if G.world.get_blockv(p) != Blocks.AIR or p.y < 1 or p.y >= 63:
 		return false
 	if Blocks.SHAPE[id] == Blocks.SH_CROSS and not Blocks.is_solid(G.world.get_blockv(p + Vector3i.DOWN)):
@@ -415,7 +393,10 @@ func place(id: int) -> bool:
 			if _overlap(mp + Vector3(-0.4, 0, -0.4), mp + Vector3(0.4, 1.9, 0.4), bmin, bmax):
 				return false
 	G.world.set_block(p, id)
-	inv.remove_at(selected, 1)
+	if G.mode == "client":
+		G.net.request_place(p, id, selected)  # shown now; the server confirms or undoes it
+	else:
+		inv.remove_at(selected, 1)
 	G.sfx.play("place", -4.0)
 	swing = 1.0
 	if id == Blocks.WORKBENCH and not hints.has("bench"):

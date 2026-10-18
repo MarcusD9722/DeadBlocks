@@ -3,6 +3,9 @@ extends Node
 ## Listens on UDP, logs players in (server password + name + PIN, proven with HMACs so neither
 ## crosses the network), keeps one ServerPlayer per player, sends everyone the others' movement
 ## 15 times a second, keeps clocks in sync, and runs chat and admin commands.
+## It owns the world and every inventory: players ask to break, place, craft, eat and move
+## items, the server checks and applies each request, and once a tick it sends every player the
+## block changes in the chunks it subscribed them to (see Proto.SUB_RADIUS).
 ##
 ## Options (command line): --port=N --password=S --max-players=N --admins=Name,Name
 ##   --hosted-by=Name (Host game: stop once that player is gone) --test-log (print TIME lines)
@@ -20,6 +23,7 @@ const MOVE_SLACK := 2.0
 const HOST_JOIN_S := 60.0
 const HOST_GONE_S := 15.0
 const STATS_EVERY := 60.0   # seconds between "SERVER net:" lines in the log
+const CHUNKS_PER_TICK := 4  # edited chunks sent in full per player per tick
 
 var mp := SceneMultiplayer.new()
 var peer := ENetMultiplayerPeer.new()
@@ -47,6 +51,9 @@ var _stats_t := STATS_EVERY
 var _sample_t := 0.0
 var _host_joined := false
 var _terrain := PackedByteArray()
+## Number of the edit batch sent this tick; chunk copies say which batch they already include.
+var _edit_seq := 0
+var _rng := RandomNumberGenerator.new()
 var _players_node: Node3D
 
 
@@ -62,6 +69,8 @@ func start() -> bool:
 	_host_seen_ms = Time.get_ticks_msec()
 	test_log = G.has_arg("--test-log")
 	_terrain = Proto.terrain_hash(G.game.seed_v)
+	G.world.record_edits = true
+	_rng.randomize()
 	_players_node = Node3D.new()
 	_players_node.name = "Players"
 	G.game.add_child(_players_node)
@@ -178,7 +187,10 @@ func _on_auth(id: int, data: PackedByteArray) -> void:
 		if pin_proof != Proto.hmac(pk, nonce):
 			_reject(id, "Could not register that name. Please try again.")
 			return
-		acc = {"name": pname, "pin_key": pk, "fails": 0, "locked_until": 0.0, "pos": G.game.spawn_pos, "yaw": 0.0}
+		var inv := Inventory.new()
+		inv.add(Items.BERRIES, 3)
+		inv.add(Blocks.TORCH, 2)
+		acc = {"name": pname, "pin_key": pk, "fails": 0, "locked_until": 0.0, "pos": G.game.spawn_pos, "yaw": 0.0, "inv": inv}
 		accounts[key] = acc
 		print("SERVER new player %s" % pname)
 	if replacing != 0:
@@ -249,6 +261,8 @@ func _on_connected(id: int) -> void:
 	sp.last_good = acc["pos"]
 	sp.last_move_ms = Time.get_ticks_msec()
 	sp.last_recv_ms = Time.get_ticks_msec()
+	sp.inv = acc["inv"]
+	sp.inv_dirty = true
 	players[id] = sp
 	G.sim.add_player(sp)
 	var w := Proto.writer(Proto.S_WELCOME)
@@ -310,6 +324,8 @@ func _remove_player(id: int) -> void:
 	else:
 		_broadcast(_notice_bytes("%s left the game." % sp.player_name, Color(1, 0.85, 0.7)))
 	print("SERVER %s %s (%d connected)" % [sp.player_name, why if why != "" else "left", players.size()])
+	if sp.refused > 0:
+		print("SERVER %s: %d of %d block requests refused this session" % [sp.player_name, sp.refused, sp.requests])
 	if online_count() == 0:
 		print("SERVER nobody online: time paused at day %d %s" % [G.game.day, _clock()])
 
@@ -333,6 +349,251 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 					print("SERVER %s is online: time running again" % sp.player_name)
 		Proto.C_CHAT:
 			_on_chat(sp, b.get_utf8_string().strip_edges().left(Proto.MAX_CHAT))
+		Proto.C_BREAK, Proto.C_PLACE, Proto.C_SWAP, Proto.C_CRAFT, Proto.C_EAT:
+			_on_request(sp, data[0], b)
+
+
+# ------------------------------------------------------------ building, crafting, eating
+
+func _on_request(sp, type: int, b: StreamPeerBuffer) -> void:
+	sp.last_seq = b.get_u16()
+	sp.requests += 1
+	# Always answer with the inventory, which also acknowledges the request: the client then
+	# drops its own guess of what the request would do.
+	sp.inv_dirty = true
+	if not sp.is_ready:
+		return
+	match type:
+		Proto.C_BREAK:
+			var p := Proto.get_bpos(b)
+			var expect := b.get_u8()
+			_req_break(sp, p, expect, b.get_u8())
+		Proto.C_PLACE:
+			var p := Proto.get_bpos(b)
+			var id := b.get_u8()
+			_req_place(sp, p, id, b.get_u8())
+		Proto.C_SWAP:
+			var a := b.get_u8()
+			var c := b.get_u8()
+			if a < Inventory.SIZE and c < Inventory.SIZE:
+				sp.inv.swap(a, c)
+		Proto.C_CRAFT:
+			var r := b.get_u8()
+			_req_craft(sp, r, b.get_u8())
+		Proto.C_EAT:
+			_req_eat(sp, b.get_u8())
+
+
+func _eye(sp) -> Vector3:
+	return sp.global_position + Vector3(0, 1.62, 0)
+
+
+func _in_reach(sp, p: Vector3i) -> bool:
+	return _eye(sp).distance_to(Vector3(p) + Vector3(0.5, 0.5, 0.5)) <= Proto.REACH
+
+
+## Undo the client's guess: resend the block as the server has it.
+func _refuse(sp, p: Vector3i) -> void:
+	sp.refused += 1
+	if G.world.has_block_data(p):
+		sp.fixes.append(p)
+
+
+func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
+	var w = G.world
+	var id: int = w.get_blockv(p)
+	if sp.dead or slot > 8 or id != expect or id <= 0 or not w.has_block_data(p) or not _in_reach(sp, p):
+		_refuse(sp, p)
+		return
+	var tool: int = sp.inv.id_at(slot)
+	var bt := Rules.break_time(id, tool)
+	var now := Time.get_ticks_msec()
+	# Mining takes time; allow plenty of slack for lag, but not instant mining.
+	if bt < 0.0 or now - sp.last_break_ms < bt * 350.0:
+		_refuse(sp, p)
+		return
+	sp.last_break_ms = now
+	w.set_block(p, Blocks.AIR)
+	var got := Rules.collect(id, tool, _rng)
+	if int(got["need_tier"]) > 0:
+		_msg(sp, Rules.too_hard_text(got["need_tier"]), Color(1, 0.8, 0.5))
+		return
+	for d in got["items"]:
+		if sp.inv.add(d[0], d[1]) > 0:
+			_msg(sp, "Inventory full!", Color(1, 0.5, 0.4))
+
+
+func _req_place(sp, p: Vector3i, id: int, slot: int) -> void:
+	var w = G.world
+	if sp.dead or slot > 8 or sp.inv.id_at(slot) != id or not Items.is_block(id) or p.y < 1 or p.y >= 63 \
+			or not w.has_block_data(p) or w.get_blockv(p) != Blocks.AIR or not _in_reach(sp, p):
+		_refuse(sp, p)
+		return
+	var touching := false
+	for d in [Vector3i.UP, Vector3i.DOWN, Vector3i.LEFT, Vector3i.RIGHT, Vector3i.FORWARD, Vector3i.BACK]:
+		if w.get_blockv(p + d) != Blocks.AIR:
+			touching = true
+	if not touching or (Blocks.SHAPE[id] == Blocks.SH_CROSS and not Blocks.is_solid(w.get_blockv(p + Vector3i.DOWN))):
+		_refuse(sp, p)
+		return
+	if Blocks.SOLID[id]:
+		# Not inside another player. The builder checks itself: its own position here is a
+		# little behind, and building a pillar under your own feet must work.
+		var bmin := Vector3(p)
+		for o in players.values():
+			if o != sp and o.is_ready and not o.dead:
+				var op: Vector3 = o.global_position
+				if op.x + 0.3 > bmin.x and op.x - 0.3 < bmin.x + 1.0 and op.z + 0.3 > bmin.z and op.z - 0.3 < bmin.z + 1.0 \
+						and op.y + 1.8 > bmin.y and op.y < bmin.y + 1.0:
+					_refuse(sp, p)
+					return
+	sp.inv.remove_at(slot, 1)
+	w.set_block(p, id)
+
+
+func _req_craft(sp, idx: int, times: int) -> void:
+	if idx >= Crafting.RECIPES.size():
+		return
+	var r: Dictionary = Crafting.RECIPES[idx]
+	var stations: Array = G.world.stations_near(sp.global_position + Vector3(0, 1, 0), 4)
+	var st: String = r["st"]
+	if st != "" and not stations.has(st):
+		_msg(sp, "You need to be near a %s for that." % Crafting.STATION_NAMES[st], Color(1, 0.8, 0.5))
+		return
+	for t in clampi(times, 1, 5):
+		if not Crafting.can_craft(sp.inv, r, stations):
+			break
+		if not Crafting.craft(sp.inv, r):
+			_msg(sp, "Inventory full!", Color(1, 0.5, 0.4))
+			break
+
+
+func _req_eat(sp, slot: int) -> void:
+	if slot >= Inventory.SIZE:
+		return
+	var id: int = sp.inv.id_at(slot)
+	if not Items.is_consumable(id):
+		return
+	sp.inv.remove_at(slot, 1)
+	# Food and health still live on the player's PC (until M1.4); tell it what was eaten.
+	var a := Proto.writer(Proto.S_ATE)
+	a.put_u16(id)
+	_send_to(sp.peer_id, a.data_array)
+
+
+func _msg(sp, text: String, col: Color) -> void:
+	var m := Proto.writer(Proto.S_MSG)
+	m.put_utf8_string(text)
+	m.put_u8(int(col.r * 255))
+	m.put_u8(int(col.g * 255))
+	m.put_u8(int(col.b * 255))
+	_send_to(sp.peer_id, m.data_array)
+
+
+## Once a tick: subscriptions, edited chunks, this tick's block changes, and inventories.
+func _flush_world() -> void:
+	var w = G.world
+	_edit_seq += 1
+	var groups := {}  # chunk key -> [[block index, id], ...] in the order they happened
+	for e in w.edits_out:
+		var p: Vector3i = e[0]
+		var k := Vector2i(p.x >> 4, p.z >> 4)
+		if not groups.has(k):
+			groups[k] = []
+		groups[k].append([(p.x & 15) + (p.z & 15) * 16 + p.y * 256, e[1]])
+	w.edits_out.clear()
+	for sp in players.values():
+		_update_subs(sp)
+		_send_chunks(sp)
+		_send_edits(sp, groups)
+		if sp.inv_dirty:
+			sp.inv_dirty = false
+			var m := Proto.writer(Proto.S_INV)
+			m.put_u16(sp.last_seq)
+			Proto.put_inventory(m, sp.inv.slots)
+			_send_to(sp.peer_id, m.data_array)
+
+
+func _update_subs(sp) -> void:
+	var c := Vector2i(floori(sp.global_position.x / 16.0), floori(sp.global_position.z / 16.0))
+	if c == sp.sub_center:
+		return
+	sp.sub_center = c
+	var gone := []
+	for k in sp.subs.keys():
+		if maxi(absi(k.x - c.x), absi(k.y - c.y)) > Proto.UNSUB_RADIUS:
+			sp.subs.erase(k)
+			gone.append(k)
+	if not gone.is_empty():
+		sp.chunk_queue = sp.chunk_queue.filter(func(k): return sp.subs.has(k))
+		var u := Proto.writer(Proto.S_UNSUB)
+		Proto.put_keys(u, gone)
+		_send_to(sp.peer_id, u.data_array)
+	var fresh := []
+	var wait := []
+	var r := Proto.SUB_RADIUS
+	for dz in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			var k := Vector2i(c.x + dx, c.y + dz)
+			if sp.subs.has(k):
+				continue
+			sp.subs[k] = true
+			if G.world.is_modified(k):
+				wait.append(k)
+			else:
+				fresh.append(k)
+	if fresh.is_empty() and wait.is_empty():
+		return
+	wait.sort_custom(func(a, b): return (a - c).length_squared() < (b - c).length_squared())
+	sp.chunk_queue.append_array(wait)
+	var m := Proto.writer(Proto.S_SUB)
+	m.put_u32(_edit_seq)
+	Proto.put_keys(m, fresh)
+	Proto.put_keys(m, wait)
+	_send_to(sp.peer_id, m.data_array)
+
+
+func _send_chunks(sp) -> void:
+	var sent := 0
+	while sent < CHUNKS_PER_TICK and not sp.chunk_queue.is_empty():
+		var k: Vector2i = sp.chunk_queue.pop_front()
+		if not sp.subs.has(k):
+			continue
+		var packed := Proto.pack_chunk(G.world.chunk_data(k))
+		var m := Proto.writer(Proto.S_CHUNK)
+		m.put_u32(_edit_seq)
+		Proto.put_key(m, k)
+		m.put_u32(packed.size())
+		m.put_data(packed)
+		_send_to(sp.peer_id, m.data_array, MultiplayerPeer.TRANSFER_MODE_RELIABLE, Proto.CH_BULK)
+		sent += 1
+
+
+func _send_edits(sp, groups: Dictionary) -> void:
+	var mine := {}
+	for k in groups:
+		if sp.subs.has(k):
+			mine[k] = groups[k].duplicate()
+	# Refused requests: resend those blocks as they are now, after this tick's changes.
+	for p in sp.fixes:
+		var k := Vector2i(p.x >> 4, p.z >> 4)
+		if sp.subs.has(k):
+			if not mine.has(k):
+				mine[k] = []
+			mine[k].append([(p.x & 15) + (p.z & 15) * 16 + p.y * 256, G.world.get_blockv(p)])
+	sp.fixes.clear()
+	if mine.is_empty():
+		return
+	var m := Proto.writer(Proto.S_EDITS)
+	m.put_u32(_edit_seq)
+	m.put_u16(mine.size())
+	for k in mine:
+		Proto.put_key(m, k)
+		m.put_u16(mine[k].size())
+		for e in mine[k]:
+			m.put_u16(e[0])
+			m.put_u8(e[1])
+	_send_to(sp.peer_id, m.data_array)
 
 
 func _on_move(sp, b: StreamPeerBuffer) -> void:
@@ -394,6 +655,13 @@ func _command(sp, text: String) -> void:
 			names.append(p.player_name)
 		_send_to(sp.peer_id, _notice_bytes("Online: " + ", ".join(names), Color(0.8, 0.9, 1)))
 		return
+	if cmd == "/hash" and parts.size() >= 4:
+		# Tests: a fingerprint of the server's blocks around a chunk, to compare with a client's.
+		var cx := int(parts[1])
+		var cz := int(parts[2])
+		var r := clampi(int(parts[3]), 0, 4)
+		_send_to(sp.peer_id, _notice_bytes("HASH %d %d %d %s" % [cx, cz, r, G.world.region_hash(cx, cz, r)], Color(0.7, 0.7, 0.7)))
+		return
 	if not sp.admin:
 		_send_to(sp.peer_id, _notice_bytes("Only admins can use %s." % cmd, Color(1, 0.6, 0.5)))
 		return
@@ -412,12 +680,41 @@ func _command(sp, text: String) -> void:
 					_send_to(target, _bye_bytes("You were kicked by %s." % sp.player_name))
 					players[target].leave_reason = "was kicked by %s" % sp.player_name
 					_disconnect_soon(target)
+		"/give":
+			var id := _item_named(parts[1] if parts.size() > 1 else "")
+			if id <= 0:
+				_send_to(sp.peer_id, _notice_bytes("Usage: /give <item> [count], for example /give planks 20 or /give stone_pickaxe", Color(1, 0.6, 0.5)))
+				return
+			var n := clampi(int(parts[2]) if parts.size() > 2 else 1, 1, 999)
+			var left: int = sp.inv.add(id, n)
+			sp.inv_dirty = true
+			print("SERVER %s used %s" % [sp.player_name, text])
+			_send_to(sp.peer_id, _notice_bytes("Gave you %d %s." % [n - left, Items.name_of(id)], Color(0.8, 0.9, 1)))
+			return
 		_:
-			_send_to(sp.peer_id, _notice_bytes("Commands: /players /dusk /bloodmoon /time <hour> /kick <name>", Color(0.8, 0.9, 1)))
+			_send_to(sp.peer_id, _notice_bytes("Commands: /players /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count]", Color(0.8, 0.9, 1)))
 			return
 	print("SERVER %s used %s" % [sp.player_name, text])
 	_broadcast(_time_bytes())
 	_send_to(sp.peer_id, _notice_bytes("Done: " + text, Color(0.8, 0.9, 1)))
+
+
+## "/give" item names: an id, or the name in lower case with _ for spaces ("stone_pickaxe").
+func _item_named(s: String) -> int:
+	s = s.strip_edges().to_lower()
+	if s == "":
+		return 0
+	if s.is_valid_int():
+		var id := int(s)
+		return id if Items.name_of(id) != "?" and id != Blocks.AIR else 0
+	var ids: Array = range(1, Blocks.COUNT)
+	ids.append_array(Items.DATA.keys())
+	for id in ids:
+		var n := Items.name_of(id).to_lower().replace(" ", "_")
+		# "plank" / "planks", "log" / "logs", "torch" / "torches"
+		if n == s or n.trim_suffix("s") == s.trim_suffix("s") or n == s.trim_suffix("es"):
+			return id
+	return 0
 
 
 func _notice_bytes(text: String, col: Color) -> PackedByteArray:
@@ -446,13 +743,24 @@ func _time_bytes() -> PackedByteArray:
 
 func _send_to(id: int, data: PackedByteArray, mode := MultiplayerPeer.TRANSFER_MODE_RELIABLE, ch := Proto.CH_CONTROL) -> void:
 	if players.has(id) or _pending.has(id):
-		mp.send_bytes(data, id, mode, ch)
+		_send_raw(id, data, mode, ch)
+
+
+## Every send goes through here. When several players leave at once, ENet has already closed
+## the others' connections before we hear about them, and sending to those is an error.
+func _send_raw(id: int, data: PackedByteArray, mode: MultiplayerPeer.TransferMode, ch: int) -> void:
+	if not _live.has(id):
+		return
+	var ep := peer.get_peer(id)
+	if ep == null or ep.get_state() != ENetPacketPeer.STATE_CONNECTED:
+		return
+	mp.send_bytes(data, id, mode, ch)
 
 
 func _broadcast(data: PackedByteArray, except := 0) -> void:
 	for id in players:
 		if id != except:
-			mp.send_bytes(data, id, MultiplayerPeer.TRANSFER_MODE_RELIABLE, Proto.CH_CONTROL)
+			_send_raw(id, data, MultiplayerPeer.TRANSFER_MODE_RELIABLE, Proto.CH_CONTROL)
 
 
 func _clock() -> String:
@@ -464,6 +772,7 @@ func _clock() -> String:
 
 func _physics_process(_delta: float) -> void:
 	_tick += 1
+	_flush_world()
 	if _tick % SNAP_EVERY != 0:
 		return
 	var ready_players := []
@@ -481,7 +790,7 @@ func _physics_process(_delta: float) -> void:
 		for p in ready_players:
 			if p != to:
 				Proto.put_player_record(s, p.net_id, p.global_position, p.yaw, p.pitch, p.flags)
-		mp.send_bytes(s.data_array, to.peer_id, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED, Proto.CH_STATE)
+		_send_raw(to.peer_id, s.data_array, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED, Proto.CH_STATE)
 
 
 func _process(delta: float) -> void:
@@ -503,7 +812,7 @@ func _process(delta: float) -> void:
 		var t := _time_bytes()
 		for p in players.values():
 			if p.is_ready:
-				mp.send_bytes(t, p.peer_id, MultiplayerPeer.TRANSFER_MODE_RELIABLE, Proto.CH_CONTROL)
+				_send_raw(p.peer_id, t, MultiplayerPeer.TRANSFER_MODE_RELIABLE, Proto.CH_CONTROL)
 	if test_log:
 		_log_t -= delta
 		if _log_t <= 0.0:

@@ -134,6 +134,17 @@ var gen_count := 0
 var mesh_count := 0
 ## Set whenever chunk work may have become possible, so _schedule can skip its full scan otherwise.
 var sched_dirty := true
+## Server: every block change is also appended here as [pos, id]; NetServer sends them out.
+var record_edits := false
+var edits_out: Array = []
+## Client online: chunks come from the server's subscriptions (see Proto.SUB_RADIUS). Only
+## "fresh" chunks are generated here; edited ones wait for the server's copy.
+const SUB_FRESH := 1
+const SUB_WAIT := 2
+var remote := false
+var sub_state := {}      # chunk key -> SUB_FRESH / SUB_WAIT
+var sub_seq := {}        # chunk key -> last edit batch the chunk's data already includes
+var pending := {}        # chunk key -> [[batch seq, block index, id], ...] for chunks without data yet
 
 
 func setup(s: int, tex) -> void:
@@ -293,7 +304,7 @@ func _schedule() -> void:
 			c.key = k
 			chunks[k] = c
 		if not c.has_data:
-			if not c.generating:
+			if not c.generating and (not remote or sub_state.get(k, 0) == SUB_FRESH):
 				c.generating = true
 				tasks.append(WorkerThreadPool.add_task(_task_gen.bind(k), false, "gen"))
 		elif mesh_set.has(k):
@@ -326,11 +337,14 @@ func _gen_done(k: Vector2i, d: PackedByteArray) -> void:
 		c = Chunk.new()
 		c.key = k
 		chunks[k] = c
+	c.generating = false
+	sched_dirty = true
+	if remote and (c.has_data or sub_state.get(k, 0) != SUB_FRESH):
+		return  # the server's copy arrived meanwhile, or we're no longer subscribed
 	c.data = d
 	c.has_data = true
-	c.generating = false
 	gen_count += 1
-	sched_dirty = true
+	_apply_pending(c)
 
 
 func _task_mesh(k: Vector2i, ver: int, d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> void:
@@ -561,6 +575,35 @@ func surface_y(x: int, z: int) -> int:
 	return -1
 
 
+static func key_of(p: Vector3i) -> Vector2i:
+	return Vector2i(p.x >> 4, p.z >> 4)
+
+
+## Index of a block inside its chunk's data.
+static func index_of(p: Vector3i) -> int:
+	return (p.x & 15) + (p.z & 15) * CH + p.y * CH2
+
+
+static func pos_of(k: Vector2i, idx: int) -> Vector3i:
+	@warning_ignore("integer_division")
+	return Vector3i(k.x * CH + (idx & 15), idx / CH2, k.y * CH + ((idx >> 4) & 15))
+
+
+func has_block_data(p: Vector3i) -> bool:
+	var c: Chunk = chunks.get(key_of(p))
+	return c != null and c.has_data
+
+
+func is_modified(k: Vector2i) -> bool:
+	var c: Chunk = chunks.get(k)
+	return c != null and c.has_data and c.modified
+
+
+func chunk_data(k: Vector2i) -> PackedByteArray:
+	var c: Chunk = chunks.get(k)
+	return c.data if c != null and c.has_data else PackedByteArray()
+
+
 func set_block(p: Vector3i, id: int) -> bool:
 	if p.y < 0 or p.y >= H:
 		return false
@@ -572,6 +615,8 @@ func set_block(p: Vector3i, id: int) -> bool:
 	var lz := p.z & 15
 	c.data[lx + lz * CH + p.y * CH2] = id
 	c.modified = true
+	if record_edits:
+		edits_out.append([p, id])
 	_clear_damage(p)
 	_dirty(k)
 	if lx == 0:
@@ -634,6 +679,110 @@ func _clear_damage(p: Vector3i) -> void:
 	if n != null:
 		n.queue_free()
 		crack_nodes.erase(p)
+
+
+# ------------------------------------------------------------ online (client side)
+
+## S_SUB: chunks the server now keeps us up to date on. Fresh ones we generate ourselves;
+## edited ones ("wait") come as S_CHUNK.
+func net_subscribe(seq: int, fresh: Array, wait: Array) -> void:
+	for k in fresh:
+		sub_state[k] = SUB_FRESH
+		sub_seq[k] = seq
+		var c: Chunk = chunks.get(k)
+		if c != null and c.has_data and c.modified and not c.generating and not c.meshing:
+			# Untouched on the server, but we hold edits (from before a reconnect, or a guess
+			# the server never confirmed): start again from the seed.
+			_free_visual(c)
+			chunks.erase(k)
+		pending.erase(k)
+	for k in wait:
+		sub_state[k] = SUB_WAIT
+	sched_dirty = true
+
+
+## S_UNSUB: the server stops sending edits for these chunks, so our copies would go stale.
+func net_unsubscribe(keys: Array) -> void:
+	for k in keys:
+		sub_state.erase(k)
+		sub_seq.erase(k)
+		pending.erase(k)
+		var c: Chunk = chunks.get(k)
+		if c != null and not c.generating and not c.meshing and not _near_center(k, render_radius + 3):
+			_free_visual(c)
+			chunks.erase(k)
+
+
+## S_CHUNK: the server's copy of an edited chunk, including every edit batch up to seq.
+func net_chunk(seq: int, k: Vector2i, data: PackedByteArray) -> void:
+	if not sub_state.has(k) or data.size() != CH2 * H:
+		return
+	var c: Chunk = chunks.get(k)
+	if c == null:
+		c = Chunk.new()
+		c.key = k
+		chunks[k] = c
+	c.data = data
+	c.has_data = true
+	c.modified = true
+	sub_state[k] = SUB_FRESH
+	sub_seq[k] = seq
+	_apply_pending(c)
+	for kk in [k, k + Vector2i(1, 0), k + Vector2i(-1, 0), k + Vector2i(0, 1), k + Vector2i(0, -1)]:
+		_dirty(kk)
+	sched_dirty = true
+
+
+## S_EDITS: one batch of block changes, grouped by chunk ([key, [[index, id], ...]]).
+func net_edits(seq: int, groups: Array) -> void:
+	for g in groups:
+		var k: Vector2i = g[0]
+		if not sub_state.has(k):
+			continue
+		var c: Chunk = chunks.get(k)
+		if c == null or not c.has_data:
+			if not pending.has(k):
+				pending[k] = []
+			for e in g[1]:
+				pending[k].append([seq, e[0], e[1]])
+			continue
+		if seq <= int(sub_seq.get(k, -1)):
+			continue  # already in our copy
+		for e in g[1]:
+			set_block(pos_of(k, e[0]), e[1])
+
+
+## Edits that arrived before the chunk's data: apply the ones newer than the data.
+func _apply_pending(c: Chunk) -> void:
+	var list: Array = pending.get(c.key, [])
+	pending.erase(c.key)
+	var base := int(sub_seq.get(c.key, -1))
+	for e in list:
+		if e[0] > base:
+			c.data[e[1]] = e[2]
+			c.modified = true
+
+
+## A new session with the server (reconnect): it will subscribe us again from scratch.
+func net_reset() -> void:
+	sub_state.clear()
+	sub_seq.clear()
+	pending.clear()
+	sched_dirty = true
+
+
+## Tests: one hash over the chunks within r of chunk (cx, cz), to compare worlds.
+func region_hash(cx: int, cz: int, r: int) -> String:
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	for dz in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			var c: Chunk = chunks.get(Vector2i(cx + dx, cz + dz))
+			if c == null or not c.has_data:
+				ctx.update(("missing %d %d" % [cx + dx, cz + dz]).to_utf8_buffer())
+			else:
+				ctx.update(c.data)
+	return ctx.finish().hex_encode().left(16)
 
 
 func raycast(origin: Vector3, dir: Vector3, maxd: float) -> Dictionary:

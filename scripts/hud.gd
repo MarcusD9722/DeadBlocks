@@ -378,12 +378,12 @@ func hide_title() -> void:
 func _build_chat() -> void:
 	chat_edit = LineEdit.new()
 	chat_edit.visible = false
-	chat_edit.placeholder_text = "Say something (Enter to send, Esc to cancel). Admins: /dusk /bloodmoon /time 12 /kick name"
+	chat_edit.placeholder_text = "Say something (Enter to send, Esc to cancel). Admins: /give planks 20, /dusk, /bloodmoon, /time 12, /kick name"
 	chat_edit.max_length = Proto.MAX_CHAT
 	chat_edit.add_theme_font_size_override("font_size", 18)
 	chat_edit.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	chat_edit.position = Vector2(20, -150)
-	chat_edit.custom_minimum_size = Vector2(620, 36)
+	chat_edit.custom_minimum_size = Vector2(900, 36)
 	add_child(chat_edit)
 	chat_edit.text_submitted.connect(_on_chat_submit)
 	chat_edit.gui_input.connect(_on_chat_key)
@@ -595,6 +595,8 @@ func _on_slot(i: int) -> void:
 	var p = G.player
 	if i < 9:
 		p.select(i)
+	elif G.mode == "client":
+		G.net.request_swap(i, p.selected)
 	else:
 		p.inv.swap(i, p.selected)
 	G.sfx.play("click", -8.0)
@@ -686,11 +688,15 @@ func _recipe_row(r: Dictionary, stations: Array) -> Control:
 
 
 func _on_craft(r: Dictionary) -> void:
-	if G.mode == "client":
-		msg("Crafting on servers comes in the next build.", Color(1, 0.8, 0.5))
-		return
 	var p = G.player
 	var times := 5 if Input.is_key_pressed(KEY_SHIFT) else 1
+	if G.mode == "client":
+		# The server crafts; "+N item" shows when its inventory update arrives.
+		if Crafting.can_craft(p.inv, r, G.game.nearby_stations()):
+			G.sfx.play("craft", -4.0)
+			G.game.on_crafted(int(r["out"]))
+		G.net.request_craft(Crafting.RECIPES.find(r), times)
+		return
 	var made := 0
 	for k in times:
 		if not Crafting.can_craft(p.inv, r, G.game.nearby_stations()):

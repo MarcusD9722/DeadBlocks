@@ -112,8 +112,9 @@ func _ready() -> void:
 	if G.mode == "client":
 		player.spawn_point = G.session["spawn"]
 		player.set_look(float(G.session["yaw"]), -0.1)
-	player.inv.add(Items.BERRIES, 3)
-	player.inv.add(Blocks.TORCH, 2)
+	if G.mode != "client":  # online, the server sends the inventory
+		player.inv.add(Items.BERRIES, 3)
+		player.inv.add(Blocks.TORCH, 2)
 
 	hud = preload("res://scripts/hud.gd").new()
 	add_child(hud)
@@ -123,6 +124,7 @@ func _ready() -> void:
 	if G.mode == "client":
 		hud.hide_title()
 		hud.show_loading_overlay(true)
+		G.net.attach(world)
 
 	if G.has_arg("--autotest"):
 		var t := preload("res://scripts/autotest.gd").new()
@@ -351,7 +353,7 @@ func start_game() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	if G.mode == "client":
 		hud.msg("Joined %s. Press T to chat, Esc for the player list." % G.net.host, Color(0.8, 1, 0.8))
-		hud.msg("Test build: building, crafting and zombies come online in the next builds.", Color(1, 0.9, 0.6))
+		hud.msg("Test build: zombies and animals come online in the next build.", Color(1, 0.9, 0.6))
 		return
 	hud.msg("Day 1. Gather wood, craft tools, and build shelter before 20:00.", Color(1, 1, 0.8))
 	hud.msg("Hold left click on a tree to collect logs.", Color(0.7, 1, 0.7))

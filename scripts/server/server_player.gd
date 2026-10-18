@@ -23,6 +23,22 @@ var ping_ms := 0
 var loss_pct := 0.0
 ## Set when the server itself ends the session (kick, signed in elsewhere).
 var leave_reason := ""
+## The server's copy of the player's inventory (the account's), and whether to resend it.
+var inv: Inventory = null
+var inv_dirty := false
+## Latest request seq handled; S_INV acknowledges it so the client can drop its guesses.
+var last_seq := 0
+var last_break_ms := 0
+## Requests this session, and how many were refused (shown in the log when the player leaves).
+var requests := 0
+var refused := 0
+## Chunk subscriptions (see Proto.SUB_RADIUS): keys this client is kept up to date on, the
+## chunk they were computed around, and edited chunks still to send in full.
+var subs := {}
+var sub_center := Vector2i(1 << 30, 1 << 30)
+var chunk_queue: Array = []
+## Blocks to resend after a refused request, so the client's guess is undone.
+var fixes: Array[Vector3i] = []
 
 
 func take_damage(_amount: float, _from: Vector3) -> void:

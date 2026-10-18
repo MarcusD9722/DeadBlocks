@@ -1,6 +1,6 @@
 # M1 plan: multiplayer foundation
 
-Status: **approved by the owner; M1.1 and M1.2 done.** Merged from three independent drafts (simplest-first, performance-first, risk-first), each of which prototyped and measured parts of this in a scratch copy. Numbers marked *measured* come from those prototypes on the 4-core 2.1 GHz cloud machine unless they say "Pi".
+Status: **approved by the owner; M1.1, M1.2 and M1.3 done.** Merged from three independent drafts (simplest-first, performance-first, risk-first), each of which prototyped and measured parts of this in a scratch copy. Numbers marked *measured* come from those prototypes on the 4-core 2.1 GHz cloud machine unless they say "Pi".
 
 ## Goals
 At the end of M1:
@@ -149,13 +149,16 @@ Marcus's test (0.2.1): two windows on Windows worked; joining the Pi over the LA
 - **Done when:** nettest join/auth/movement/pause pass; the x86 server and the arm64 server under qemu both accept joins; autotest still green.
 - **Marcus tries:** Host game in one window, Join 127.0.0.1 from a second window, walk around and chat; a wrong password or PIN gives a clear message. Then an **early internet test**: run the server on the Pi from the git checkout (in tmux), join it from the PC over the LAN, do the CGNAT check, forward UDP 24650, and have one friend join. This also checks that Windows terrain matches the Pi's.
 
-### M1.3 Building together
+### M1.3 Building together — done
+Result (0.3.0): the server owns blocks and inventories. Break / place / craft / eat / move-item requests are checked (reach 6.5 m, the block the client saw, the item in the slot, mining time with slack, not inside another player, a station within 4 blocks) and applied in arrival order; drops go into the server's copy of that player's inventory (`/give` for admins). The client shows its own break or place at once and the server's answer replaces the guess: refused requests resend the real block, and inventory guesses are replayed until the server's S_INV acknowledges the request. **Chunk subscriptions** replace "send modified chunks when in range": the server tells each client which chunks within 9 are untouched (generate them yourself) and which are edited (a zstd copy follows on the bulk channel); edit batches are numbered once per tick, and copies and subscriptions say which batch they include, so edits arriving before or after a copy on another channel are applied exactly once. All of it is in `tools/run_nettest.sh`: mining with drops, a pillar, crafting nothing without a workbench and a pickaxe at one, eating, moving an item, two players breaking the same block (one drop), the other player's and the server's blocks hashing the same, a late joiner, inventory kept across a rejoin, blocks matching after an automatic reconnect, and a soak of 3 players × 5 edits/s (60 s in the full gate) where ~20% of requests are refused as they collide and every world still ends identical to the server's. Crack stages moved to M1.4: nothing damages blocks online until zombies do.
+Open item: in one of five full runs, the exported arm64 server under qemu stopped answering (no log lines at all) during the "Host game" part of the test, after which the freeze tests couldn't join. It did not happen again in 12 targeted loops of that sequence or under extra load; `run_nettest.sh` now prints the server process's state (running, waiting, stopped; per-thread wchan) whenever a client gets no answer, so the next occurrence explains itself. Watch for it on the real Pi.
+
 - **Work:** server-checked break / place / craft / eat / inventory moves; server-owned inventories (drops go to the right player); edit queue → batched edit messages; saved/modified chunk data for players arriving in an edited area; optimistic edits with rollback; crack stages.
 - **Done when:** nettest edits/inventory pass, including the late joiner, the two-simultaneous-breaks case, and a 60 s soak of 3 bots × 5 edits/s ending with identical chunk hashes everywhere.
 - **Marcus tries:** two windows (or a friend): build a hut in one and watch it appear in the other; craft at a workbench; leave, add blocks, rejoin and see them.
 
 ### M1.4 Zombies and animals online
-- **Work:** zombie/animal code split into a server part (think + move, no visuals) and a client view (models, animation, groans, flash, death fall, driven by snapshot flags); per-player spawning with the current caps and a global ceiling of 120; zombies chase the nearest player in their region; combat (attack checks, damage and knockback to players, kill rewards); Blood Moon for everyone; admin commands.
+- **Work:** crack stages for block damage (moved from M1.3); zombie/animal code split into a server part (think + move, no visuals) and a client view (models, animation, groans, flash, death fall, driven by snapshot flags); per-player spawning with the current caps and a global ceiling of 120; zombies chase the nearest player in their region; combat (attack checks, damage and knockback to players, kill rewards); Blood Moon for everyone; admin commands.
 - **Done when:** nettest zombie/combat/bandwidth/loss pass; with 8 bot clients the combined benchmark here is ≤ 50%; a 120 s Blood Moon soak with 3 bots runs clean.
 - **Marcus tries:** Host + Join (or a friend), `/bloodmoon`, defend a wall together and watch both screens show the same zombies and cracks.
 
