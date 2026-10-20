@@ -3,9 +3,14 @@ extends "res://scripts/tests/nettest.gd"
 ## Presses Play solo (a new world called "autotest", so the player's own solo world is left
 ## alone) and plays it through the real client against the game's own local server: mining,
 ## crafting at a workbench, a pickaxe, eating, a horde breaking a wall, fighting, death and
-## respawn, a Blood Moon and its dawn, boars, the pause menu stopping the world, and quitting
-## and continuing with everything still there.
+## respawn with the backpack, a Blood Moon and its dawn, boars, the pause menu stopping the
+## world, and quitting and continuing with everything still there.
 ## Prints AUTOTEST PASS/FAIL lines and ends with `AUTOTEST DONE fails=N`.
+
+## The backpack from the night's death, left lying until after Save and Quit.
+var _night_bp := Vector3i.MIN
+## Our bed, the respawn point (placed after the workbench).
+var _bed := Vector3i.MIN
 
 
 func _ready() -> void:
@@ -101,6 +106,18 @@ func _play() -> void:
 	check(g.nearby_stations().has("workbench"), "the workbench counts as nearby")
 	G.net.request_craft(_recipe(Items.WOOD_PICK), 1)
 	check(await _until(func(): return _count(Items.WOOD_PICK) == 1, 5.0), "crafted a wooden pickaxe at the workbench")
+
+	# A bed (M2): placing it makes it where we wake up after dying.
+	G.net.send_chat("/give plant_fiber 3")
+	await _until(func(): return _count(Items.FIBER) >= 3, 10.0)
+	G.net.request_craft(_recipe(Blocks.BED), 1)
+	check(await _until(func(): return _count(Blocks.BED) == 1, 5.0), "crafted a bed at the workbench")
+	await _place_bed()
+	check(_bed != Vector3i.MIN, "the bed is our respawn point (%s)" % _bed)
+	if _bed != Vector3i.MIN:
+		_look_at(Vector3(_bed) + Vector3(0.5, 0.25, 0.5))
+		await _wait(0.4)
+		await _shot("08_bed")
 
 	# Stone with the pickaxe gives cobblestone.
 	var stone_p := _find_block(Blocks.STONE, 6, 6.3)
@@ -209,10 +226,23 @@ func _play() -> void:
 		p.global_position += Vector3(0, 40, 0)
 	check(await _until(func(): return p.dead, 15.0), "died (health %.0f)" % p.health)
 	check(g.state == "dead", "the death screen shows")
+	check(await _until(func(): return G.net.my_backpacks.size() == 1, 5.0), "dying drops a backpack (it's marked on screen)")
+	_night_bp = _new_backpack([])
+	check(w.get_blockv(_night_bp) == Blocks.BACKPACK, "the backpack is in the world (%s)" % _night_bp)
+	check(await _until(func(): return _count(Items.STONE_SWORD) == 0 and _count(Items.WOOD_PICK) == 0, 5.0), "everything we carried went into it")
+	await _wait(1.2)
+	check("backpack" in G.hud.death_lbl.text, "the death screen says where our things are")
 	await _shot("05_dead")
 	await _wait(1.0)
+	check(G.hud.death_bed.visible, "the death screen offers our bed")
 	g.respawn()
 	check(await _until(func(): return not p.dead and p.health >= 99.0 and g.state == "playing", 10.0), "respawned with full health")
+	check(_bed != Vector3i.MIN and p.global_position.distance_to(Vector3(_bed) + Vector3(0.5, 0.5, 0.5)) < 2.5,
+		"next to our bed (%.1f m away)" % p.global_position.distance_to(Vector3(_bed)))
+	if _night_bp != Vector3i.MIN:
+		_look_at(Vector3(_night_bp) + Vector3(0.5, 3.0, 0.5))
+		await _wait(0.8)
+		await _shot("10_backpack_beam")
 
 	# Blood Moon, then dawn.
 	G.net.send_chat("/bloodmoon")
@@ -232,20 +262,54 @@ func _play() -> void:
 		"and they look like day zombies again")
 
 	# Stuck somewhere: the pause menu's Die and Respawn, falling out of the world, being buried.
+	# Each death drops a backpack, which we pick up again.
 	if p.dead:
 		g.respawn()
 		await _until(func(): return g.state == "playing", 10.0)
+	var zs0: Array = _mob_ids([Proto.MOB_ZOMBIE, Proto.MOB_NIGHT, Proto.MOB_HORDE])
+	G.net.send_chat("/clear")
+	check(await _until(func(): return _has_notice("Removed ") and zs0.all(func(id): return not G.net.mobs.has(id)), 10.0),
+		"/clear removes the zombies (%d of them)" % zs0.size())
+	if G.net.bed == Vector3i.MIN:
+		# The Blood Moon horde smashed it: a new one, so the respawns below stay close by.
+		print("AUTOTEST the horde broke our bed: placing another")
+		G.net.send_chat("/give bed")
+		await _until(func(): return _count(Blocks.BED) == 1, 10.0)
+		await _place_bed()
+	G.net.send_chat("/give planks 7")
+	await _until(func(): return _count(Blocks.PLANKS) == 7, 10.0)
 	g.pause()
 	g.kill_self()
 	check(await _until(func(): return p.dead and g.state == "dead", 10.0), "Die and Respawn: we die")
+	check(await _until(func(): return G.net.my_backpacks.size() == 2, 5.0), "a second backpack")
+	var bp := _new_backpack([_night_bp])
+	var left0: float = G.net.my_backpacks.filter(func(e): return e[0] == bp)[0][1] if bp != Vector3i.MIN else 0.0
+	await _wait(2.0)
+	var left1: float = G.net.my_backpacks.filter(func(e): return e[0] == bp)[0][1] if bp != Vector3i.MIN else 0.0
+	check(left0 > 500.0 and left1 < left0 - 1.0, "its 10 minutes run down (%.0f s, then %.0f s)" % [left0, left1])
 	g.respawn()
 	check(await _until(func(): return not p.dead and g.state == "playing", 10.0), "and respawn")
 	await _until(func(): return p.is_on_floor(), 5.0)
+	await _mine_backpack(bp)
+	check(await _until(func(): return _count(Blocks.PLANKS) == 7 and G.net.my_backpacks.size() == 1 and w.get_blockv(bp) == Blocks.AIR, 5.0),
+		"mining the backpack gives everything back (%d planks)" % _count(Blocks.PLANKS))
+	G.net.send_chat("/give dirt 3")
+	await _until(func(): return _count(Blocks.DIRT) == 3, 10.0)
+	await _until(func(): return p.is_on_floor(), 5.0)
+	var stood: Vector3 = p.global_position
+	await _wait(0.3)  # our last position on the ground reaches the server
 	p.global_position.y = -15.0
 	check(await _until(func(): return p.dead, 10.0), "falling out of the world is a death, not falling forever")
+	check(await _until(func(): return G.net.my_backpacks.size() == 2, 5.0), "it drops a backpack too")
+	var vb := _new_backpack([_night_bp])
+	var off := Vector2(vb.x + 0.5 - stood.x, vb.z + 0.5 - stood.z).length()
+	check(vb.y >= 1 and Blocks.is_solid(w.get_blockv(vb + Vector3i.DOWN)) and off < 4.0,
+		"on the ground where we last stood, not in the void (%s, %.1f m off)" % [vb, off])
 	g.respawn()
 	await _until(func(): return not p.dead and g.state == "playing", 10.0)
 	await _until(func(): return p.is_on_floor(), 5.0)
+	await _mine_backpack(vb)
+	check(await _until(func(): return _count(Blocks.DIRT) == 3 and G.net.my_backpacks.size() == 1, 5.0), "and we get it back")
 	var here := _base()
 	var buried := Vector3i(0, -1, 0)
 	for depth in range(3, 12):
@@ -261,6 +325,24 @@ func _play() -> void:
 			var f := Vector3i(floori(p.global_position.x), floori(p.global_position.y + 0.1), floori(p.global_position.z))
 			return not Blocks.is_solid(w.get_blockv(f)) and not Blocks.is_solid(w.get_blockv(f + Vector3i.UP))
 		check(await _until(free, 5.0), "buried in the ground, we climb out by ourselves")
+
+## Place the bed we hold on the ground behind us; sets _bed once the server says it's ours.
+func _place_bed() -> void:
+	var p = G.player
+	await _hold(Blocks.BED)
+	await _until(func(): return p.is_on_floor(), 5.0)
+	for yaw in [PI, PI * 0.5, -PI * 0.5, 0.0]:
+		p.set_look(yaw, -1.1)
+		await _wait(0.3)
+		p._update_target()
+		if not p.target.get("hit", false):
+			continue
+		var at: Vector3i = p.target["pos"] + p.target["normal"]
+		if p.place(Blocks.BED):
+			if await _until(func(): return G.net.bed == at and G.world.get_blockv(at) == Blocks.BED, 5.0):
+				_bed = at
+				return
+
 
 ## Chase mob `id` and hit it until it dies (a boar runs away once it is hit).
 func _hunt(id: int, secs: float) -> bool:
@@ -307,6 +389,7 @@ func _continue_later() -> void:
 		await _until(func(): return g.state == "playing", 10.0)
 	var pos: Vector3 = p.global_position
 	var picks := _count(Items.WOOD_PICK)
+	var planks := _count(Blocks.PLANKS)
 	var day: int = g.day
 	await _until(func(): return p.is_on_floor(), 5.0)
 	pos = p.global_position
@@ -328,5 +411,38 @@ func _continue_later() -> void:
 	p = G.player
 	check(G.game.day == day, "the same day (%d)" % G.game.day)
 	check(p.global_position.distance_to(pos) < 1.5, "back where we left (off by %.2f m)" % p.global_position.distance_to(pos))
-	check(await _until(func(): return _count(Items.WOOD_PICK) == picks and _count(Items.STONE_SWORD) == 1, 10.0), "the same things in the inventory")
+	check(await _until(func(): return _count(Items.WOOD_PICK) == picks and _count(Blocks.PLANKS) == planks, 10.0), "the same things in the inventory")
+	# The night's backpack is still where it fell, with its time left, and has the sword in it.
+	check(await _until(func(): return G.net.my_backpacks.any(func(e): return e[0] == _night_bp), 10.0), "the night's backpack is still there after Continue")
+	check(G.world.get_blockv(_night_bp) == Blocks.BACKPACK, "and in the world")
+	if G.game.state == "dead":
+		G.game.respawn()
+		await _until(func(): return G.game.state == "playing", 10.0)
+	await _mine_backpack(_night_bp, 60.0)
+	check(await _until(func(): return _count(Items.STONE_SWORD) == 1 and _count(Items.WOOD_PICK) == picks + 1, 5.0),
+		"picked it up: the sword and the pickaxe are back")
+	check(G.net.bed != Vector3i.MIN and G.world.get_blockv(G.net.bed) == Blocks.BED, "our bed is still our respawn point")
+
+	# Without a bed we wake up somewhere random, on open ground (and not in the void).
+	var bed: Vector3i = G.net.bed
+	await _walk_to(Vector3(bed) + Vector3(0.5, 0, 0.5), 2.0, 60.0)
+	_look_at(Vector3(bed) + Vector3(0.5, 0.25, 0.5))
+	p.break_block(bed, Blocks.BED)
+	check(await _until(func(): return G.net.bed == Vector3i.MIN and _count(Blocks.BED) == 1, 5.0), "breaking the bed: no respawn point any more")
+	var died_at: Vector3 = p.global_position
+	G.net.send_chat("/kill")
+	check(await _until(func(): return p.dead and G.game.state == "dead", 10.0), "/kill")
+	await _wait(1.2)
+	check(not G.hud.death_bed.visible, "the death screen has no bed to offer")
+	G.game.respawn(false)
+	check(await _until(func(): return G.game.state == "playing" and G.world.is_ready_at(p.global_position), 30.0), "respawned, and the land there loads")
+	await _shot("09_random_respawn")
+	check(await _until(func(): return p.is_on_floor(), 15.0), "standing on the ground at %s" % p.global_position)
+	var far := Vector2(p.global_position.x - died_at.x, p.global_position.z - died_at.z).length()
+	var spawn: Vector3 = G.session["spawn"]
+	var off := Vector2(p.global_position.x - spawn.x, p.global_position.z - spawn.z).length()
+	check(off > 2.0 and Vector2(p.global_position.x, p.global_position.z).length() < 1010.0,
+		"somewhere random within 1 km of the center, not the world spawn (%.0f m from where we died)" % far)
+	await _wait(3.0)
+	check(not p.dead and p.global_position.y > 1.0, "and still fine 3 s later")
 	await _wait(1.0)

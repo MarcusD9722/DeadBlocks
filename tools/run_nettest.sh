@@ -97,7 +97,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"${SERVER[@]}" --server --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=2 --seed=4242 --test-log --no-spawns \
+"${SERVER[@]}" --server --respawn-radius=0 --linger-s=0 --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=2 --seed=4242 --test-log --no-spawns --backpack-s=30 \
 	--admins=alice > "$LOG_DIR/server.log" 2>&1 &
 SPID=$!
 if ! wait_line "$LOG_DIR/server.log" "listening on UDP" 120; then
@@ -254,7 +254,7 @@ fi
 # breaking the same block, a late joiner getting the edited chunks, and a soak test.
 kill $SPID 2>/dev/null
 PORT=$((PORT + 3))
-"${SERVER[@]}" --server --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=8 --seed=4242 --test-log --no-spawns \
+"${SERVER[@]}" --server --respawn-radius=0 --linger-s=0 --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=8 --seed=4242 --test-log --no-spawns \
 	--admins=alice,soak1,soak2,soak3 > "$LOG_DIR/server_build.log" 2>&1 &
 SPID=$!
 if wait_line "$LOG_DIR/server_build.log" "listening on UDP" 120; then
@@ -290,7 +290,7 @@ fi
 # then a Blood Moon with 3 players and the normal spawner on.
 kill $SPID 2>/dev/null
 PORT=$((PORT + 1))
-"${SERVER[@]}" --server --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=8 --seed=4242 --test-log --no-spawns \
+"${SERVER[@]}" --server --respawn-radius=0 --linger-s=0 --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=8 --seed=4242 --test-log --no-spawns \
 	--admins=alice > "$LOG_DIR/server_fight.log" 2>&1 &
 SPID=$!
 if wait_line "$LOG_DIR/server_fight.log" "listening on UDP" 120; then
@@ -307,7 +307,7 @@ else
 fi
 kill $SPID 2>/dev/null
 PORT=$((PORT + 1))
-"${SERVER[@]}" --server --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=8 --seed=4242 --test-log \
+"${SERVER[@]}" --server --respawn-radius=0 --linger-s=0 --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=8 --seed=4242 --test-log \
 	--admins=horde1,horde2,horde3 > "$LOG_DIR/server_mobs.log" 2>&1 &
 SPID=$!
 if wait_line "$LOG_DIR/server_mobs.log" "listening on UDP" 120; then
@@ -323,7 +323,47 @@ else
 	fail "mob server started (see $LOG_DIR/server_mobs.log)"
 fi
 
-# 11. Saving. One world folder for all of these servers, saved every 2 s:
+# 11. Logging out (M2): a leaving player's character stays in the world for a while (15 s here).
+# bob watches: alice leaves (her character stays, marked away), comes back within the time (the
+# same character continues), leaves again (it goes when the time is up), then leaves with
+# zombies after her: they kill the character, and she comes back on the death screen.
+kill $SPID 2>/dev/null
+PORT=$((PORT + 1))
+"${SERVER[@]}" --server --respawn-radius=0 --linger-s=15 --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=8 --seed=4242 --test-log --no-spawns \
+	--admins=alice > "$LOG_DIR/server_linger.log" 2>&1 &
+SPID=$!
+if wait_line "$LOG_DIR/server_linger.log" "listening on UDP" 120; then
+	client lwatch bob 5678 pw lwatch
+	LW=$CPID
+	if wait_line "$LOG_DIR/lwatch.log" "NETTEST online" 90; then
+		client linger1 alice 1234 pw linger
+		wait $CPID
+		report linger1
+		lpos=$(sed -n 's/^NETTEST linger pos=//p' "$LOG_DIR/linger1.log")
+		client linger_back alice 1234 pw join --nettest-expect="$lpos"
+		wait $CPID
+		report linger_back
+		if grep -q "SERVER alice's character is back with its player" "$LOG_DIR/server_linger.log"; then
+			pass "coming back within the time continues the same character"
+		else
+			fail "coming back within the time continues the same character"
+		fi
+		wait_line "$LOG_DIR/lwatch.log" "NETTEST lwatch gone" 60
+		client linger2 alice 1234 pw linger --nettest-zombies
+		wait $CPID
+		report linger2
+		wait_line "$LOG_DIR/lwatch.log" "NETTEST lwatch done" 60
+		client linger_dead alice 1234 pw join --nettest-dead
+		wait $CPID
+		report linger_dead
+	fi
+	wait $LW
+	report lwatch
+else
+	fail "linger server started (see $LOG_DIR/server_linger.log)"
+fi
+
+# 12. Saving. One world folder for all of these servers, saved every 2 s:
 # - a clean stop from the control folder saves; the restart (with a different --seed, which a
 #   saved world must ignore) gives back the player's place, items, blocks and the clock;
 # - a second server can't open the same world;
@@ -341,7 +381,7 @@ WORLD_DIR="$SAVE_DATA/worlds/main"
 save_server() {
 	local log=$1
 	shift
-	"${SERVER[@]}" --server --port=$PORT --data="$SAVE_DATA" --password=pw --max-players=8 --test-log --no-spawns \
+	"${SERVER[@]}" --server --respawn-radius=0 --linger-s=0 --port=$PORT --data="$SAVE_DATA" --password=pw --max-players=8 --test-log --no-spawns \
 		--admins=alice,crash1 --autosave=2 "$@" > "$LOG_DIR/$log.log" 2>&1 &
 	SPID=$!
 }

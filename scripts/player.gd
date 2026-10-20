@@ -240,6 +240,7 @@ func _unstick(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	if dead:
+		_update_held()  # the backpack took everything: an empty hand
 		return
 	var st: String = G.game.state
 	attack_cd -= delta

@@ -3,9 +3,10 @@ extends Node
 ## `-- --connect=127.0.0.1:PORT --name=N --pin=P --password=S --nettest=ROLE [--radius=3]`
 ## Prints NETTEST PASS/FAIL lines and ends with `NETTEST DONE fails=N`.
 ## Roles:
-##   a, b         two players: walk, chat, check where they see each other, try an admin command,
-##                get a 30 m cheat jump corrected. "a" must be an admin. "a" leaves first and "b"
-##                checks that it saw the leave.
+##   a, b         two players: walk, chat, check where they see each other and what they hold, try
+##                an admin command, get a 30 m cheat jump corrected; "a" dies and "b" picks up its
+##                backpack, and a second one falls apart (server --backpack-s=30). "a" must be an
+##                admin. "a" leaves first and "b" checks that it saw the leave.
 ##   join         join and stay a few seconds; with --nettest-expect=x,y,z also check the start
 ##                position (where this name last left the server)
 ##   hold         join and stay online until killed (crash and full-server tests)
@@ -30,7 +31,13 @@ extends Node
 ##                fight, die, respawn; report zombies seen and the bandwidth they cost
 ##   saver        (admin) builds a pillar, gets a pickaxe, then prints NETTEST saved ... with
 ##                what a restarted server must give back (join checks it: --nettest-expect,
-##                --nettest-has, --nettest-count=ID:N, --nettest-hash=CX,CZ,HASH)
+##                --nettest-has, --nettest-count=ID:N, --nettest-hash=CX,CZ,HASH; --nettest-dead:
+##                the character died while it was away, so it comes back on the death screen with
+##                a backpack)
+##   linger       (admin) gets some planks and leaves (its character stays: M2); with
+##                --nettest-zombies it first sets 4 hunting zombies on itself
+##   lwatch       watches "linger" leave: the character stays, marked away, and goes once the
+##                linger time is up; then zombies kill it after its player left
 ##   crasher      (admin) keeps building and breaking while the script kills and restarts the
 ##                server (--nettest-crashes=N times, at most --nettest-soak=S seconds; prints
 ##                NETTEST crasher online N each time it is back); then its world must match
@@ -54,12 +61,16 @@ func _ready() -> void:
 	G.net.chat.connect(func(from: String, text: String): _chats.append([from, text]))
 	G.net.notice.connect(_on_notice)
 	var limit := 150.0 if role == "hold" or G.has_arg("--nettest-crash") else 90.0
+	if role == "a" or role == "b":
+		limit = 200.0
 	if role == "stall":
 		limit = 240.0
 	elif role == "soak" or role == "horde" or role == "crasher":
 		limit = 120.0 + float(G.arg_value("--nettest-soak="))
 	elif role == "fighter" or role == "zwatch":
 		limit = 360.0
+	elif role == "lwatch":
+		limit = 300.0
 	elif role == "autotest":
 		limit = 600.0
 	get_tree().create_timer(limit, true, false, true).timeout.connect(_on_timeout)
@@ -177,6 +188,10 @@ func _run() -> void:
 		await _run_saver()
 	elif role == "crasher":
 		await _run_crasher()
+	elif role == "linger":
+		await _run_linger()
+	elif role == "lwatch":
+		await _run_lwatch()
 	else:
 		check(false, "known role (got '%s')" % role)
 	await _finish()
@@ -206,6 +221,12 @@ func _run_reject(text: String) -> void:
 
 
 func _run_join() -> void:
+	if G.has_arg("--nettest-dead"):
+		var dead := func(): return G.net.is_online() and G.game != null and is_instance_valid(G.game) and G.game.state == "dead"
+		check(await _until(dead, 60.0), "comes back on the death screen (its character died while it was away)")
+		check(await _until(func(): return G.net.my_backpacks.size() == 1, 5.0), "with a backpack where it died")
+		await _wait(2.0)
+		return
 	if not await _until(_playing, 60.0):
 		check(false, "joined the server (%s)" % ", ".join(_errors))
 		return
@@ -227,6 +248,54 @@ func _run_join() -> void:
 		var mine: String = G.world.region_hash(c.x, c.y, 1)
 		check(mine == hp[2], "the same blocks as before the restart (%s, then %s)" % [mine, hp[2]])
 	await _wait(4.0)
+
+
+func _run_linger() -> void:
+	if not await _until(_playing, 60.0):
+		check(false, "joined the server (%s)" % ", ".join(_errors))
+		return
+	check(true, "joined the server")
+	G.net.send_chat("/give planks 3")
+	check(await _until(func(): return _count(Blocks.PLANKS) >= 3, 10.0), "got planks")
+	if G.has_arg("--nettest-zombies"):
+		G.net.send_chat("/spawn night 4")
+		check(await _until(func(): return _mob_ids([Proto.MOB_NIGHT]).size() >= 3, 10.0), "zombies are coming")
+	var at: Vector3 = G.player.global_position
+	print("NETTEST linger pos=%.3f,%.3f,%.3f" % [at.x, at.y, at.z])
+	await _wait(0.5)  # that position reaches the server
+
+
+func _run_lwatch() -> void:
+	if not await _until(_playing, 60.0):
+		check(false, "joined the server (%s)" % ", ".join(_errors))
+		return
+	print("NETTEST online")
+	var alice := func() -> int:
+		for id in G.net.others:
+			if G.net.others[id]["name"] == "alice":
+				return id
+		return 0
+	var away := func() -> bool:
+		var id: int = alice.call()
+		return id != 0 and not G.net.others[id]["samples"].is_empty() and (int(G.net.others[id]["samples"].back()[4]) & Proto.F_AWAY) != 0
+	var lefts := func() -> int: return _notices.filter(func(n): return String(n).begins_with("alice left the game.")).size()
+	# 1. alice leaves: her character stays, marked away.
+	check(await _until(func(): return lefts.call() >= 1, 120.0), "alice left")
+	check(await _until(away, 3.0), "her character stays in the world, marked away")
+	var rp = G.game.remote_players.get(alice.call())
+	check(rp != null and "(away)" in rp.label.text, "its name tag says (away)")
+	# 2. She comes back (the same character continues) and leaves again: it goes after linger_s.
+	check(await _until(func(): return lefts.call() >= 2, 90.0), "alice came back and left again")
+	var t0 := Time.get_ticks_msec()
+	check(await _until(func(): return alice.call() == 0, 40.0), "her character goes once the time is up")
+	var secs := (Time.get_ticks_msec() - t0) / 1000.0
+	check(secs > 10.0, "after the linger time (%.0f s)" % secs)
+	print("NETTEST lwatch gone")
+	# 3. She leaves with zombies after her: they kill her character.
+	check(await _until(func(): return lefts.call() >= 3, 90.0), "alice left with zombies after her")
+	check(await _until(func(): return _has_notice("alice died."), 40.0), "the zombies killed her character after she left")
+	check(await _until(func(): return alice.call() == 0, 10.0), "and it's gone from the world")
+	print("NETTEST lwatch done")
 
 
 func _run_hold() -> void:
@@ -326,8 +395,41 @@ func _run_pair() -> void:
 	check(p.global_position.distance_to(before) < 1.5, "back in place after the correction (off by %.2f m)" % p.global_position.distance_to(before))
 	await _wait(1.0)
 
+	# Backpacks (M2): "a" dies with things on it and "b" picks up the pack; a second one falls
+	# apart by itself (this server runs with --backpack-s=30).
+	if role == "a":
+		G.net.send_chat("/give planks 5")
+		await _until(func(): return _count(Blocks.PLANKS) == 5, 10.0)
+		G.net.send_chat("/kill")
+		check(await _until(func(): return p.dead and G.net.my_backpacks.size() == 1, 10.0), "/kill: dead, with a backpack marker")
+		var bp := _new_backpack([])
+		check(await _until(func(): return G.world.get_blockv(bp) == Blocks.BACKPACK, 5.0), "the backpack is in the world (%s)" % bp)
+		check(_count(Blocks.PLANKS) == 0 and _count(Blocks.TORCH) == 0, "everything went into it")
+		G.game.respawn()
+		await _until(func(): return not p.dead, 10.0)
+		G.net.send_chat("NT bp %d %d %d" % [bp.x, bp.y, bp.z])
+		check(await _until(func(): return G.net.my_backpacks.is_empty() and G.world.get_blockv(bp) == Blocks.AIR, 45.0),
+			"%s picked up my backpack (my marker is gone)" % other)
+		G.net.send_chat("/give dirt 2")
+		await _until(func(): return _count(Blocks.DIRT) == 2, 10.0)
+		G.net.send_chat("/kill")
+		check(await _until(func(): return p.dead and G.net.my_backpacks.size() == 1, 10.0), "died again: a second backpack")
+		var bp2 := _new_backpack([])
+		G.game.respawn()
+		check(await _until(func(): return G.net.my_backpacks.is_empty() and G.world.get_blockv(bp2) == Blocks.AIR, 60.0),
+			"left alone, it falls apart")
+	else:
+		check(await _until(func(): return _chat_from(other, "NT bp ") != "", 40.0), "%s says where its backpack is" % other)
+		var v := _vec(_chat_from(other, "NT bp "))
+		var bp := Vector3i(int(v.x), int(v.y), int(v.z))
+		check(await _until(func(): return G.world.get_blockv(bp) == Blocks.BACKPACK, 10.0), "sees %s's backpack" % other)
+		var torches := _count(Blocks.TORCH)
+		await _mine_backpack(bp, 20.0)
+		check(await _until(func(): return _count(Blocks.PLANKS) == 5 and _count(Blocks.TORCH) == torches + 2, 5.0),
+			"mined it and got %s's things" % other)
+
 	G.net.send_chat("NT checked")
-	check(await _until(func(): return _chat_from(other, "NT checked") != "", 30.0), "%s finished its checks" % other)
+	check(await _until(func(): return _chat_from(other, "NT checked") != "", 100.0), "%s finished its checks" % other)
 	var fin: Vector3 = p.global_position
 	print("NETTEST final_pos=%.3f,%.3f,%.3f" % [fin.x, fin.y, fin.z])
 	if role == "b":
@@ -715,6 +817,24 @@ func _mob_dist(id: int) -> float:
 	return 999.0 if s.is_empty() else (s["pos"] as Vector3).distance_to(G.player.global_position)
 
 
+## Walk up to backpack `bp` and mine it (M2). Whoever mines it gets what's in it.
+func _mine_backpack(bp: Vector3i, secs := 30.0) -> void:
+	var target := Vector3(bp) + Vector3(0.5, 0.0, 0.5)
+	await _walk_to(target, 2.0, secs)
+	await _until(func(): return G.player.is_on_floor(), 3.0)
+	_look_at(target + Vector3(0, 0.3, 0))
+	if G.world.get_blockv(bp) == Blocks.BACKPACK:
+		G.player.break_block(bp, Blocks.BACKPACK)
+
+
+## Our own backpack that isn't in `known` (the newest one), or Vector3i.MIN.
+func _new_backpack(known: Array) -> Vector3i:
+	for e in G.net.my_backpacks:
+		if not known.has(e[0]):
+			return e[0]
+	return Vector3i.MIN
+
+
 ## Walk (sprinting) toward a point for up to `secs`; true once within `near` metres.
 func _walk_to(target: Vector3, near: float, secs: float) -> bool:
 	var p = G.player
@@ -789,10 +909,35 @@ func _run_fighter() -> void:
 	# Without pathfinding (M5) a zombie behind a tree has to dig through, so only check that it
 	# heads our way, then meet it.
 	check(await _until(func(): return _mob_dist(zid) < d0 - 3.0, 20.0), "the zombie comes for us (from %.0f m)" % d0)
-	var zs: Dictionary = G.net.mob_sample(zid)
-	if not zs.is_empty() and _mob_dist(zid) > 2.0:
-		await _walk_to(zs["pos"], 1.5, 10.0)
-	check(await _until(func(): return int(G.net.bytes_in.get(Proto.S_HURT, 0)) > hurts0, 15.0), "the zombie hurts us (health %.0f)" % p.health)
+	# Meet it; if a tree or a ledge is in the way, keep going to where it is now (as a player would).
+	# Without pathfinding a zombie that spawned in a bad spot may still never get to us: then a
+	# fresh one somewhere else (up to 3).
+	var hurt := func(): return int(G.net.bytes_in.get(Proto.S_HURT, 0)) > hurts0
+	for attempt in 3:
+		if attempt > 0:
+			print("NETTEST zombie %d can't get to us: clearing it and spawning another" % zid)
+			G.net.send_chat("/clear")
+			await _until(func(): return not G.net.mobs.has(zid), 5.0)
+			var known: Array = G.net.mobs.keys()
+			G.net.send_chat("/spawn zombie 1")
+			await _until(func(): return _mob_ids([Proto.MOB_ZOMBIE]).any(func(id): return not known.has(id)), 10.0)
+			var got: Array = _mob_ids([Proto.MOB_ZOMBIE]).filter(func(id): return not known.has(id))
+			if not got.is_empty():
+				zid = got[0]
+		var t_meet := Time.get_ticks_msec()
+		var t_log := 0
+		while not hurt.call() and Time.get_ticks_msec() - t_meet < 15000:
+			var zs: Dictionary = G.net.mob_sample(zid)
+			if Time.get_ticks_msec() - t_log > 2000 and not zs.is_empty():
+				t_log = Time.get_ticks_msec()
+				print("NETTEST meeting zombie %d: we are at %s, it is at %s (%.1f m, flags %d)" % [zid, p.global_position, zs["pos"], _mob_dist(zid), int(zs.get("flags", 0))])
+			if not zs.is_empty() and _mob_dist(zid) > 1.2:
+				await _walk_to(zs["pos"], 1.0, 2.0)
+			else:
+				await _wait(0.3)
+		if hurt.call():
+			break
+	check(hurt.call(), "a zombie hurts us (health %.0f)" % p.health)
 	check(await _fight(zid, 20.0), "killed the zombie")
 	check(await _until(func(): return G.game.kills == 1, 5.0), "the server counted the kill (%d)" % G.game.kills)
 	check(await _until(func(): return not G.net.mobs.has(zid), 5.0), "the dead zombie goes away")
@@ -826,6 +971,9 @@ func _run_fighter() -> void:
 		p.global_position += Vector3(0, 40, 0)
 	check(await _until(func(): return p.dead, 15.0), "died (health %.0f)" % p.health)
 	check(G.game.state == "dead", "the death screen shows")
+	# The horde is at the spawn point too: clear it first, or it kills us again right away.
+	G.net.send_chat("/clear")
+	check(await _until(func(): return _has_notice("Removed "), 10.0), "/clear")
 	await _wait(1.0)
 	G.game.respawn()
 	check(await _until(func(): return not p.dead and p.health >= 99.0 and G.game.state == "playing", 10.0), "respawned with full health")

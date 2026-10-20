@@ -14,6 +14,7 @@ const RECIPES := [
 	{"out": Items.WOOD_PICK, "n": 1, "needs": {Blocks.PLANKS: 3, Items.STICK: 2}, "st": "workbench"},
 	{"out": Items.WOOD_AXE, "n": 1, "needs": {Blocks.PLANKS: 3, Items.STICK: 2}, "st": "workbench"},
 	{"out": Blocks.SPIKES, "n": 2, "needs": {Items.STICK: 4, Blocks.PLANKS: 1}, "st": "workbench"},
+	{"out": Blocks.BED, "n": 1, "needs": {Blocks.PLANKS: 3, Items.FIBER: 3}, "st": "workbench"},
 	{"out": Items.STONE_PICK, "n": 1, "needs": {Blocks.COBBLE: 3, Items.STICK: 2}, "st": "workbench"},
 	{"out": Items.STONE_AXE, "n": 1, "needs": {Blocks.COBBLE: 3, Items.STICK: 2}, "st": "workbench"},
 	{"out": Items.STONE_SWORD, "n": 1, "needs": {Blocks.COBBLE: 2, Items.STICK: 1}, "st": "workbench"},

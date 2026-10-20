@@ -1,6 +1,6 @@
 extends RefCounted
 ## `-- --savetest`: the save files without a running server. A save/load round trip gives back
-## the same chunks, players, seed and clock; a damaged chunk or player file is set aside and the
+## the same chunks, players, backpacks, seed and clock; a damaged chunk or player file is set aside and the
 ## rest loads; a damaged world.json, a newer format and other terrain are refused; the lock keeps
 ## a second server out but a dead server's lock is taken over; leftover .tmp files are removed;
 ## backups hold the world and are pruned; control files are read in order.
@@ -46,7 +46,8 @@ static func run() -> void:
 	var bob := _account("Bob", rng)
 	var reset := _account("Ann", rng)
 	reset["pin_key"] = PackedByteArray()  # after `dbctl reset-pin`
-	check(s.save_now(3, 19.5, chunks, {"bob": bob, "ann": reset}), "save_now wrote the world")
+	var packs := [{"pos": [5, 20, -7], "owner": "Bob", "left": 412.5, "inv": [[7, 5], null, [110, 1]]}]
+	check(s.save_now(3, 19.5, chunks, {"bob": bob, "ann": reset}, {"backpacks": packs}), "save_now wrote the world")
 	s.release_lock()
 	s.free()
 
@@ -63,6 +64,11 @@ static func run() -> void:
 	var players := s.load_players()
 	check(players.has("bob") and _same_account(players["bob"], bob), "Bob came back identical")
 	check(players.has("ann") and players["ann"]["pin_key"].is_empty(), "a reset PIN stays reset")
+	var bp: Dictionary = s.backpacks[0] if s.backpacks.size() == 1 else {}
+	var bp_inv: Array = bp.get("inv", [])
+	check(bp.get("owner") == "Bob" and bp.get("pos", []).map(func(v): return int(v)) == [5, 20, -7] and is_equal_approx(float(bp.get("left", 0)), 412.5)
+		and bp_inv.size() == 3 and int(bp_inv[0][0]) == 7 and int(bp_inv[0][1]) == 5 and bp_inv[1] == null and int(bp_inv[2][0]) == 110,
+		"the backpacks came back identical (%s)" % str(s.backpacks))
 
 	# Background save, then damage: a flipped byte in a chunk, a cut player file.
 	chunks[0][1][100] = 9
@@ -207,7 +213,7 @@ static func _account(name: String, rng: RandomNumberGenerator) -> Dictionary:
 	inv.slots[35] = {"id": Blocks.TORCH, "n": 5}
 	return {"name": name, "pin_key": pin, "fails": 0, "locked_until": 0.0,
 		"pos": Vector3(-120.25, 33.0, 4096.5), "yaw": 1.25, "health": 61.5, "food": 12.25, "kills": 9,
-		"spawn": Vector3(3.5, 31.02, 0.5), "play_s": 5400.0, "inv": inv}
+		"bed": Vector3i(3, 31, -2), "play_s": 5400.0, "inv": inv}
 
 
 static func _same_account(a: Dictionary, b: Dictionary) -> bool:
@@ -215,7 +221,7 @@ static func _same_account(a: Dictionary, b: Dictionary) -> bool:
 		if a[key] != b[key]:
 			print("SAVETEST   %s differs: %s vs %s" % [key, a[key], b[key]])
 			return false
-	if not (a["pos"] as Vector3).is_equal_approx(b["pos"]) or not (a["spawn"] as Vector3).is_equal_approx(b["spawn"]):
+	if not (a["pos"] as Vector3).is_equal_approx(b["pos"]) or a["bed"] != b["bed"]:
 		return false
 	return a["inv"].slots == b["inv"].slots
 

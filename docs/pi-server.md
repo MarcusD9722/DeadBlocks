@@ -103,7 +103,10 @@ Minecraft and the Dead Blocks forwards at the new one.
 down and starts again by itself. Pulling the plug loses at most the last minute of play.
 
 **Settings** (password, admin names, port, max players) are in `~/deadblocks-server/server.cfg`.
-After changing it: `dbctl restart`.
+After changing it: `dbctl restart`. You can also add these lines:
+- `respawn_radius=1000`: how far from the world's center you can wake up without a bed (`0` = always at the world spawn).
+- `linger_s=60`: how long a character stays in the world after its player leaves (`0` = not at all).
+- `backpack_s=600`: how many seconds of play a dropped backpack lasts.
 
 ## 7. Wi-Fi: Ethernet, or at least no power saving
 **With a cable (best):** plug the Pi into the gateway. Then:

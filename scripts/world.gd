@@ -4,6 +4,7 @@ extends Node3D
 const CH := 16
 const H := 64
 const CH2 := 256
+const BEACON_H := 48.0
 
 
 class Chunk:
@@ -41,6 +42,7 @@ class MeshBuf:
 	var idx := PackedInt32Array()
 	var faces := PackedVector3Array()
 	var lights: Array = []
+	var beacons: Array = []
 
 	func face(dir: int, x: int, y: int, z: int, tile: int, solid: bool) -> void:
 		var base := verts.size()
@@ -82,6 +84,54 @@ class MeshBuf:
 			faces.append(o + cs[0])
 			faces.append(o + cs[2])
 			faces.append(o + cs[3])
+
+	## An SH_BOX block: all six faces of the box lo..hi inside the cell, each showing the whole
+	## tile ([top, side, bottom]). `solid` adds them to the collision faces too.
+	func box(x: int, y: int, z: int, tl: Array, lo: Vector3, hi: Vector3, solid: bool) -> void:
+		var o := Vector3(x, y, z)
+		var ext := hi - lo
+		for dir in 6:
+			var tile: int = tl[0] if dir == 0 else (tl[2] if dir == 1 else tl[1])
+			var tu := float(tile % 8) * 0.125
+			@warning_ignore("integer_division")
+			var tv := float(tile / 8) * 0.125
+			var cs: Array = CORNERS[dir]
+			var n: Vector3 = NORMALS[dir]
+			var sh: float = SHADE[dir]
+			var base := verts.size()
+			var pts: Array[Vector3] = []
+			for k in 4:
+				var c: Vector3 = cs[k]
+				var v3 := o + lo + c * ext
+				pts.append(v3)
+				verts.append(v3)
+				norms.append(n)
+				cols.append(Color(sh, sh, sh))
+				var u: float
+				var v: float
+				if dir < 2:
+					u = c.x
+					v = c.z
+				elif dir < 4:
+					u = c.z
+					v = 1.0 - c.y
+				else:
+					u = c.x
+					v = 1.0 - c.y
+				uvs.append(Vector2(tu + 0.002 + u * 0.121, tv + 0.002 + v * 0.121))
+			idx.append(base)
+			idx.append(base + 1)
+			idx.append(base + 2)
+			idx.append(base)
+			idx.append(base + 2)
+			idx.append(base + 3)
+			if solid:
+				faces.append(pts[0])
+				faces.append(pts[1])
+				faces.append(pts[2])
+				faces.append(pts[0])
+				faces.append(pts[2])
+				faces.append(pts[3])
 
 	func cross(x: int, y: int, z: int, tile: int) -> void:
 		var o := Vector3(x, y, z)
@@ -135,6 +185,9 @@ var damage := {}
 var crack_nodes := {}
 var crack_mats: Array[StandardMaterial3D] = []
 var crack_mesh: BoxMesh
+## The light beam drawn above every backpack (one shared mesh and material).
+var beacon_mesh: BoxMesh
+var beacon_mat: StandardMaterial3D
 var gen_count := 0
 var mesh_count := 0
 ## Set whenever chunk work may have become possible, so _schedule can skip its full scan otherwise.
@@ -178,6 +231,14 @@ func setup(s: int, tex) -> void:
 	material.metallic_specular = 0.0
 	crack_mesh = BoxMesh.new()
 	crack_mesh.size = Vector3(1.012, 1.012, 1.012)
+	beacon_mesh = BoxMesh.new()
+	beacon_mesh.size = Vector3(0.22, BEACON_H, 0.22)
+	beacon_mat = StandardMaterial3D.new()
+	beacon_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	beacon_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	beacon_mat.albedo_color = Color(1.0, 0.82, 0.3, 0.55)
+	beacon_mat.disable_fog = true  # seen from as far as the chunk is drawn, day or night
+	beacon_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	for t in tex.crack_tex:
 		var m := StandardMaterial3D.new()
 		m.albedo_texture = t
@@ -371,9 +432,11 @@ func _make_buf(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz:
 
 
 ## Server mode: the same scan as _build, but only the collision triangles of solid blocks.
+## Faces between two full cubes are left out; a solid box (a bed) has all six of its own.
 func _build_collision(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> PackedVector3Array:
 	var out := PackedVector3Array()
-	var sol: Array = Blocks.SOLID
+	var sol: Array = Blocks.FULL
+	var shp: Array = Blocks.SHAPE
 	for y in H:
 		var yo := y * CH2
 		for z in CH:
@@ -381,6 +444,10 @@ func _build_collision(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArr
 			for x in CH:
 				var i := x + zo
 				if not sol[d[i]]:
+					if Blocks.SOLID[d[i]] and shp[d[i]] == Blocks.SH_BOX:
+						var bx: Array = Blocks.BOX[d[i]]
+						for dir in 6:
+							_quad(out, Vector3(x, y, z), dir, bx[0], bx[1])
 					continue
 				var o := Vector3(x, y, z)
 				if y == H - 1 or not sol[d[i + CH2]]:
@@ -398,15 +465,17 @@ func _build_collision(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArr
 	return out
 
 
-## Two collision triangles for one block face, with the same corners and winding as MeshBuf.face.
-func _quad(out: PackedVector3Array, o: Vector3, dir: int) -> void:
+## Two collision triangles for one block face, with the same corners and winding as MeshBuf.face
+## (of the box lo..hi inside the cell, for SH_BOX blocks).
+func _quad(out: PackedVector3Array, o: Vector3, dir: int, lo := Vector3.ZERO, hi := Vector3.ONE) -> void:
 	var cs: Array = MeshBuf.CORNERS[dir]
-	out.append(o + cs[0])
-	out.append(o + cs[1])
-	out.append(o + cs[2])
-	out.append(o + cs[0])
-	out.append(o + cs[2])
-	out.append(o + cs[3])
+	var e := hi - lo
+	out.append(o + lo + cs[0] * e)
+	out.append(o + lo + cs[1] * e)
+	out.append(o + lo + cs[2] * e)
+	out.append(o + lo + cs[0] * e)
+	out.append(o + lo + cs[2] * e)
+	out.append(o + lo + cs[3] * e)
 
 
 func _build(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> MeshBuf:
@@ -429,6 +498,12 @@ func _build(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: Pa
 					buf.cross(x, y, z, tl[1])
 					if b == Blocks.TORCH or b == Blocks.CAMPFIRE:
 						buf.lights.append(Vector3i(x, y, z))
+					continue
+				if shp[b] == Blocks.SH_BOX:
+					var bx: Array = Blocks.BOX[b]
+					buf.box(x, y, z, tl, bx[0], bx[1], sol[b])
+					if b == Blocks.BACKPACK:
+						buf.beacons.append(Vector3i(x, y, z))
 					continue
 				var solid: bool = sol[b]
 				var leaf := b == Blocks.LEAVES
@@ -515,6 +590,14 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		c.node.add_child(o)
 		o.position = Vector3(lp) + Vector3(0.5, 0.8, 0.5)
 		c.lights.append(o)
+	for bp in buf.beacons:
+		var m := MeshInstance3D.new()
+		m.mesh = beacon_mesh
+		m.material_override = beacon_mat
+		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		c.node.add_child(m)
+		m.position = Vector3(bp) + Vector3(0.5, 0.62 + BEACON_H * 0.5, 0.5)
+		c.lights.append(m)
 	c.ready = true
 
 

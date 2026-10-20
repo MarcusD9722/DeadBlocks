@@ -1,8 +1,8 @@
 extends Node
 ## The server's save files (M1.5). Layout, under the data folder (--data=DIR, default user://server):
-##   worlds/<world>/world.json          format, versions, seed, day, time
+##   worlds/<world>/world.json          format, versions, seed, day, time, backpacks (M2)
 ##   worlds/<world>/players/<name>.json name, PIN hash, position, look, health, food, kills,
-##                                      inventory, spawn point, play time
+##                                      inventory, bed (M2), play time
 ##   worlds/<world>/chunks/<x>_<z>.bin  edited chunks: header + SHA-256 + zstd(16 KB of blocks)
 ##   worlds/<world>/world.lock          refuses a second server on the same world
 ##   worlds/<world>/damaged/            files that failed their check (moved, never loaded)
@@ -13,7 +13,8 @@ extends Node
 ## over the old one. Saving copies the data on the main thread and writes on a worker thread.
 ## Zombies, animals, cracks and chat are not saved.
 
-const FORMAT := 1
+## 2 (M2): backpacks in world.json, and block ids older servers don't know.
+const FORMAT := 2
 const CHUNK_MAGIC := "DBC1"
 const LOCK_STALE_S := 90
 const BACKUPS_KEEP := 20
@@ -27,6 +28,8 @@ var autosave_s := 60.0
 var seed_v := 0
 var day := 1
 var time := 7.0
+## world.json's "backpacks" as saved (NetServer.load_backpacks reads them).
+var backpacks: Array = []
 var is_new := false
 var error := ""
 var warnings: Array = []
@@ -104,6 +107,7 @@ func _open_world(new_seed: int, new_world: bool) -> bool:
 	seed_v = int(meta["seed"])
 	day = int(meta.get("day", 1))
 	time = float(meta.get("time", 7.0))
+	backpacks = meta.get("backpacks", []) if meta.get("backpacks") is Array else []
 	return true
 
 
@@ -145,7 +149,7 @@ func load_players() -> Dictionary:
 			"fails": 0, "locked_until": 0.0,
 			"pos": _vec(p.get("pos")), "yaw": float(p.get("yaw", 0.0)),
 			"health": float(p.get("health", 100.0)), "food": float(p.get("food", 100.0)),
-			"kills": int(p.get("kills", 0)), "spawn": _vec(p.get("spawn")),
+			"kills": int(p.get("kills", 0)), "bed": _bpos(p.get("bed")),
 			"play_s": float(p.get("play_s", 0.0)), "inv": Inventory.new(),
 		}
 		var slots: Array = p.get("inv", [])
@@ -163,16 +167,22 @@ static func _vec(v) -> Vector3:
 	return Vector3.INF
 
 
+static func _bpos(v) -> Vector3i:
+	if v is Array and v.size() == 3:
+		return Vector3i(int(v[0]), int(v[1]), int(v[2]))
+	return Vector3i.MIN
+
+
 static func player_json(acc: Dictionary) -> Dictionary:
 	var inv := []
 	for sl in acc["inv"].slots:
 		inv.append(null if sl == null else [int(sl["id"]), int(sl["n"])])
 	var pos: Vector3 = acc["pos"]
-	var sp: Vector3 = acc["spawn"]
+	var bed: Vector3i = acc["bed"]
 	var pin: PackedByteArray = acc["pin_key"]  # empty after a PIN reset
 	return {"format": FORMAT, "name": acc["name"], "pin": Marshalls.raw_to_base64(pin) if not pin.is_empty() else "",
 		"pos": [pos.x, pos.y, pos.z], "yaw": acc["yaw"], "health": acc["health"], "food": acc["food"],
-		"kills": acc["kills"], "spawn": [sp.x, sp.y, sp.z], "play_s": acc.get("play_s", 0.0), "inv": inv}
+		"kills": acc["kills"], "bed": null if bed == Vector3i.MIN else [bed.x, bed.y, bed.z], "play_s": acc.get("play_s", 0.0), "inv": inv}
 
 
 func player_file(key: String) -> String:
@@ -186,19 +196,20 @@ static func chunk_file_name(k: Vector2i) -> String:
 # ------------------------------------------------------------ saving
 
 ## Save on a worker thread. `chunks`: [[key, data], ...] (the arrays are copies the main thread
-## no longer changes); `players`: {key: account}. Returns false if a save is still running.
-func save_async(d: int, t: float, chunks: Array, players: Dictionary) -> bool:
+## no longer changes); `players`: {key: account}; `extra`: more world.json keys (plain data).
+## Returns false if a save is still running.
+func save_async(d: int, t: float, chunks: Array, players: Dictionary, extra := {}) -> bool:
 	if _task >= 0:
 		return false
-	var job := _job(d, t, chunks, players)
+	var job := _job(d, t, chunks, players, extra)
 	_task = WorkerThreadPool.add_task(_run_job.bind(job), false, "save")
 	return true
 
 
 ## Save now, on this thread (stopping). Waits for a running save first.
-func save_now(d: int, t: float, chunks: Array, players: Dictionary) -> bool:
+func save_now(d: int, t: float, chunks: Array, players: Dictionary, extra := {}) -> bool:
 	finish()
-	var job := _job(d, t, chunks, players)
+	var job := _job(d, t, chunks, players, extra)
 	_run_job(job)
 	return _collect(job)
 
@@ -215,11 +226,11 @@ func finish() -> void:
 		_collect(_task_result)
 
 
-func _job(d: int, t: float, chunks: Array, players: Dictionary) -> Dictionary:
+func _job(d: int, t: float, chunks: Array, players: Dictionary, extra: Dictionary) -> Dictionary:
 	var pl := {}
 	for key in players:
 		pl[key] = player_json(players[key])  # plain data, safe to use on another thread
-	return {"day": d, "time": t, "chunks": chunks, "players": pl, "ok": false, "ms": 0.0, "err": ""}
+	return {"day": d, "time": t, "chunks": chunks, "players": pl, "extra": extra.duplicate(true), "ok": false, "ms": 0.0, "err": ""}
 
 
 func _run_job(job: Dictionary) -> void:
@@ -231,6 +242,7 @@ func _run_job(job: Dictionary) -> void:
 		files.append([player_file(key), _json_bytes(job["players"][key])])
 	var meta := {"format": FORMAT, "game": G.VERSION, "worldgen": WorldGen.VERSION, "seed": seed_v,
 		"day": job["day"], "time": job["time"], "saved": int(Time.get_unix_time_from_system())}
+	meta.merge(job["extra"])
 	files.append([path("world.json"), _json_bytes(meta)])
 	job["ok"] = _write_files(files)
 	job["ms"] = (Time.get_ticks_usec() - t0) / 1000.0

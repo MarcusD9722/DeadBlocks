@@ -11,6 +11,10 @@ extends Node
 ##   --hosted-by=Name (Host game: stop once that player is gone) --test-log (print TIME lines)
 ##   --bind=IP (listen on one address only; Play solo uses 127.0.0.1)
 ##   --solo (Play solo: the world stops while the player has the pause menu open)
+##   --backpack-s=S (tests: seconds of play before a dropped backpack falls apart)
+##   --linger-s=S (a leaving player's character stays in the world this long; 0 = not at all)
+##   --respawn-radius=M (respawning without a bed: somewhere within M m of the world's center;
+##     0 = at the world spawn, as the older tests expect)
 
 const ServerPlayer := preload("res://scripts/server/server_player.gd")
 const SNAP_EVERY := 2       # physics ticks per snapshot: 30 / 2 = 15 Hz
@@ -26,6 +30,10 @@ const HOST_JOIN_S := 60.0
 const HOST_GONE_S := 15.0
 const STATS_EVERY := 60.0   # seconds between "SERVER net:" lines in the log
 const CHUNKS_PER_TICK := 4  # edited chunks sent in full per player per tick
+const BACKPACK_S := 600.0   # seconds of play before a backpack falls apart (M2)
+const NO_CELL := Vector3i(0, -1000, 0)
+const RESPAWN_RADIUS := 1000.0
+const LINGER_S := 60.0      # seconds a leaving player's character stays in the world (M2)
 
 var mp := SceneMultiplayer.new()
 var peer := ENetMultiplayerPeer.new()
@@ -43,11 +51,26 @@ var _nonces := {}           # peer id -> nonce
 var _live := {}             # peer ids with an open connection (logging in or playing)
 var _pending := {}          # peer id -> account name (lower case), between login and connect
 var players := {}           # peer id -> ServerPlayer
+## Characters whose players logged out but which stay in the world for linger_s (zombies can still
+## get them), by lower-case name. Their peer_id is 0.
+var lingering := {}
+var linger_s := LINGER_S
 ## Accounts by lower-case name: {name, pin_key, fails, locked_until, pos, yaw, health, food,
 ## kills, spawn, inv, play_s}. Loaded from and saved to players/<name>.json by `saver`.
 var accounts := {}
 ## The save files (server/save.gd); null in tests that build a NetServer without saving.
 var saver: Node = null
+## Backpacks dropped by dying, by block position: {"owner": lower-case name, "name", "slots": 36 x
+## ({id, n} or null), "left": seconds, "warned": bool}. Saved in world.json.
+var backpacks := {}
+var backpack_s := BACKPACK_S
+## Beds players placed as their respawn point: block position -> lower-case name (from the
+## accounts' "bed"). Every block change is checked against it, so a broken bed is noticed.
+var beds := {}
+var respawn_radius := RESPAWN_RADIUS
+var _gen: WorldGen = null
+var _gen_key := Vector2i(1 << 30, 0)
+var _gen_data := PackedByteArray()
 var _acc_dirty := {}
 var _stopping := false
 var _pw_fails := {}         # ip -> [count, first try ms]
@@ -64,6 +87,7 @@ var _terrain := PackedByteArray()
 var _edit_seq := 0
 var _rng := RandomNumberGenerator.new()
 var _players_node: Node3D
+var _near_cells: Array = _cell_offsets()
 
 
 func start() -> bool:
@@ -76,6 +100,12 @@ func start() -> bool:
 		admins.append(a.strip_edges().to_lower())
 	hosted_by = G.arg_value("--hosted-by=").to_lower()
 	solo = G.has_arg("--solo")
+	if G.arg_value("--backpack-s=") != "":
+		backpack_s = maxf(1.0, float(G.arg_value("--backpack-s=")))
+	if G.arg_value("--linger-s=") != "":
+		linger_s = maxf(0.0, float(G.arg_value("--linger-s=")))
+	if G.arg_value("--respawn-radius=") != "":
+		respawn_radius = maxf(0.0, float(G.arg_value("--respawn-radius=")))
 	_host_seen_ms = Time.get_ticks_msec()
 	test_log = G.has_arg("--test-log")
 	_terrain = Proto.terrain_hash(G.game.seed_v)
@@ -116,9 +146,10 @@ func online_count() -> int:
 	return n
 
 
-## Players the world runs for: online, and (solo) not in the pause menu.
+## Players the world runs for: online, and (solo) not in the pause menu, and characters still in
+## the world after their players left.
 func active_count() -> int:
-	var n := 0
+	var n := lingering.size()
 	for p in players.values():
 		if p.is_ready and not (solo and p.paused):
 			n += 1
@@ -145,12 +176,14 @@ func _update_world_paused(who: String) -> void:
 			_send_raw(p.peer_id, t, MultiplayerPeer.TRANSFER_MODE_RELIABLE, Proto.CH_CONTROL)
 
 
-## Where the players who could meet a zombie are (online and alive).
+## Where the players who could meet a zombie are (online and alive, or left behind).
 func alive_positions() -> Array:
 	var out := []
 	for p in players.values():
 		if p.is_ready and not p.dead:
 			out.append(p.global_position)
+	for p in lingering.values():
+		out.append(p.global_position)
 	return out
 
 
@@ -159,6 +192,8 @@ func player_positions() -> Array:
 	for p in players.values():
 		if p.is_ready:
 			out.append(p.global_position)
+	for p in lingering.values():
+		out.append(p.global_position)
 	return out
 
 
@@ -250,7 +285,7 @@ func _on_auth(id: int, data: PackedByteArray) -> void:
 		inv.add(Items.BERRIES, 3)
 		inv.add(Blocks.TORCH, 2)
 		acc = {"name": pname, "pin_key": pk, "fails": 0, "locked_until": 0.0, "pos": G.game.spawn_pos, "yaw": 0.0, "inv": inv,
-			"health": 100.0, "food": 100.0, "kills": 0, "spawn": G.game.spawn_pos, "play_s": 0.0}
+			"health": 100.0, "food": 100.0, "kills": 0, "bed": Vector3i.MIN, "play_s": 0.0}
 		accounts[key] = acc
 		print("SERVER new player %s" % pname)
 	if replacing != 0:
@@ -307,6 +342,8 @@ func _on_connected(id: int) -> void:
 		return
 	var key: String = _pending[id]
 	_pending.erase(id)
+	if lingering.has(key):
+		_end_linger(key, "is back with its player", false)
 	var acc: Dictionary = accounts[key]
 	Proto.set_timeouts(peer.get_peer(id))
 	var sp := ServerPlayer.new()
@@ -318,11 +355,10 @@ func _on_connected(id: int) -> void:
 	_players_node.add_child(sp)
 	if acc["pos"] == Vector3.INF:
 		acc["pos"] = G.game.spawn_pos
-	if acc["spawn"] == Vector3.INF:
-		acc["spawn"] = G.game.spawn_pos
 	sp.global_position = acc["pos"]
 	sp.yaw = acc["yaw"]
 	sp.last_good = acc["pos"]
+	sp.last_ground = acc["pos"]
 	sp.joined_ms = Time.get_ticks_msec()
 	sp.last_move_ms = Time.get_ticks_msec()
 	sp.last_recv_ms = Time.get_ticks_msec()
@@ -331,7 +367,6 @@ func _on_connected(id: int) -> void:
 	sp.health = acc["health"]
 	sp.food = acc["food"]
 	sp.kills = acc["kills"]
-	sp.spawn_point = acc["spawn"]
 	sp.dead = sp.health <= 0.0
 	players[id] = sp
 	var w := Proto.writer(Proto.S_WELCOME)
@@ -349,11 +384,14 @@ func _on_connected(id: int) -> void:
 	for p in players.values():
 		if p != sp:
 			others.append(p)
+	others.append_array(lingering.values())  # characters left behind are in the snapshots too
 	w.put_u8(others.size())
 	for p in others:
 		w.put_u16(p.net_id)
 		w.put_utf8_string(p.player_name)
 	_send_to(id, w.data_array)
+	_send_backpacks(sp)
+	_send_bed(sp)
 	var j := Proto.writer(Proto.S_JOIN)
 	j.put_u16(sp.net_id)
 	j.put_utf8_string(sp.player_name)
@@ -369,7 +407,9 @@ func _on_disconnected(id: int) -> void:
 	_remove_player(id)
 
 
-## Save where the player was, take them out of the world and tell everyone else.
+## Save where the player was and tell everyone else. Their character stays in the world for
+## linger_s (M2) unless they were kicked, signed in again, are dead, or the server is stopping;
+## otherwise it goes now.
 func _remove_player(id: int) -> void:
 	var sp = players.get(id)
 	if sp == null:
@@ -377,34 +417,77 @@ func _remove_player(id: int) -> void:
 	players.erase(id)
 	_store_account(sp)
 	acc_play_time(sp)
-	G.sim.remove_player(sp)
-	sp.queue_free()
-	var l := Proto.writer(Proto.S_LEAVE)
-	l.put_u16(sp.net_id)
-	_broadcast(l.data_array)
+	var stays := _may_linger(sp)
 	# Players send movement 15 times a second, so a long silence means the connection died.
 	var quiet: float = (Time.get_ticks_msec() - sp.last_recv_ms) / 1000.0
 	var why: String = sp.leave_reason
+	var after := " Their character stays here for %d s." % int(linger_s) if stays else ""
 	if why == "" and quiet > 3.0:
 		why = "lost the connection (nothing received for %.1f s; ping was %d ms, packet loss %d%%)" % [quiet, sp.ping_ms, int(sp.loss_pct)]
-		_broadcast(_notice_bytes("%s lost the connection." % sp.player_name, Color(1, 0.85, 0.7)))
+		_broadcast(_notice_bytes("%s lost the connection.%s" % [sp.player_name, after], Color(1, 0.85, 0.7)))
 	else:
-		_broadcast(_notice_bytes("%s left the game." % sp.player_name, Color(1, 0.85, 0.7)))
+		_broadcast(_notice_bytes("%s left the game.%s" % [sp.player_name, after], Color(1, 0.85, 0.7)))
 	print("SERVER %s %s (%d connected)" % [sp.player_name, why if why != "" else "left", players.size()])
 	if sp.refused > 0:
 		var parts := []
 		for k in sp.refuse_why:
 			parts.append("%s %d" % [k, sp.refuse_why[k]])
 		print("SERVER %s: %d of %d block requests refused this session (%s)" % [sp.player_name, sp.refused, sp.requests, ", ".join(parts)])
+	if stays:
+		sp.peer_id = 0
+		sp.linger_left = linger_s
+		lingering[sp.player_name.to_lower()] = sp
+		print("SERVER %s's character stays in the world for %d s" % [sp.player_name, int(linger_s)])
+		if not _stopping:
+			save_world(false)  # their file now, not at the next autosave
+		return
+	_take_out(sp)
+
+
+func _may_linger(sp) -> bool:
+	return linger_s > 0.0 and not solo and not _stopping and sp.is_ready and not sp.dead \
+		and sp.leave_reason == "" and sp.player_name.to_lower() != hosted_by
+
+
+## A character leaves the world for good: the Sim forgets it, every game drops the figure, and
+## (`settle`) the world stops and is saved if nobody is left.
+func _take_out(sp, settle := true) -> void:
+	G.sim.remove_player(sp)
+	sp.queue_free()
+	var l := Proto.writer(Proto.S_LEAVE)
+	l.put_u16(sp.net_id)
+	_broadcast(l.data_array)
+	if not settle:
+		return
 	_update_world_paused(sp.player_name)
-	if online_count() == 0 and not _stopping:
+	if online_count() == 0 and lingering.is_empty() and not _stopping:
 		# Everything is quiet now: save it all, and back up (at most once an hour).
 		save_world(false)
 		if saver != null and saver.hours_since_backup() >= 1.0:
 			saver.finish()
 			saver.backup("server empty")
 	elif not _stopping:
-		save_world(false)  # their file now, not at the next autosave
+		save_world(false)
+
+
+## The end of a character left behind: its time is up, it died, or its player is back (then
+## the new session takes over at once, so the world neither stops nor saves in between).
+func _end_linger(key: String, why: String, settle := true) -> void:
+	var sp = lingering.get(key)
+	if sp == null:
+		return
+	lingering.erase(key)
+	_store_account(sp)
+	print("SERVER %s's character %s" % [sp.player_name, why])
+	_take_out(sp, settle)
+
+
+func _tick_lingering(delta: float) -> void:
+	for key in lingering.keys():
+		var sp = lingering[key]
+		sp.linger_left -= delta
+		if sp.linger_left <= 0.0:
+			_end_linger(key, "left the world")
 
 
 # ------------------------------------------------------------ messages
@@ -431,12 +514,20 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 			if solo:
 				_update_world_paused(sp.player_name)
 		Proto.C_RESPAWN:
+			var at_bed := b.get_u8() == 0
 			if sp.dead:
 				sp.dead = false
 				sp.health = 100.0
 				sp.food = maxf(sp.food, 60.0)
-				correct(sp, sp.spawn_point)
-				print("SERVER %s respawned" % sp.player_name)
+				var spot := _bed_spot(accounts[sp.player_name.to_lower()]["bed"]) if at_bed else Vector3.INF
+				var where := "at their bed"
+				if spot == Vector3.INF:
+					spot = _random_spot()
+					where = "somewhere random" if respawn_radius > 0.0 else "at the world spawn"
+				correct(sp, spot)
+				print("SERVER %s respawned %s %s" % [sp.player_name, where, spot])
+				if not _backpacks_of(sp.player_name.to_lower()).is_empty():
+					_msg(sp, "Your things are in your backpack where you died. Follow the marker!", Color(1, 0.9, 0.5))
 		Proto.C_CHAT:
 			_on_chat(sp, b.get_utf8_string().strip_edges().left(Proto.MAX_CHAT))
 		Proto.C_BREAK, Proto.C_PLACE, Proto.C_SWAP, Proto.C_CRAFT, Proto.C_EAT, Proto.C_ATTACK:
@@ -509,6 +600,9 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 		_refuse(sp, p, why)
 		return
 	sp.last_break_ms = now
+	if id == Blocks.BACKPACK:
+		_take_backpack(sp, p)
+		return
 	w.set_block(p, Blocks.AIR)
 	var got := Rules.collect(id, tool, _rng)
 	if int(got["need_tier"]) > 0:
@@ -524,6 +618,8 @@ func _req_place(sp, p: Vector3i, id: int, slot: int) -> void:
 	var why := _common_refusal(sp, p, slot)
 	if why == "" and (sp.inv.id_at(slot) != id or not Items.is_block(id)):
 		why = "not in that slot"
+	elif why == "" and id == Blocks.BACKPACK:
+		why = "not placeable"
 	elif why == "" and (p.y < 1 or p.y >= 63 or w.get_blockv(p) != Blocks.AIR):
 		why = "space taken"
 	var touching := false
@@ -548,6 +644,8 @@ func _req_place(sp, p: Vector3i, id: int, slot: int) -> void:
 					return
 	sp.inv.remove_at(slot, 1)
 	w.set_block(p, id)
+	if id == Blocks.BED:
+		_set_bed(sp, p)
 
 
 func _common_refusal(sp, p: Vector3i, slot: int) -> String:
@@ -628,6 +726,291 @@ func player_hurt(sp, amount: float, from: Vector3) -> void:
 func player_died(sp) -> void:
 	print("SERVER %s died" % sp.player_name)
 	_broadcast(_notice_bytes("%s died." % sp.player_name, Color(1, 0.6, 0.5)))
+	_drop_backpack(sp)
+	var key: String = sp.player_name.to_lower()
+	if lingering.get(key) == sp:
+		# Left behind and killed: it goes now (deferred: the Sim may be in the middle of its tick).
+		_end_linger.call_deferred(key, "died while its player was away")
+
+
+# ------------------------------------------------------------ backpacks (M2)
+
+## Dying: everything the player carried goes into a backpack where they died.
+func _drop_backpack(sp) -> void:
+	var slots: Array = sp.inv.slots.duplicate(true)
+	var count := 0
+	for s in slots:
+		if s != null:
+			count += int(s["n"])
+	if count == 0:
+		return
+	var cell := _backpack_cell(sp)
+	if cell == NO_CELL:
+		print("SERVER found no room for %s's backpack: they keep their things" % sp.player_name)
+		return
+	G.world.set_block(cell, Blocks.BACKPACK)
+	backpacks[cell] = {"owner": sp.player_name.to_lower(), "name": sp.player_name, "slots": slots,
+		"left": backpack_s, "warned": false}
+	sp.inv.clear()
+	sp.inv_dirty = true
+	print("SERVER %s's backpack (%d items) is at %s" % [sp.player_name, count, cell])
+	_send_backpacks(sp)
+
+
+## Where a backpack goes: the nearest free cell at the death spot (on the ground if there is one
+## close by), dropped down onto whatever is below. A fall out of the world puts it where the
+## player last stood.
+func _backpack_cell(sp) -> Vector3i:
+	var from: Vector3 = sp.global_position
+	if from.y < 1.0 and sp.last_ground != Vector3.INF:
+		from = sp.last_ground
+	var w = G.world
+	var base := Vector3i(floori(from.x), clampi(floori(from.y + 0.3), 1, 62), floori(from.z))
+	for on_ground in [true, false]:
+		for off in _near_cells:
+			var c: Vector3i = base + off
+			if c.y < 1 or c.y > 62 or not w.has_block_data(c) or w.get_blockv(c) != Blocks.AIR:
+				continue
+			if on_ground and not Blocks.is_solid(w.get_blockv(c + Vector3i.DOWN)):
+				continue
+			var fall := 0
+			while c.y > 1 and fall < 40 and w.get_blockv(c + Vector3i.DOWN) == Blocks.AIR:
+				c.y -= 1
+				fall += 1
+			return c
+	return NO_CELL
+
+
+## Cells around the death spot, nearest first.
+static func _cell_offsets() -> Array:
+	var out := []
+	for dy in range(-2, 4):
+		for dz in range(-2, 3):
+			for dx in range(-2, 3):
+				out.append(Vector3i(dx, dy, dz))
+	out.sort_custom(func(a, b): return a.length_squared() < b.length_squared())
+	return out
+
+
+## Mining a backpack: its things go to whoever mined it (anyone may); what doesn't fit stays.
+func _take_backpack(sp, p: Vector3i) -> void:
+	var bp = backpacks.get(p)
+	if bp == null:
+		G.world.set_block(p, Blocks.AIR)  # its record was lost: an empty pack
+		return
+	var slots: Array = bp["slots"]
+	var left := 0
+	for i in slots.size():
+		var s = slots[i]
+		if s == null:
+			continue
+		var rest: int = sp.inv.add(int(s["id"]), int(s["n"]))
+		if rest > 0:
+			s["n"] = rest
+			left += rest
+		else:
+			slots[i] = null
+	if left > 0:
+		sp.fixes.append(p)  # it stays (the client took it off its screen already)
+		_msg(sp, "Your inventory is full: the rest is still in the backpack.", Color(1, 0.8, 0.5))
+		return
+	G.world.set_block(p, Blocks.AIR)
+	backpacks.erase(p)
+	var own: bool = bp["owner"] == sp.player_name.to_lower()
+	var oid := _peer_of_name(bp["owner"])
+	print("SERVER %s picked up %s backpack" % [sp.player_name, "their" if own else bp["name"] + "'s"])
+	if own:
+		_msg(sp, "You got your things back.", Color(0.7, 1, 0.7))
+	else:
+		_msg(sp, "You picked up %s's backpack." % bp["name"], Color(0.8, 0.9, 1))
+		if oid != 0:
+			_msg(players[oid], "%s picked up your backpack." % sp.player_name, Color(1, 0.85, 0.6))
+	if oid != 0:
+		_send_backpacks(players[oid])
+
+
+## Backpacks fall apart after backpack_s seconds of play (the timer stops with the world).
+func _tick_backpacks(delta: float) -> void:
+	if world_paused or backpacks.is_empty():
+		return
+	for p in backpacks.keys():
+		var bp: Dictionary = backpacks[p]
+		bp["left"] = float(bp["left"]) - delta
+		if float(bp["left"]) <= 60.0 and not bp["warned"] and backpack_s > 120.0:
+			bp["warned"] = true
+			var wid := _peer_of_name(bp["owner"])
+			if wid != 0:
+				_msg(players[wid], "Your backpack falls apart in a minute!", Color(1, 0.7, 0.4))
+		if float(bp["left"]) <= 0.0:
+			backpacks.erase(p)
+			if G.world.get_blockv(p) == Blocks.BACKPACK:
+				G.world.set_block(p, Blocks.AIR)
+			print("SERVER %s's backpack fell apart" % bp["name"])
+			var oid := _peer_of_name(bp["owner"])
+			if oid != 0:
+				_msg(players[oid], "Your backpack fell apart, and everything in it is gone.", Color(1, 0.6, 0.5))
+				_send_backpacks(players[oid])
+
+
+func _backpacks_of(key: String) -> Array:
+	var out := []
+	for p in backpacks:
+		if backpacks[p]["owner"] == key:
+			out.append(p)
+	return out
+
+
+## S_BACKPACKS: the player's own backpacks, for the marker on their screen.
+func _send_backpacks(sp) -> void:
+	var mine := _backpacks_of(sp.player_name.to_lower()).slice(0, 255)
+	var m := Proto.writer(Proto.S_BACKPACKS)
+	m.put_u8(mine.size())
+	for p in mine:
+		Proto.put_bpos(m, p)
+		m.put_u16(clampi(ceili(backpacks[p]["left"]), 0, 65535))
+	_send_to(sp.peer_id, m.data_array)
+
+
+# ------------------------------------------------------------ beds and respawning (M2)
+
+## Placing a bed makes it the player's respawn point (one each: a new one takes over).
+func _set_bed(sp, p: Vector3i) -> void:
+	var key: String = sp.player_name.to_lower()
+	var acc: Dictionary = accounts[key]
+	var old: Vector3i = acc["bed"]
+	if beds.get(old, "") == key:
+		beds.erase(old)
+	beds[p] = key
+	acc["bed"] = p
+	_acc_dirty[key] = true
+	print("SERVER %s set their bed at %s" % [sp.player_name, p])
+	_msg(sp, "This bed is your respawn point now.", Color(0.7, 1, 0.7))
+	_send_bed(sp)
+
+
+## A bed was broken (by anyone, or a zombie): its owner has no respawn point any more.
+func _lose_bed(p: Vector3i) -> void:
+	var key: String = beds[p]
+	beds.erase(p)
+	var acc = accounts.get(key)
+	if acc == null or acc["bed"] != p:
+		return
+	acc["bed"] = Vector3i.MIN
+	_acc_dirty[key] = true
+	print("SERVER %s's bed at %s is gone" % [acc["name"], p])
+	var id := _peer_of_name(key)
+	if id != 0:
+		_msg(players[id], "Your bed was destroyed! Place a new one to respawn there.", Color(1, 0.6, 0.5))
+		_send_bed(players[id])
+
+
+func _send_bed(sp) -> void:
+	var bed: Vector3i = accounts[sp.player_name.to_lower()]["bed"]
+	var m := Proto.writer(Proto.S_BED)
+	m.put_u8(0 if bed == Vector3i.MIN else 1)
+	Proto.put_bpos(m, Vector3i.ZERO if bed == Vector3i.MIN else bed)
+	_send_to(sp.peer_id, m.data_array)
+
+
+## Server start: each account's bed, if it is still there.
+func load_beds() -> void:
+	for key in accounts:
+		var bed: Vector3i = accounts[key]["bed"]
+		if bed == Vector3i.MIN:
+			continue
+		if G.world.get_blockv(bed) == Blocks.BED:
+			beds[bed] = key
+		else:
+			accounts[key]["bed"] = Vector3i.MIN
+
+
+## Where to wake up at a bed: a free spot beside it with ground under it, else on top of it.
+## Vector3.INF if there is no bed there (any more) or no room around it.
+func _bed_spot(bed: Vector3i) -> Vector3:
+	var w = G.world
+	if bed == Vector3i.MIN or not beds.has(bed) or w.get_blockv(bed) != Blocks.BED:
+		return Vector3.INF
+	for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+			Vector3i(1, 0, 1), Vector3i(-1, 0, 1), Vector3i(1, 0, -1), Vector3i(-1, 0, -1)]:
+		var c: Vector3i = bed + d
+		if not Blocks.is_solid(w.get_blockv(c)) and not Blocks.is_solid(w.get_blockv(c + Vector3i.UP)) \
+				and Blocks.is_solid(w.get_blockv(c + Vector3i.DOWN)) and Blocks.SHAPE[w.get_blockv(c + Vector3i.DOWN)] == Blocks.SH_CUBE:
+			return Vector3(c) + Vector3(0.5, 0.02, 0.5)
+	if not Blocks.is_solid(w.get_blockv(bed + Vector3i.UP)) and not Blocks.is_solid(w.get_blockv(bed + Vector3i(0, 2, 0))):
+		return Vector3(bed) + Vector3(0.5, 0.52, 0.5)
+	return Vector3.INF
+
+
+## Waking up without a bed: open ground (grass, dirt or sand; not in the desert, a tree or on a
+## mountain top) somewhere within respawn_radius of the world's center.
+func _random_spot() -> Vector3:
+	if respawn_radius <= 0.0:
+		return G.game.spawn_pos
+	if _gen == null:
+		_gen = WorldGen.new(G.game.seed_v)
+	for attempt in 80:
+		var a := _rng.randf() * TAU
+		var r := respawn_radius * sqrt(_rng.randf())
+		var x := floori(cos(a) * r)
+		var z := floori(sin(a) * r)
+		if _gen.biome_at(x, z) == 2 or _gen.height_at(x, z) > 42 or _gen.tree_near(x, z):
+			continue
+		var spot := _open_ground(x, z)
+		if spot != Vector3.INF:
+			return spot
+	return G.game.spawn_pos
+
+
+## The top of column (x, z) if a player can stand there: the server's blocks where it has them
+## (edited land), otherwise the terrain as the seed makes it.
+func _open_ground(x: int, z: int) -> Vector3:
+	var k := Vector2i(x >> 4, z >> 4)
+	var d: PackedByteArray = G.world.chunk_data(k)
+	if d.is_empty():
+		if _gen_key != k:
+			_gen_key = k
+			_gen_data = _gen.generate(k.x, k.y)
+		d = _gen_data
+	var i0 := (x & 15) + (z & 15) * 16
+	for y in range(61, 0, -1):
+		var id := d[i0 + y * 256]
+		if id == Blocks.AIR:
+			continue
+		if id in [Blocks.GRASS, Blocks.DIRT, Blocks.SAND] and d[i0 + (y + 1) * 256] == Blocks.AIR and d[i0 + (y + 2) * 256] == Blocks.AIR:
+			return Vector3(x + 0.5, y + 1.02, z + 0.5)
+		return Vector3.INF
+	return Vector3.INF
+
+
+## world.json's "backpacks".
+func backpacks_json() -> Array:
+	var out := []
+	for p in backpacks:
+		var bp: Dictionary = backpacks[p]
+		var inv := []
+		for s in bp["slots"]:
+			inv.append(null if s == null else [int(s["id"]), int(s["n"])])
+		out.append({"pos": [p.x, p.y, p.z], "owner": bp["name"], "left": snappedf(float(bp["left"]), 0.1), "inv": inv})
+	return out
+
+
+## Server start: the backpacks saved in world.json whose block is still there.
+func load_backpacks(list: Array) -> void:
+	for e in list:
+		if not (e is Dictionary and e.get("pos") is Array and (e["pos"] as Array).size() == 3):
+			continue
+		var p := Vector3i(int(e["pos"][0]), int(e["pos"][1]), int(e["pos"][2]))
+		if G.world.get_blockv(p) != Blocks.BACKPACK:
+			continue
+		var slots := []
+		slots.resize(Inventory.SIZE)
+		var inv: Array = e.get("inv", []) if e.get("inv") is Array else []
+		for i in mini(inv.size(), Inventory.SIZE):
+			var sl = inv[i]
+			if sl is Array and sl.size() == 2 and int(sl[1]) > 0:
+				slots[i] = {"id": int(sl[0]), "n": int(sl[1])}
+		var nm := str(e.get("owner", "?"))
+		backpacks[p] = {"owner": nm.to_lower(), "name": nm, "slots": slots, "left": float(e.get("left", BACKPACK_S)), "warned": false}
 
 
 func tell(sp, text: String, col: Color) -> void:
@@ -677,6 +1060,8 @@ func _flush_world() -> void:
 	var groups := {}  # chunk key -> [[block index, id], ...] in the order they happened
 	for e in w.edits_out:
 		var p: Vector3i = e[0]
+		if beds.has(p) and e[1] != Blocks.BED:
+			_lose_bed(p)
 		var k := Vector2i(p.x >> 4, p.z >> 4)
 		if not groups.has(k):
 			groups[k] = []
@@ -812,6 +1197,8 @@ func _on_move(sp, b: StreamPeerBuffer) -> void:
 	sp.last_good = pos
 	sp.last_move_ms = now
 	sp.global_position = pos
+	if pos.y >= 1.0 and Blocks.is_solid(G.world.get_blockv(Vector3i(floori(pos.x), floori(pos.y - 0.05), floori(pos.z)))):
+		sp.last_ground = pos
 	if pos.y < -8.0 and not sp.dead:
 		# Fell out of the world (through a gap, or a glitch): that's a death, so the player
 		# respawns instead of falling forever.
@@ -855,11 +1242,13 @@ func _command(sp, text: String) -> void:
 		var names := []
 		for p in players.values():
 			names.append(p.player_name)
+		for p in lingering.values():
+			names.append(p.player_name + " (away)")
 		_send_to(sp.peer_id, _notice_bytes("Online: " + ", ".join(names), Color(0.8, 0.9, 1)))
 		return
 	if cmd == "/kill":
-		# Anyone: stuck in a hole or under the world, die and respawn at your spawn point.
-		# (Until M2 nothing is lost by dying.)
+		# Anyone: stuck in a hole or under the world, die and respawn at your spawn point
+		# (your things go into a backpack, as with any death).
 		if not sp.dead:
 			print("SERVER %s used /kill" % sp.player_name)
 			sp.take_damage(1000.0, Vector3.ZERO)
@@ -889,6 +1278,16 @@ func _command(sp, text: String) -> void:
 					_send_to(target, _bye_bytes("You were kicked by %s." % sp.player_name))
 					players[target].leave_reason = "was kicked by %s" % sp.player_name
 					_disconnect_soon(target)
+		"/clear":
+			# Every zombie and animal goes (tests, or a horde that got out of hand).
+			var n := 0
+			for m in G.game.mobs.get_children():
+				if m is Mob:
+					m.queue_free()
+					n += 1
+			print("SERVER %s used /clear (%d mobs)" % [sp.player_name, n])
+			_send_to(sp.peer_id, _notice_bytes("Removed %d zombies and animals." % n, Color(0.8, 0.9, 1)))
+			return
 		"/save":
 			save_world(false)
 			_send_to(sp.peer_id, _notice_bytes("Saving the world.", Color(0.8, 0.9, 1)))
@@ -918,7 +1317,7 @@ func _command(sp, text: String) -> void:
 			_send_to(sp.peer_id, _notice_bytes("Gave you %d %s." % [n - left, Items.name_of(id)], Color(0.8, 0.9, 1)))
 			return
 		_:
-			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|night|horde|boar> [count] /save", Color(0.8, 0.9, 1)))
+			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|night|horde|boar> [count] /clear /save", Color(0.8, 0.9, 1)))
 			return
 	print("SERVER %s used %s" % [sp.player_name, text])
 	_broadcast(_time_bytes())
@@ -999,6 +1398,8 @@ func _clock() -> String:
 func _physics_process(delta: float) -> void:
 	_tick += 1
 	_tick_players(delta)
+	_tick_backpacks(delta)
+	_tick_lingering(delta)
 	_flush_world()
 	if _tick % SNAP_EVERY != 0:
 		return
@@ -1010,15 +1411,18 @@ func _physics_process(delta: float) -> void:
 	# when the server goes quiet.
 	if ready_players.is_empty():
 		return
+	var shown: Array = ready_players + lingering.values()
 	var mobs := mob_list(G.game.mobs)
 	for to in ready_players:
 		var s := Proto.writer(Proto.S_SNAP)
 		s.put_u32(_tick)
-		s.put_u8(ready_players.size() - 1)
-		for p in ready_players:
+		s.put_u8(shown.size() - 1)
+		for p in shown:
 			if p != to:
-				Proto.put_player_record(s, p.net_id, p.global_position, p.yaw, p.pitch, p.flags | (Proto.F_DEAD if p.dead else 0),
-					maxi(0, p.inv.id_at(p.slot)))
+				var f: int = p.flags | (Proto.F_DEAD if p.dead else 0)
+				if p.peer_id == 0:
+					f = (p.flags & Proto.F_FLASHLIGHT) | Proto.F_AWAY  # standing still where they left
+				Proto.put_player_record(s, p.net_id, p.global_position, p.yaw, p.pitch, f, maxi(0, p.inv.id_at(p.slot)))
 		_send_raw(to.peer_id, s.data_array, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED, Proto.CH_STATE)
 		_send_mobs(to, mobs)
 
@@ -1129,6 +1533,8 @@ func save_world(now: bool) -> bool:
 		return false
 	for sp in players.values():
 		_store_account(sp)
+	for sp in lingering.values():
+		_store_account(sp)
 	var accs := {}
 	for key in _acc_dirty:
 		if accounts.has(key):
@@ -1137,11 +1543,12 @@ func save_world(now: bool) -> bool:
 		return false  # the next autosave picks these up
 	_acc_dirty.clear()
 	var chunks: Array = G.world.take_unsaved()
+	var meta := {"backpacks": backpacks_json()}
 	if now:
-		return saver.save_now(G.game.day, G.game.time, chunks, accs)
+		return saver.save_now(G.game.day, G.game.time, chunks, accs, meta)
 	_last_job_chunks = chunks
 	_last_job_accs = accs.keys()
-	return saver.save_async(G.game.day, G.game.time, chunks, accs)
+	return saver.save_async(G.game.day, G.game.time, chunks, accs, meta)
 
 
 var _last_job_chunks: Array = []

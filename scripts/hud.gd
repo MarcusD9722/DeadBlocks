@@ -22,6 +22,8 @@ var pause_root: Control
 var seed_lbl: Label
 var death_root: Control
 var death_lbl: Label
+var death_bed: Button
+var death_random: Button
 var title_menu: VBoxContainer
 var solo_btn: Button
 var join_panel: VBoxContainer
@@ -543,7 +545,9 @@ func _refresh_pause_players() -> void:
 		return
 	var names: Array = [G.net.player_name + " (you)"]
 	for id in G.net.others:
-		names.append(G.net.others[id]["name"])
+		var o: Dictionary = G.net.others[id]
+		var away: bool = not o["samples"].is_empty() and (int(o["samples"].back()[4]) & Proto.F_AWAY) != 0
+		names.append(o["name"] + (" (away)" if away else ""))
 	pause_players.text = "Online (%d):  %s\nServer %s:%d   ·   Ping %d ms" % [names.size(), ", ".join(names),
 		G.net.host, G.net.port, G.net.ping_ms()]
 
@@ -558,15 +562,38 @@ func _build_death() -> void:
 	death_lbl = _label("", 22)
 	death_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(death_lbl)
-	var b := _button("Respawn", func(): G.game.respawn())
-	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	vb.add_child(b)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 16)
+	vb.add_child(row)
+	death_bed = _button("Respawn at your bed", func(): G.game.respawn(true))
+	row.add_child(death_bed)
+	death_random = _button("Respawn somewhere random", func(): G.game.respawn(false))
+	row.add_child(death_random)
 
 
 func show_death(on: bool) -> void:
 	death_root.visible = on
 	if on:
-		death_lbl.text = "You made it to Day %d   ·   Zombies killed: %d\nYou keep your items. Your base is where you left it." % [G.game.day, G.game.kills]
+		_death_text()
+
+
+## The S_BACKPACKS for this death can arrive a moment after the death itself, so this is
+## refreshed while the death screen shows.
+func _death_text() -> void:
+	var t := "You made it to Day %d   ·   Zombies killed: %d\n" % [G.game.day, G.game.kills]
+	var packs: Array = G.net.my_backpacks if G.net != null else []
+	if packs.is_empty():
+		t += "You had nothing on you. Your base is where you left it."
+	else:
+		var mins := ceili(float(packs[packs.size() - 1][1]) / 60.0)
+		t += "Everything you carried is in your backpack where you died.\nFollow the marker and get it back within %d minute%s. Anyone can pick it up!" % [mins, "" if mins == 1 else "s"]
+	var has_bed: bool = G.mode == "client" and G.net.bed != Vector3i.MIN
+	death_bed.visible = has_bed
+	death_random.text = "Respawn somewhere random" if G.mode == "client" else "Respawn"
+	if G.mode == "client" and not has_bed:
+		t += "\n\nNo bed: you wake up somewhere random. Craft a Bed at a Workbench and place it to respawn there."
+	death_lbl.text = t
 
 
 # ------------------------------------------------------------ inventory & crafting
@@ -781,6 +808,8 @@ func _process(delta: float) -> void:
 	if _pause_refresh_t <= 0.0:
 		_pause_refresh_t = 1.0
 		_refresh_pause_players()
+		if death_root.visible:
+			_death_text()
 	canvas.queue_redraw()
 
 
@@ -795,6 +824,27 @@ func _bar(pos: Vector2, w: float, label: String, frac: float, col: Color) -> voi
 	canvas.draw_rect(Rect2(pos, Vector2(w, 18)), Color(0, 0, 0, 0.55))
 	canvas.draw_rect(Rect2(pos + Vector2(2, 2), Vector2((w - 4) * clampf(frac, 0, 1), 14)), col)
 	_text(pos + Vector2(7, 14), label, 13, Color(1, 1, 1, 0.95))
+
+
+## Our own backpacks: an icon with the distance and the time left, over the pack (at the side of
+## the screen when it's behind us).
+func _draw_backpack_markers(vs: Vector2) -> void:
+	var cam: Camera3D = G.player.cam
+	for e in G.net.my_backpacks:
+		var wp := Vector3(e[0]) + Vector3(0.5, 1.2, 0.5)
+		var dist: float = G.player.global_position.distance_to(wp)
+		var at: Vector2
+		if cam.is_position_behind(wp):
+			var local: Vector3 = cam.global_transform.affine_inverse() * wp
+			at = Vector2(40.0 if local.x < 0.0 else vs.x - 40.0, vs.y * 0.45)
+		else:
+			at = cam.unproject_position(wp).clamp(Vector2(40, 70), vs - Vector2(40, 130))
+		var left := int(e[1])
+		var col := Color(1, 0.88, 0.45) if left > 60 else Color(1, 0.45, 0.35)
+		canvas.draw_texture_rect(G.tex.icon(Blocks.BACKPACK), Rect2(at - Vector2(14, 30), Vector2(28, 28)), false)
+		@warning_ignore("integer_division")
+		var mins := left / 60
+		_text(at + Vector2(-70, 14), "%d m  ·  %d:%02d" % [int(dist), mins, left % 60], 15, col, HORIZONTAL_ALIGNMENT_CENTER, 140)
 
 
 func _draw_hud() -> void:
@@ -812,12 +862,19 @@ func _draw_hud() -> void:
 		canvas.draw_rect(Rect2(Vector2.ZERO, vs), Color(0.5, 0.0, 0.0, pulse))
 
 	var c := vs * 0.5
+	if st == "playing" and not G.world.is_ready_at(p.global_position):
+		# Just respawned far away (or teleported): the land is still loading.
+		canvas.draw_rect(Rect2(Vector2.ZERO, vs), Color(0.05, 0.06, 0.08, 0.85))
+		_text(Vector2(0, c.y), "Finding your way...", 30, Color(1, 1, 1, 0.9), HORIZONTAL_ALIGNMENT_CENTER, vs.x)
 	if st == "playing":
 		canvas.draw_rect(Rect2(c - Vector2(1, 9), Vector2(2, 18)), Color(1, 1, 1, 0.85))
 		canvas.draw_rect(Rect2(c - Vector2(9, 1), Vector2(18, 2)), Color(1, 1, 1, 0.85))
 		if p.mine_progress > 0.0:
 			canvas.draw_rect(Rect2(c + Vector2(-32, 18), Vector2(64, 6)), Color(0, 0, 0, 0.6))
 			canvas.draw_rect(Rect2(c + Vector2(-31, 19), Vector2(62 * clampf(p.mine_progress, 0, 1), 4)), Color(1, 1, 1, 0.9))
+
+	if G.net != null and not G.net.my_backpacks.is_empty() and not p.dead:
+		_draw_backpack_markers(vs)
 
 	# Hotbar
 	var sz := 58.0

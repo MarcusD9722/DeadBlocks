@@ -19,6 +19,9 @@ var admin := false
 ## Movement checking: the last accepted position and when it arrived, and the current move id
 ## (bumped on every server correction so in-flight moves from before it are ignored).
 var last_good := Vector3.ZERO
+## The last accepted position with solid ground under it: a backpack lands here after a fall
+## out of the world.
+var last_ground := Vector3.INF
 var last_move_ms := 0
 var move_id := 0
 ## Connection health, for the log: when anything last arrived, and ENet's ping and packet loss.
@@ -27,6 +30,8 @@ var ping_ms := 0
 var loss_pct := 0.0
 ## Set when the server itself ends the session (kick, signed in elsewhere).
 var leave_reason := ""
+## Logged out but still in the world (M2): seconds until the character goes too.
+var linger_left := 0.0
 ## The server's copy of the player's inventory (the account's), and whether to resend it.
 var inv: Inventory = null
 var inv_dirty := false
@@ -50,7 +55,6 @@ var fixes: Array[Vector3i] = []
 var health := 100.0
 var food := 100.0
 var kills := 0
-var spawn_point := Vector3.ZERO
 ## Knockback makes a player move faster than walking; the movement check allows it until then.
 var knock_until_ms := 0
 var last_attack_ms := 0

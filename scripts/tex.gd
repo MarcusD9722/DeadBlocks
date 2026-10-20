@@ -4,7 +4,7 @@ extends RefCounted
 
 const TS := 16
 const COLS := 8
-const NUM_TILES := 23
+const NUM_TILES := 27
 
 var atlas_img: Image
 var atlas: ImageTexture
@@ -269,6 +269,57 @@ func _paint(t: int) -> void:
 					_px(t, x, y, _var(r, c, 0.025))
 			for p in [Vector2i(2, 2), Vector2i(13, 2), Vector2i(2, 13), Vector2i(13, 13)]:
 				_px(t, p.x, p.y, _c(196, 200, 210))
+		23:
+			# Backpack, top: canvas with the flap's seam and a carry loop.
+			_fill(t, r, _c(124, 100, 62), 0.035, _c(104, 82, 50), 0.15)
+			for x in TS:
+				_px(t, x, 11, _c(84, 64, 38))
+			for x in range(5, 11):
+				_px(t, x, 4, _c(62, 46, 30))
+				_px(t, x, 5, _c(62, 46, 30))
+		24:
+			# Backpack, sides: a flap over the top, a front pocket and two straps with buckles.
+			_fill(t, r, _c(124, 100, 62), 0.035, _c(104, 82, 50), 0.15)
+			for y in range(0, 5):
+				for x in TS:
+					_px(t, x, y, _var(r, _c(96, 76, 46), 0.03))
+			for x in TS:
+				_px(t, x, 5, _c(70, 54, 34))
+			for y in range(8, 14):
+				for x in range(3, 13):
+					var c := _c(110, 88, 54)
+					if y == 8 or y == 13 or x == 3 or x == 12:
+						c = _c(78, 60, 36)
+					_px(t, x, y, _var(r, c, 0.03))
+			for x in [4, 11]:
+				for y in range(0, 9):
+					_px(t, x, y, _c(58, 44, 28))
+				_px(t, x, 6, _c(206, 194, 150))
+				_px(t, x, 7, _c(176, 164, 122))
+		25:
+			# Bed, top: a pillow at one end, a red blanket with a turned-down sheet, a wooden rim.
+			for y in TS:
+				for x in TS:
+					var c := _c(168, 44, 40)
+					if y < 5:
+						c = _c(240, 236, 228) if x > 2 and x < 13 and y > 0 and y < 4 else _c(198, 192, 180)
+					elif y == 5:
+						c = _c(226, 220, 206)
+					elif (x + y) % 6 == 0:
+						c = _c(146, 34, 32)
+					if x == 0 or x == 15:
+						c = _c(120, 88, 52)
+					_px(t, x, y, _var(r, c, 0.025))
+		26:
+			# Bed, sides (drawn half height): blanket over a wooden frame.
+			for y in TS:
+				for x in TS:
+					var c := _c(168, 44, 40) if y < 7 else _c(150, 112, 68)
+					if y == 7:
+						c = _c(110, 80, 48)
+					elif y >= 8 and (y == 15 or x == 0 or x == 15):
+						c = _c(104, 76, 44)
+					_px(t, x, y, _var(r, c, 0.025))
 
 
 func _cobble(t: int, r: RandomNumberGenerator, lo: float, hi: float) -> void:

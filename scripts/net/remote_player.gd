@@ -103,12 +103,14 @@ func _process(delta: float) -> void:
 	var o = G.net.others.get(net_id)
 	if o == null:
 		return
-	label.text = o["name"]
 	var s: Dictionary = G.net.interpolated(net_id)
 	if s.is_empty():
 		visible = false
 		return
 	visible = true
+	var away: bool = (int(s["flags"]) & Proto.F_AWAY) != 0
+	label.text = o["name"] + (" (away)" if away else "")
+	label.modulate = Color(1, 1, 1, 0.55) if away else Color(1, 1, 1)
 	var pos: Vector3 = s["pos"]
 	global_position = pos
 	# The player's camera yaw points down -Z; the model faces +Z, so turn it around.

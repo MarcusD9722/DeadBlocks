@@ -2,8 +2,8 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.7.1"
-const BUILD_NAME := "M1.7"
+const VERSION := "0.8.0"
+const BUILD_NAME := "M2"
 
 var game: Node = null
 var world: Node3D = null
@@ -70,7 +70,8 @@ func _ready() -> void:
 ## server.cfg keys (written by tools/pi/install.sh) and the flags they stand for.
 const CFG_FLAGS := {"port": "--port=", "password": "--password=", "max_players": "--max-players=",
 	"admins": "--admins=", "day_minutes": "--day-minutes=", "autosave_s": "--autosave=", "world": "--world=",
-	"seed": "--seed="}
+	"seed": "--seed=", "respawn_radius": "--respawn-radius=", "backpack_s": "--backpack-s=",
+	"linger_s": "--linger-s="}
 
 
 ## The server's settings file, <data folder>/server.cfg: "key=value" lines, # for comments.

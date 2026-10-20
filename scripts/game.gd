@@ -201,6 +201,8 @@ func _ready_server() -> void:
 	ns.accounts = saver.load_players()
 	add_child(ns)
 	G.net_server = ns
+	ns.load_backpacks(saver.backpacks)
+	ns.load_beds()
 	state = "server"
 	print("SERVER world \"%s\" in %s: %s, seed %d, day %d %02d:%02d, %d edited chunks, %d players" % [
 		saver.world_name, saver.world_dir, "new" if saver.is_new else "loaded", seed_v, day, int(time),
@@ -517,9 +519,10 @@ func on_player_died() -> void:
 	hud.show_death(true)
 
 
-func respawn() -> void:
+## at_bed: wake up at our bed (if we have one; otherwise the server picks a random spot).
+func respawn(at_bed := true) -> void:
 	if G.mode == "client":
-		G.net.request_respawn()  # the server answers with S_STATS (alive) and S_CORRECT (where)
+		G.net.request_respawn(at_bed)  # the server answers with S_CORRECT (where) and S_STATS (alive)
 		return
 	player.respawn()
 	on_respawned()

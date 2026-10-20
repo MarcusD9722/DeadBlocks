@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 6
+const PROTOCOL := 7
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -41,6 +41,8 @@ const S_MOBS := 26       # (unreliable) tick u32, origin key, count u8, count x 
 const S_STATS := 27      # health u8, food u8, dead u8, kills u16: the server owns these
 const S_HURT := 28       # amount u8, from 3xf32 (all 0 = no knockback): flash, sound, knockback
 const S_CRACKS := 29     # count u16, count x (block pos, stage u8): zombies chipping at blocks
+const S_BACKPACKS := 42  # count u8, count x (block pos, seconds left u16): your own backpacks
+const S_BED := 43        # has u8, block pos: your bed (the death screen offers it)
 # Client -> server
 const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8, hotbar slot u8
 const C_READY := 31      # my chunks are loaded, count me as online
@@ -53,7 +55,7 @@ const C_CRAFT := 36      # seq, recipe index u8, times u8
 const C_EAT := 37        # seq, slot u8
 const C_ATTACK := 38     # seq, mob id u16, slot u8 (the weapon)
 const C_FALL := 39       # damage u8 from a fall (movement is the client's)
-const C_RESPAWN := 40    # after dying
+const C_RESPAWN := 40    # where u8 (0 = at your bed, 1 = somewhere random), after dying
 const C_PAUSE := 41      # paused u8: the pause menu is open (a solo game's server stops its world)
 
 # Player record flags
@@ -62,6 +64,7 @@ const F_FLASHLIGHT := 2
 const F_DEAD := 4
 const F_AIRBORNE := 8
 const F_SWING := 16      # mining or hitting: other players see the arm swing
+const F_AWAY := 32       # logged out: the character stays in the world for a while (M2)
 
 ## A few fixed chunks whose block data both sides hash at login: a different build that would
 ## generate different terrain (and so a different world) is refused with a clear message.

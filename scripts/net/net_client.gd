@@ -58,6 +58,11 @@ var _inv_known := false
 var mobs := {}
 ## Bytes received per message type, for tests and the stats line.
 var bytes_in := {}
+## Our own backpacks (S_BACKPACKS): [[block pos, seconds left], ...], counted down while the
+## world runs, for the marker on screen.
+var my_backpacks: Array = []
+## Our bed (S_BED), Vector3i.MIN without one: the death screen offers to wake up there.
+var bed := Vector3i.MIN
 var _req_seq := 0
 var _guesses: Array = []
 var _deadline := 0.0
@@ -227,8 +232,10 @@ func report_fall(damage: float) -> void:
 	_send(m.data_array)
 
 
-func request_respawn() -> void:
-	_send(Proto.writer(Proto.C_RESPAWN).data_array)
+func request_respawn(at_bed: bool) -> void:
+	var m := Proto.writer(Proto.C_RESPAWN)
+	m.put_u8(0 if at_bed else 1)
+	_send(m.data_array)
 
 
 ## Solo game: the pause menu opened or closed (the server stops or restarts the world).
@@ -485,6 +492,9 @@ func _process(delta: float) -> void:
 		if _ping_t <= 0.0:
 			_ping_t = 1.0
 			_last_ping = ping_ms()
+	if not my_backpacks.is_empty() and G.game != null and not G.game.clock_stopped:
+		for e in my_backpacks:
+			e[1] = maxf(0.0, float(e[1]) - delta)
 	# Mobs the server stopped mentioning are gone (despawned, dead, or out of range).
 	for id in mobs.keys():
 		if now - float(mobs[id].get("seen", 0.0)) > 1.0:
@@ -530,6 +540,8 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			# A new session: the server subscribes us and sends the inventory from scratch.
 			_guesses.clear()
 			_inv_known = false
+			my_backpacks.clear()
+			bed = Vector3i.MIN
 			if reconnecting:
 				reconnecting = false
 				print("NET reconnected after %.1f s" % (_now() - _lost_at))
@@ -628,6 +640,15 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 				for i in b.get_u16():
 					var p := Proto.get_bpos(b)
 					world_target.net_crack(p, b.get_u8())
+		Proto.S_BACKPACKS:
+			my_backpacks.clear()
+			for i in b.get_u8():
+				var p := Proto.get_bpos(b)
+				my_backpacks.append([p, float(b.get_u16())])
+		Proto.S_BED:
+			var has := b.get_u8() == 1
+			var bp := Proto.get_bpos(b)
+			bed = bp if has else Vector3i.MIN
 		Proto.S_CORRECT:
 			move_id = b.get_u8()
 			var pos := Proto.get_vec3(b)
