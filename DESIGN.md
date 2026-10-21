@@ -16,6 +16,9 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - Home connection: **AT&T fiber, ~400 Mbps upload**, so bandwidth is not a constraint (8 players + 120 zombies needs a few Mbit/s).
 - Joining: each player picks a **name and a personal PIN**; the server also has a password. Characters are saved by name, and the PIN protects the name, so a player can log in from any PC.
 - Builds reach players as **downloads on the public GitHub repo** (Releases): the Windows `.exe` for players and the Linux ARM64 server for the Pi.
+- **Decided in 0.8.1:** the game updates itself, like an online game.
+  - When the server runs another version, the game downloads that version from the GitHub release `v<version>` and restarts into it. Then it joins the server again.
+  - After 0.8.1, players never download a new exe by hand. Each release must therefore be tagged exactly `v` + the version and include `DeadBlocks-<version>-windows.zip`.
 - **Time stops when nobody is online.**
 - Logging out: your character stays in the world for **60 seconds** after you disconnect. During a Blood Moon, your share of the horde moves to the nearest other player.
 

@@ -2,7 +2,7 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.8.0"
+const VERSION := "0.8.1"
 const BUILD_NAME := "M2"
 
 var game: Node = null
@@ -27,6 +27,11 @@ var solo := false
 var session := {}
 ## Client networking; lives here so the connection survives the scene reload into the server's world.
 var net: Node = null
+## Switches the game to the server's version when they differ (updater.gd).
+var updater: Node = null
+const UpdaterScript := preload("res://scripts/updater.gd")
+## Joining the server again by ourselves after an update: a failure goes back to the title.
+var rejoining := false
 ## Dedicated server networking (server mode only).
 var net_server: Node = null
 ## Shown on the title screen after a disconnect.
@@ -38,6 +43,11 @@ var _autojoin_done := false
 
 func _ready() -> void:
 	args = OS.get_cmdline_user_args()
+	if arg_value("--finish-update=") != "":
+		# The new version, started by the old one to take its place (updater.gd).
+		UpdaterScript.finish(arg_value("--finish-update="), not has_arg("--finish-no-launch"))
+		get_tree().quit()
+		return
 	if has_arg("--version"):
 		print("Dead Blocks %s" % VERSION)  # update.sh checks a new server program runs with this
 		get_tree().quit()
@@ -56,6 +66,12 @@ func _ready() -> void:
 	add_child(net)
 	net.fake_version = arg_value("--fake-version=")
 	net.fake_terrain = has_arg("--fake-terrain")
+	updater = UpdaterScript.new()
+	updater.name = "Updater"
+	add_child(updater)
+	if has_arg("--after-update"):
+		print("UPDATE now running Dead Blocks %s" % VERSION)
+		updater.cleanup_after_update()
 	if has_arg("--nettest") or arg_value("--nettest=") != "":
 		var t := preload("res://scripts/tests/nettest.gd").new()
 		t.name = "NetTest"
@@ -110,12 +126,26 @@ func arg_value(prefix: String) -> String:
 
 
 ## Tests and power users: --connect=host[:port] --name=N --pin=P --password=S joins on startup.
+## After an update, the game joins the server it was joining (updater.gd's rejoin.cfg).
 func wants_autojoin() -> bool:
-	return mode == "solo" and not _autojoin_done and arg_value("--connect=") != ""
+	if mode != "solo" or _autojoin_done:
+		return false
+	return arg_value("--connect=") != "" or (has_arg("--after-update") and FileAccess.file_exists(UpdaterScript.REJOIN_CFG))
 
 
 func autojoin() -> void:
 	_autojoin_done = true
+	if arg_value("--connect=") == "":
+		var cfg := ConfigFile.new()
+		cfg.load(UpdaterScript.REJOIN_CFG)
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(UpdaterScript.REJOIN_CFG))
+		if not cfg.has_section_key("rejoin", "host"):
+			end_client_session("Updated to Dead Blocks %s." % VERSION)
+			return
+		rejoining = true
+		join(cfg.get_value("rejoin", "host"), int(cfg.get_value("rejoin", "port")), cfg.get_value("rejoin", "name"),
+			Marshalls.base64_to_raw(cfg.get_value("rejoin", "pin_key")), Marshalls.base64_to_raw(cfg.get_value("rejoin", "password_key")))
+		return
 	var hp := split_address(arg_value("--connect="))
 	var pname := arg_value("--name=")
 	join(hp[0], hp[1], pname, Proto.pin_key(pname, arg_value("--pin=")), Proto.password_key(arg_value("--password=")))
@@ -140,6 +170,7 @@ static func split_address(a: String) -> Array:
 ## Called by NetClient when the server's welcome arrives: reload into the server's world.
 func start_client_session(welcome: Dictionary) -> void:
 	session = welcome
+	rejoining = false
 	net.detach()
 	mode = "client"
 	get_tree().paused = false

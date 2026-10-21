@@ -249,6 +249,35 @@ else
 	fail "server logged why alice dropped"
 fi
 
+# 8b. Updating: a game that runs another version than the server gets the server's version
+# instead of being refused. A local web server stands in for GitHub (where it is the release
+# v<version> with DeadBlocks-<version>-windows.zip). Then the take-over step: the new program
+# (here this Godot) copies itself over the old one.
+VERSION=$(sed -n 's/^SERVER Dead Blocks \([0-9.]*\) listening.*/\1/p' "$LOG_DIR/server.log" | head -1)
+UPD="$LOG_DIR/update"
+rm -rf "$UPD"
+mkdir -p "$UPD/web/v$VERSION" "$UPD/game"
+head -c 3000000 /dev/urandom > "$UPD/DeadBlocks.exe"
+(cd "$UPD" && zip -q "web/v$VERSION/DeadBlocks-$VERSION-windows.zip" DeadBlocks.exe)
+printf 'old game' > "$UPD/game/DeadBlocks.exe"
+WPORT=$((PORT + 50))
+python3 -m http.server $WPORT --bind 127.0.0.1 --directory "$UPD/web" > "$LOG_DIR/update_web.log" 2>&1 &
+WEB=$!
+sleep 1
+client updater dave 1111 pw updater --fake-version=0.0.1 --update-url=http://127.0.0.1:$WPORT/ \
+	--update-target="$UPD/game/DeadBlocks.exe" --update-dry-run --update-expect="$UPD/DeadBlocks.exe"
+wait $CPID
+report updater
+kill $WEB 2>/dev/null
+wait $WEB 2>/dev/null
+"$GODOT" --headless --path . -- --finish-update="$UPD/game/DeadBlocks.exe" --finish-no-launch > "$LOG_DIR/update_finish.log" 2>&1
+if cmp -s "$UPD/game/DeadBlocks.exe" "$(readlink -f "$(command -v "$GODOT" || echo "$GODOT")")" && ! grep -q -E '^(ERROR|SCRIPT ERROR)' "$LOG_DIR/update_finish.log"; then
+	pass "the new version copied itself over the old game"
+else
+	fail "the new version copied itself over the old game (see $LOG_DIR/update_finish.log)"
+fi
+rm -f "$UPD/game/DeadBlocks.exe"  # a copy of Godot
+
 # 9. Building together, on a second server with room for the soak players and admins for /give:
 # mining and building seen by the other player, crafting at a workbench, eating, two players
 # breaking the same block, a late joiner getting the edited chunks, and a soak test.

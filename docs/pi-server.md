@@ -133,8 +133,13 @@ When there's a new release on GitHub:
 ```
 It backs up the world, downloads the newest server, checks that it runs on this Pi, stops the
 server (which saves), swaps the program and starts it again. If the new version doesn't start,
-it goes back to the old one by itself. Players then need the same version of the game; the
-server tells anyone with an older one.
+it goes back to the old one by itself.
+
+**Players don't download anything** (from game version 0.8.1 on). When they join, the game sees
+that the server runs another version, downloads that one from GitHub, restarts and joins again
+by itself. This needs the release to be tagged exactly `v` + the version (for example `v0.8.2`),
+with `DeadBlocks-0.8.2-windows.zip` attached. So make the GitHub release first, then run
+`update.sh`.
 
 - From a zip you copied to the Pi: `~/deadblocks-server/update.sh ~/DeadBlocksServer-linux-arm64.zip`
 - Back to the version before: `~/deadblocks-server/update.sh --rollback`

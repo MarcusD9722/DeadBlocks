@@ -41,7 +41,7 @@ var _next_mob_id := 1
 
 
 func _ready() -> void:
-	if G.has_arg("--version"):
+	if G.has_arg("--version") or G.arg_value("--finish-update=") != "":
 		state = "quitting"
 		set_process(false)
 		set_physics_process(false)

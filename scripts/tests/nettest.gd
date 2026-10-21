@@ -34,6 +34,9 @@ extends Node
 ##                --nettest-has, --nettest-count=ID:N, --nettest-hash=CX,CZ,HASH; --nettest-dead:
 ##                the character died while it was away, so it comes back on the death screen with
 ##                a backpack)
+##   updater      with --fake-version, --update-url (a local stand-in for GitHub releases),
+##                --update-target and --update-dry-run: the server runs another version, so the
+##                game downloads that one and puts it next to the old one instead of being refused
 ##   linger       (admin) gets some planks and leaves (its character stays: M2); with
 ##                --nettest-zombies it first sets 4 hunting zombies on itself
 ##   lwatch       watches "linger" leave: the character stays, marked away, and goes once the
@@ -190,6 +193,8 @@ func _run() -> void:
 		await _run_crasher()
 	elif role == "linger":
 		await _run_linger()
+	elif role == "updater":
+		await _run_updater()
 	elif role == "lwatch":
 		await _run_lwatch()
 	else:
@@ -248,6 +253,19 @@ func _run_join() -> void:
 		var mine: String = G.world.region_hash(c.x, c.y, 1)
 		check(mine == hp[2], "the same blocks as before the restart (%s, then %s)" % [mine, hp[2]])
 	await _wait(4.0)
+
+
+func _run_updater() -> void:
+	var up = G.updater
+	check(await _until(func(): return up.state in ["ready", "failed"], 60.0), "the update finished (%s)" % up.state)
+	check(up.state == "ready" and up.version == G.VERSION, "got the version the server runs (%s)" % up.version)
+	var want := FileAccess.get_file_as_bytes(G.arg_value("--update-expect="))
+	var got := FileAccess.get_file_as_bytes(G.UpdaterScript.helper_exe(G.UpdaterScript.target_exe()))
+	check(want.size() > 0 and got == want, "the new program is in place next to the old one (%d bytes)" % got.size())
+	var cfg := ConfigFile.new()
+	check(cfg.load(G.UpdaterScript.REJOIN_CFG) == OK and cfg.get_value("rejoin", "host", "") == "127.0.0.1"
+		and cfg.get_value("rejoin", "name", "") == G.arg_value("--name="), "it remembers which server to join again")
+	check(_errors.is_empty() and not G.net.is_online(), "no refusal, and it didn't join with the old version (%s)" % ", ".join(_errors))
 
 
 func _run_linger() -> void:

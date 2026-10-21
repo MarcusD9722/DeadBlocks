@@ -397,8 +397,12 @@ func _on_auth(_id: int, data: PackedByteArray) -> void:
 	var b := Proto.reader(data)
 	match data[0]:
 		Proto.A_CHALLENGE:
-			b.get_u16()
-			b.get_utf8_string()
+			var server_proto := b.get_u16()
+			var server_version := b.get_utf8_string()
+			var mine := fake_version if fake_version != "" else G.VERSION
+			if (server_proto != Proto.PROTOCOL or server_version != mine) and G.updater != null and G.updater.can_update():
+				_switch_version(server_version)
+				return
 			var nonce: PackedByteArray = b.get_data(16)[1]
 			var seed_v := b.get_64()
 			var wg_version := b.get_u16()
@@ -431,7 +435,28 @@ func _on_auth(_id: int, data: PackedByteArray) -> void:
 					reconnecting = false
 					G.call_deferred("end_client_session", reason)
 				else:
-					_status(reason, true)
+					_join_failed(reason)
+
+
+## The server runs another version than ours: get that one (updater.gd) instead of being refused.
+## In the middle of a game (the server restarted with an update), back to the title first.
+func _switch_version(v: String) -> void:
+	var rejoin := {"host": host, "port": port, "name": player_name, "pin_key": pin_key, "password_key": password_key}
+	var in_game := reconnecting
+	reconnecting = false
+	G.rejoining = false
+	call_deferred("_close")
+	if in_game:
+		G.call_deferred("end_client_session", "The server was updated to Dead Blocks %s. Updating your game..." % v)
+	G.updater.update_to(v, rejoin)
+
+
+## A join that can't go on. When the game joined by itself after an update, back to the title.
+func _join_failed(text: String) -> void:
+	_status(text, true)
+	if G.rejoining:
+		G.rejoining = false
+		G.call_deferred("end_client_session", text)
 
 
 func _on_connected() -> void:
@@ -486,7 +511,7 @@ func _process(delta: float) -> void:
 	if state == "connecting" and now > _deadline:
 		_close()
 		_retry_at = now + RETRY_EVERY
-		_status("No answer from %s:%d after %d seconds. Check the address and port forwarding." % [host, port, int(CONNECT_TIMEOUT)], true)
+		_join_failed("No answer from %s:%d after %d seconds. Check the address and port forwarding." % [host, port, int(CONNECT_TIMEOUT)])
 	if state == "online":
 		_ping_t -= delta
 		if _ping_t <= 0.0:
