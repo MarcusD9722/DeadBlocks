@@ -12,7 +12,9 @@ extends Node
 ##   --bind=IP (listen on one address only; Play solo uses 127.0.0.1)
 ##   --solo (Play solo: the world stops while the player has the pause menu open)
 ##   --backpack-s=S (tests: seconds of play before a dropped backpack falls apart)
-##   --linger-s=S (a leaving player's character stays in the world this long; 0 = not at all)
+##   --linger-s=S (when a player's connection is lost, their character stays in the world this
+##     long; 0 = not at all. Leaving through the menu or closing the game takes it out at once)
+##   --peer-timeout-ms=N (tests: notice a silent connection after N to 2N ms instead of 15-30 s)
 ##   --respawn-radius=M (respawning without a bed: somewhere within M m of the world's center;
 ##     0 = at the world spawn, as the older tests expect)
 
@@ -201,7 +203,7 @@ func player_positions() -> Array:
 
 func _on_authenticating(id: int) -> void:
 	_live[id] = true
-	Proto.set_timeouts(peer.get_peer(id))
+	_set_timeouts(id)
 	var nonce := Crypto.new().generate_random_bytes(16)
 	_nonces[id] = nonce
 	var b := Proto.writer(Proto.A_CHALLENGE)
@@ -304,6 +306,16 @@ func _on_auth(id: int, data: PackedByteArray) -> void:
 	mp.complete_auth(id)
 
 
+## How long ENet waits before it gives up on a silent connection (tests: --peer-timeout-ms=N,
+## so a crashed game is noticed in seconds).
+func _set_timeouts(id: int) -> void:
+	var p := peer.get_peer(id)
+	Proto.set_timeouts(p)
+	if p != null and G.arg_value("--peer-timeout-ms=") != "":
+		var ms := clampi(int(G.arg_value("--peer-timeout-ms=")), 1000, 60000)
+		p.set_timeout(32, ms, ms * 2)
+
+
 func _reject(id: int, reason: String) -> void:
 	print("SERVER refused a login from %s: %s" % [_ip_of(id), reason])
 	var r := Proto.writer(Proto.A_RESULT)
@@ -345,7 +357,7 @@ func _on_connected(id: int) -> void:
 	if lingering.has(key):
 		_end_linger(key, "is back with its player", false)
 	var acc: Dictionary = accounts[key]
-	Proto.set_timeouts(peer.get_peer(id))
+	_set_timeouts(id)
 	var sp := ServerPlayer.new()
 	sp.player_name = acc["name"]
 	sp.peer_id = id
@@ -407,9 +419,9 @@ func _on_disconnected(id: int) -> void:
 	_remove_player(id)
 
 
-## Save where the player was and tell everyone else. Their character stays in the world for
-## linger_s (M2) unless they were kicked, signed in again, are dead, or the server is stopping;
-## otherwise it goes now.
+## Save where the player was and tell everyone else. If the connection was lost, their character
+## stays in the world for linger_s (M2) unless they were kicked, signed in again, are dead, or
+## the server is stopping; otherwise (they left) it goes now.
 func _remove_player(id: int) -> void:
 	var sp = players.get(id)
 	if sp == null:
@@ -417,12 +429,15 @@ func _remove_player(id: int) -> void:
 	players.erase(id)
 	_store_account(sp)
 	acc_play_time(sp)
-	var stays := _may_linger(sp)
-	# Players send movement 15 times a second, so a long silence means the connection died.
+	# Players send movement 15 times a second, so a long silence means the connection died (a
+	# crash, Wi-Fi). Only then does the character stay behind: leaving through the menu or
+	# closing the game takes it out at once.
 	var quiet: float = (Time.get_ticks_msec() - sp.last_recv_ms) / 1000.0
+	var lost: bool = sp.leave_reason == "" and quiet > 3.0
+	var stays := lost and _may_linger(sp)
 	var why: String = sp.leave_reason
 	var after := " Their character stays here for %d s." % int(linger_s) if stays else ""
-	if why == "" and quiet > 3.0:
+	if lost:
 		why = "lost the connection (nothing received for %.1f s; ping was %d ms, packet loss %d%%)" % [quiet, sp.ping_ms, int(sp.loss_pct)]
 		_broadcast(_notice_bytes("%s lost the connection.%s" % [sp.player_name, after], Color(1, 0.85, 0.7)))
 	else:

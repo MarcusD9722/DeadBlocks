@@ -352,23 +352,38 @@ else
 	fail "mob server started (see $LOG_DIR/server_mobs.log)"
 fi
 
-# 11. Logging out (M2): a leaving player's character stays in the world for a while (15 s here).
-# bob watches: alice leaves (her character stays, marked away), comes back within the time (the
-# same character continues), leaves again (it goes when the time is up), then leaves with
-# zombies after her: they kill the character, and she comes back on the death screen.
+# 11. Losing the connection (M2): the character of a player whose game crashed or lost its
+# connection stays in the world for a while (15 s here; this server notices a silent connection
+# after 4-8 s). bob watches: alice's game is killed (her character stays, marked away), she comes
+# back within the time (the same character continues) and leaves through the menu (it goes at
+# once), then her game is killed with zombies about: they kill the character, and she comes back
+# on the death screen.
 kill $SPID 2>/dev/null
 PORT=$((PORT + 1))
-"${SERVER[@]}" --server --respawn-radius=0 --linger-s=15 --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=8 --seed=4242 --test-log --no-spawns \
+"${SERVER[@]}" --server --respawn-radius=0 --linger-s=15 --peer-timeout-ms=4000 --port=$PORT --data="$LOG_DIR/data/$PORT" --password=pw --max-players=8 --seed=4242 --test-log --no-spawns \
 	--admins=alice > "$LOG_DIR/server_linger.log" 2>&1 &
 SPID=$!
+# crashed LOGNAME: a client the script killed did everything it should have before that
+crashed() {
+	local log="$LOG_DIR/$1.log"
+	if grep -q "NETTEST linger ready" "$log" && ! grep -q "NETTEST FAIL" "$log" && ! grep -q -E '^(ERROR|SCRIPT ERROR)' "$log"; then
+		pass "$1"
+	else
+		fail "$1 (see $log)"
+		grep -E "NETTEST (FAIL|status)|ERROR" "$log" | head -8 | sed 's/^/    /'
+	fi
+}
 if wait_line "$LOG_DIR/server_linger.log" "listening on UDP" 120; then
 	client lwatch bob 5678 pw lwatch
 	LW=$CPID
 	if wait_line "$LOG_DIR/lwatch.log" "NETTEST online" 90; then
 		client linger1 alice 1234 pw linger
-		wait $CPID
-		report linger1
+		L=$CPID
+		wait_line "$LOG_DIR/linger1.log" "NETTEST linger ready" 90 && kill -9 $L
+		wait $L 2>/dev/null
+		crashed linger1
 		lpos=$(sed -n 's/^NETTEST linger pos=//p' "$LOG_DIR/linger1.log")
+		wait_line "$LOG_DIR/server_linger.log" "alice's character stays in the world" 30
 		client linger_back alice 1234 pw join --nettest-expect="$lpos"
 		wait $CPID
 		report linger_back
@@ -379,9 +394,11 @@ if wait_line "$LOG_DIR/server_linger.log" "listening on UDP" 120; then
 		fi
 		wait_line "$LOG_DIR/lwatch.log" "NETTEST lwatch gone" 60
 		client linger2 alice 1234 pw linger --nettest-zombies
-		wait $CPID
-		report linger2
-		wait_line "$LOG_DIR/lwatch.log" "NETTEST lwatch done" 60
+		L=$CPID
+		wait_line "$LOG_DIR/linger2.log" "NETTEST linger ready" 90 && kill -9 $L
+		wait $L 2>/dev/null
+		crashed linger2
+		wait_line "$LOG_DIR/lwatch.log" "NETTEST lwatch done" 90
 		client linger_dead alice 1234 pw join --nettest-dead
 		wait $CPID
 		report linger_dead

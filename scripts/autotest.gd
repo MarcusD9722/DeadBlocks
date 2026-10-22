@@ -195,18 +195,20 @@ func _play() -> void:
 	p.velocity = Vector3.ZERO
 	await _wait(0.5)
 	await _until(func(): return p.is_on_floor(), 5.0)
+	# The boars from the hunt may stand where the wall goes (no block can be placed on a mob).
+	await _clear_mobs()
 	var ring: Array = await _wall_in()
 	var solid := func(): return ring.filter(func(b): return w.get_blockv(b) != Blocks.AIR)
 	check(solid.call().size() >= 14, "walled ourselves in (%d of 16 solid)" % solid.call().size())
 	var walled: Array = solid.call()
 	var before: Array = G.net.mobs.keys()
+	var hp0: float = p.health
 	G.net.send_chat("/spawn horde 4")
 	check(await _until(func(): return _mob_ids([Proto.MOB_HORDE]).size() >= 3, 10.0), "a horde appears")
 	await _wait(2.0)
 	await _shot("04_night_horde")
 	check(await _until(func(): return int(G.net.bytes_in.get(Proto.S_CRACKS, 0)) > 0, 75.0), "the horde cracks blocks")
-	var hp0: float = p.health
-	check(await _until(func(): return walled.any(func(b): return w.get_blockv(b) == Blocks.AIR) or p.health < hp0, 90.0),
+	check(await _until(func(): return walled.any(func(b): return w.get_blockv(b) == Blocks.AIR) or p.health < hp0 or p.dead, 90.0),
 		"the horde breaks through (or reaches us)")
 	check(await _until(func(): return p.health < hp0 or p.dead, 60.0), "a zombie hurts us (health %.0f)" % p.health)
 	if not p.dead:
@@ -267,8 +269,8 @@ func _play() -> void:
 		g.respawn()
 		await _until(func(): return g.state == "playing", 10.0)
 	var zs0: Array = _mob_ids([Proto.MOB_ZOMBIE, Proto.MOB_NIGHT, Proto.MOB_HORDE])
-	G.net.send_chat("/clear")
-	check(await _until(func(): return _has_notice("Removed ") and zs0.all(func(id): return not G.net.mobs.has(id)), 10.0),
+	var cleared: bool = await _clear_mobs()
+	check(cleared and await _until(func(): return zs0.all(func(id): return not G.net.mobs.has(id)), 5.0),
 		"/clear removes the zombies (%d of them)" % zs0.size())
 	if G.net.bed == Vector3i.MIN:
 		# The Blood Moon horde smashed it: a new one, so the respawns below stay close by.
@@ -325,6 +327,14 @@ func _play() -> void:
 			var f := Vector3i(floori(p.global_position.x), floori(p.global_position.y + 0.1), floori(p.global_position.z))
 			return not Blocks.is_solid(w.get_blockv(f)) and not Blocks.is_solid(w.get_blockv(f + Vector3i.UP))
 		check(await _until(free, 5.0), "buried in the ground, we climb out by ourselves")
+
+## Admin /clear: every zombie and animal goes. True once the server says so.
+func _clear_mobs() -> bool:
+	var said := func() -> int: return _notices.filter(func(n): return String(n).begins_with("Removed ")).size()
+	var n0: int = said.call()
+	G.net.send_chat("/clear")
+	return await _until(func(): return said.call() > n0, 10.0)
+
 
 ## Place the bed we hold on the ground behind us; sets _bed once the server says it's ours.
 func _place_bed() -> void:

@@ -37,10 +37,12 @@ extends Node
 ##   updater      with --fake-version, --update-url (a local stand-in for GitHub releases),
 ##                --update-target and --update-dry-run: the server runs another version, so the
 ##                game downloads that one and puts it next to the old one instead of being refused
-##   linger       (admin) gets some planks and leaves (its character stays: M2); with
-##                --nettest-zombies it first sets 4 hunting zombies on itself
-##   lwatch       watches "linger" leave: the character stays, marked away, and goes once the
-##                linger time is up; then zombies kill it after its player left
+##   linger       (admin) gets some planks, then waits for the script to kill it, like a crash
+##                (its character stays: M2); with --nettest-zombies it first sets 4 hunting
+##                zombies on itself
+##   lwatch       watches alice: after her game crashes her character stays, marked away; when
+##                she comes back and leaves through the menu it goes at once; after another
+##                crash with zombies about, they kill the character
 ##   crasher      (admin) keeps building and breaking while the script kills and restarts the
 ##                server (--nettest-crashes=N times, at most --nettest-soak=S seconds; prints
 ##                NETTEST crasher online N each time it is back); then its world must match
@@ -281,6 +283,9 @@ func _run_linger() -> void:
 	var at: Vector3 = G.player.global_position
 	print("NETTEST linger pos=%.3f,%.3f,%.3f" % [at.x, at.y, at.z])
 	await _wait(0.5)  # that position reaches the server
+	print("NETTEST linger ready")
+	await _wait(60.0)
+	check(false, "was killed by the test script")
 
 
 func _run_lwatch() -> void:
@@ -296,23 +301,21 @@ func _run_lwatch() -> void:
 	var away := func() -> bool:
 		var id: int = alice.call()
 		return id != 0 and not G.net.others[id]["samples"].is_empty() and (int(G.net.others[id]["samples"].back()[4]) & Proto.F_AWAY) != 0
-	var lefts := func() -> int: return _notices.filter(func(n): return String(n).begins_with("alice left the game.")).size()
-	# 1. alice leaves: her character stays, marked away.
-	check(await _until(func(): return lefts.call() >= 1, 120.0), "alice left")
+	var said := func(prefix: String) -> int: return _notices.filter(func(n): return String(n).begins_with(prefix)).size()
+	# 1. alice's game crashes: her character stays, marked away.
+	check(await _until(func(): return said.call("alice lost the connection.") >= 1, 120.0), "alice's game is gone")
 	check(await _until(away, 3.0), "her character stays in the world, marked away")
 	var rp = G.game.remote_players.get(alice.call())
 	check(rp != null and "(away)" in rp.label.text, "its name tag says (away)")
-	# 2. She comes back (the same character continues) and leaves again: it goes after linger_s.
-	check(await _until(func(): return lefts.call() >= 2, 90.0), "alice came back and left again")
+	# 2. She comes back in time (the same character continues), then leaves through the menu:
+	# her character goes at once.
+	check(await _until(func(): return said.call("alice left the game.") >= 1, 90.0), "alice came back and left")
 	var t0 := Time.get_ticks_msec()
-	check(await _until(func(): return alice.call() == 0, 40.0), "her character goes once the time is up")
-	var secs := (Time.get_ticks_msec() - t0) / 1000.0
-	check(secs > 10.0, "after the linger time (%.0f s)" % secs)
+	check(await _until(func(): return alice.call() == 0, 5.0), "leaving on purpose takes her character out at once (%.1f s)" % ((Time.get_ticks_msec() - t0) / 1000.0))
 	print("NETTEST lwatch gone")
-	# 3. She leaves with zombies after her: they kill her character.
-	check(await _until(func(): return lefts.call() >= 3, 90.0), "alice left with zombies after her")
-	check(await _until(func(): return _has_notice("alice died."), 40.0), "the zombies killed her character after she left")
-	check(await _until(func(): return alice.call() == 0, 10.0), "and it's gone from the world")
+	# 3. Her game crashes with zombies after her: they kill the character.
+	check(await _until(func(): return _has_notice("alice died."), 90.0), "the zombies killed her character after her game was gone")
+	check(await _until(func(): return alice.call() == 0, 40.0), "and it's gone from the world")
 	print("NETTEST lwatch done")
 
 

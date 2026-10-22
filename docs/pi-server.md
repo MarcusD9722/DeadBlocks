@@ -105,7 +105,7 @@ down and starts again by itself. Pulling the plug loses at most the last minute 
 **Settings** (password, admin names, port, max players) are in `~/deadblocks-server/server.cfg`.
 After changing it: `dbctl restart`. You can also add these lines:
 - `respawn_radius=1000`: how far from the world's center you can wake up without a bed (`0` = always at the world spawn).
-- `linger_s=60`: how long a character stays in the world after its player leaves (`0` = not at all).
+- `linger_s=60`: how long a character stays in the world after its player's game crashed or lost the connection (`0` = not at all). Leaving through the menu always takes it out at once.
 - `backpack_s=600`: how many seconds of play a dropped backpack lasts.
 
 ## 7. Wi-Fi: Ethernet, or at least no power saving

@@ -25,6 +25,7 @@ and is committed on its own.
   - You can't move until the world around you has loaded.
 - **New players** start at the world spawn as now, so a group of friends starts together.
 - **Logging out:** your character stays **60 s** (`linger_s` in server.cfg). It stands where you left, its name tag reads "(away)", and zombies can still kill it.
+  - **Changed in 0.8.2 (Marcus):** this applies only when the connection is lost (a crash or a network drop). Leaving through the menu or closing the game takes the character out at once.
   - If they do, the backpack drops and your next join starts on the death screen.
   - Joining again within the 60 s just continues.
   - No staying behind: when the server stops, when you're kicked, when you're already dead, or in Play solo (the PC's own server stops with the game anyway).
@@ -67,7 +68,7 @@ and is committed on its own.
 
 ### M2.3 Logout linger (built)
 - **Server:**
-  - A leaving player (connection closed or lost) whose record is alive and who wasn't kicked or replaced moves to `lingering`, keeping its Sim record (zombies still target it), its chunks and its place in snapshots, with `F_AWAY`. The world keeps running for it.
+  - A player whose connection was lost (since 0.8.2 only then: more than 3 s of silence before ENet gave up), whose record is alive and who wasn't kicked or replaced, moves to `lingering`, keeping its Sim record (zombies still target it), its chunks and its place in snapshots, with `F_AWAY`. The world keeps running for it.
   - After `linger_s` it's removed as today. A login with that name takes it over at once.
   - It can die: backpack and death as usual.
 - **Client:** "(away)" on the name tag and in the pause menu's player list.
@@ -85,5 +86,5 @@ and is committed on its own.
 ## Done when
 - A death drops a beaconed backpack anyone can pick up, which falls apart after 10 minutes of play.
 - A bed brings you back to it; without one you wake up somewhere random, nearby and safe.
-- Leaving mid-fight leaves your character behind for a minute.
+- Losing the connection mid-fight leaves your character behind for a minute; leaving through the menu doesn't.
 - **Marcus tries:** die on purpose, find your backpack by its beam, craft and place a bed, die again and wake up next to it. With his wife: one quits during a night fight, and the other sees the character stay for a minute.

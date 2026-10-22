@@ -21,6 +21,7 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
   - After 0.8.1, players never download a new exe by hand. Each release must therefore be tagged exactly `v` + the version and include `DeadBlocks-<version>-windows.zip`.
 - **Time stops when nobody is online.**
 - Logging out: your character stays in the world for **60 seconds** after you disconnect. During a Blood Moon, your share of the horde moves to the nearest other player.
+  - **Changed in 0.8.2 (Marcus):** this applies only when the connection is lost (a crash or a network drop). Leaving through the menu or closing the game takes the character out at once.
 
 ## Time
 - A full in-game day lasts **30 real minutes**.
@@ -68,7 +69,8 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
   - Without a bed you wake up on open ground within 1 km of the center (`respawn_radius` in server.cfg).
   - New players still start at the world spawn, so friends start together.
 - **Built in M2.3:**
-  - A leaving player's character stays in the world for 60 s (`linger_s`), marked "(away)", and zombies can kill it.
+  - When a player's connection is lost (a crash, Wi-Fi), their character stays in the world for 60 s (`linger_s`), marked "(away)", and zombies can kill it.
+  - **Since 0.8.2:** leaving through the menu or closing the game takes the character out at once.
   - Joining again within that time continues it.
   - It doesn't stay when the server stops, after a kick, when already dead, or in Play solo.
 - The details and the other defaults are in `docs/M2-plan.md`.
@@ -163,9 +165,9 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
   - M1.1 (done): test gate, server mode, physics thread, regions. M1.2 (done): join over the network with name + PIN + password, see each other, chat, admin commands, Host game, time stops while nobody is online. M1.3 (done): building together — the server owns blocks and inventories, mining / building / crafting / eating online, late joiners get the edited chunks, admins can `/give`. M1.4 (done): zombies and boars run on the server and everyone sees the same ones; health and food are the server's; combat, cracks, Blood Moon for everyone, admins can `/spawn`. M1.5 (done): the server saves the world, every character and the clock (crash-safe, checked, autosave every 60 s, backups, a lock against two servers on one world, control files for stopping and admin jobs); Host game worlds are kept on the PC. M1.6 (done): the Pi server package — a zip with install.sh (systemd service that starts with the Pi, saves on stop, restarts after a crash, wins the CPU over Minecraft; daily backups), dbctl for everyday control, update.sh with automatic rollback, and docs/pi-server.md. M1.7 (done): Play solo runs the same server in the background on the PC (only reachable from the PC itself); the pause menu stops its world, solo worlds are saved with Continue / New world, and the autotest plays a solo game through the real client. Next: the big two-PC test, then M1.8 (first friends evening).
   - Decided in M1.2: signing in with a name that is still online (say after a crash) and the right PIN takes over that session instead of being refused. A hosted game's server stops when the game closes, or by itself 15 s after its host is gone.
   - Decided in 0.2.2 (after drops in the first Pi test): a connection counts as lost only after 15–30 s of silence, and the game then reconnects by itself for up to a minute, keeping the world on screen.
-- **M2 — Death & respawn** (plan: `docs/M2-plan.md`, released as 0.8.0): backpack drop (10 min, anyone can loot), beds, random spawn points, 60 s logout linger.
+- **M2 — Death & respawn** (done; plan: `docs/M2-plan.md`; 0.8.0–0.8.2): backpack drop (10 min, anyone can loot), beds, random spawn points, 60 s linger after a lost connection.
   - M2.1 (done): the backpack.
-  - Next: M2.2 (beds and random respawns), then M2.3 (logout linger).
+  - M2.2 (done): beds and random respawns. M2.3 (done): the linger after a lost connection. Marcus tried the backpack, Die and Respawn and beds in 0.8.1; next is M3.
   - M1.8 (the friends evening and its stats) waits until Marcus has his home-lab parts and the router forward.
 - **M3 — Zombie rework**: proximity-only aggression on normal days (a first version is in 0.7.1), Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
 - **M4 — Exploration & loot**: distance-based danger scaling, ruins/POIs, chests, loot tables with rarity, 3-day refill, doors with locks/PIN.
