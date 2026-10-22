@@ -77,7 +77,7 @@ func _ready() -> void:
 	elif role == "lwatch":
 		limit = 300.0
 	elif role == "autotest":
-		limit = 600.0
+		limit = 840.0
 	get_tree().create_timer(limit, true, false, true).timeout.connect(_on_timeout)
 	_run.call_deferred()
 
@@ -305,8 +305,11 @@ func _run_lwatch() -> void:
 	# 1. alice's game crashes: her character stays, marked away.
 	check(await _until(func(): return said.call("alice lost the connection.") >= 1, 120.0), "alice's game is gone")
 	check(await _until(away, 3.0), "her character stays in the world, marked away")
-	var rp = G.game.remote_players.get(alice.call())
-	check(rp != null and "(away)" in rp.label.text, "its name tag says (away)")
+	# Figures are drawn 100 ms behind the newest snapshot, so the tag follows a moment later.
+	var tag := func() -> bool:
+		var rp = G.game.remote_players.get(alice.call())
+		return rp != null and is_instance_valid(rp) and "(away)" in rp.label.text
+	check(await _until(tag, 3.0), "its name tag says (away)")
 	# 2. She comes back in time (the same character continues), then leaves through the menu:
 	# her character goes at once.
 	check(await _until(func(): return said.call("alice left the game.") >= 1, 90.0), "alice came back and left")
@@ -833,6 +836,23 @@ func _mob_ids(kinds: Array) -> Array:
 	return G.net.mobs.keys().filter(func(id): return kinds.has(int(G.net.mobs[id]["kind"])))
 
 
+const ZOMBIE_KINDS := [Proto.MOB_ZOMBIE, Proto.MOB_NIGHT, Proto.MOB_HORDE, Proto.MOB_RUNNER, Proto.MOB_BRUTE,
+	Proto.MOB_CRAWLER, Proto.MOB_SCREAMER, Proto.MOB_SPITTER]
+const NEW_TYPES := ["runner", "brute", "crawler", "screamer", "spitter"]
+
+
+## Every zombie of any type we see.
+func _zombie_ids() -> Array:
+	return _mob_ids(ZOMBIE_KINDS)
+
+
+## Blood Moon zombies (of any type) we see.
+func _blood_ids() -> Array:
+	return _zombie_ids().filter(func(id):
+		var s: Array = G.net.mobs[id]["samples"]
+		return not s.is_empty() and (int(s.back()[4]) & Proto.MF_BLOOD) != 0)
+
+
 func _mob_dist(id: int) -> float:
 	var s: Dictionary = G.net.mob_sample(id)
 	return 999.0 if s.is_empty() else (s["pos"] as Vector3).distance_to(G.player.global_position)
@@ -999,6 +1019,13 @@ func _run_fighter() -> void:
 	G.game.respawn()
 	check(await _until(func(): return not p.dead and p.health >= 99.0 and G.game.state == "playing", 10.0), "respawned with full health")
 	check(p.global_position.distance_to(G.session["spawn"]) < 3.0, "respawned at the spawn point")
+	# The M3 types: everyone sees the same ones.
+	for t in NEW_TYPES:
+		G.net.send_chat("/spawn %s 1" % t)
+	check(await _until(func(): return NEW_TYPES.all(func(t): return not _mob_ids([Proto.ZOMBIE_KINDS[t]]).is_empty()), 15.0),
+		"spawned one of each new zombie type")
+	G.net.send_chat("NT types")
+	await _wait(2.0)
 	G.net.send_chat("NT fdone")
 	await _wait(1.0)
 	print("NETTEST mob bytes: %d" % int(G.net.bytes_in.get(Proto.S_MOBS, 0)))
@@ -1048,7 +1075,10 @@ func _run_zwatch() -> void:
 	check(await _until(func(): return G.net.mobs.has(zid), 5.0), "we see the same zombie (id %d)" % zid)
 	check(await _until(func(): return _chat_from(other, "NT zdone") != "", 60.0), "the fighter killed it")
 	check(await _until(func(): return not G.net.mobs.has(zid), 5.0), "it's gone for us too")
-	check(await _until(func(): return _chat_from(other, "NT fdone") != "", 240.0), "the fighter finished")
+	check(await _until(func(): return _chat_from(other, "NT types") != "", 240.0), "the fighter spawned the new types")
+	check(await _until(func(): return NEW_TYPES.all(func(t): return not _mob_ids([Proto.ZOMBIE_KINDS[t]]).is_empty()), 10.0),
+		"we see every new type too (%s)" % ", ".join(NEW_TYPES.filter(func(t): return not _mob_ids([Proto.ZOMBIE_KINDS[t]]).is_empty())))
+	check(await _until(func(): return _chat_from(other, "NT fdone") != "", 60.0), "the fighter finished")
 
 
 func _run_horde() -> void:
@@ -1108,13 +1138,15 @@ func _run_saver() -> void:
 	check(await _until(func(): return _count(Blocks.DIRT) >= 10 and _count(Items.STONE_PICK) == 1, 10.0), "admin /give dirt and a pickaxe")
 	var base := _base()
 	var spot := Vector3i(base.x + 2, G.world.surface_y(base.x + 2, base.z) + 1, base.z)
+	var chunk := _chunk_of(base)
+	# A slow server (the Pi under qemu) may still be making the ground here: wait until it has.
+	await _hash_check("the server has the ground we build on", chunk)
 	_select(Blocks.DIRT)
 	for i in 3:
 		p.try_place(spot + Vector3i(0, i, 0), Blocks.DIRT)
 		await _wait(0.3)
 	check(await _until(func(): return _server_count(Blocks.DIRT) == 7, 5.0), "built a pillar")
 	await _wait(0.5)
-	var chunk := _chunk_of(base)
 	await _hash_check("blocks match before saving", chunk)
 	var pos: Vector3 = p.global_position
 	print("NETTEST saved pos=%.3f,%.3f,%.3f chunk=%d,%d hash=%s dirt=%d" % [pos.x, pos.y, pos.z, chunk.x, chunk.y,

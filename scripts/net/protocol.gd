@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 7
+const PROTOCOL := 8
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -92,9 +92,20 @@ const MOB_ZOMBIE := 0
 const MOB_NIGHT := 1
 const MOB_HORDE := 2
 const MOB_BOAR := 3
+## The M3 zombie types (walkers use MOB_ZOMBIE / NIGHT / HORDE), and a Spitter's acid glob.
+const MOB_RUNNER := 4
+const MOB_BRUTE := 5
+const MOB_CRAWLER := 6
+const MOB_SCREAMER := 7
+const MOB_SPITTER := 8
+const MOB_ACID := 9
+const ZOMBIE_KINDS := {"runner": MOB_RUNNER, "brute": MOB_BRUTE, "crawler": MOB_CRAWLER, "screamer": MOB_SCREAMER, "spitter": MOB_SPITTER}
+const KIND_TYPES := {MOB_RUNNER: "runner", MOB_BRUTE: "brute", MOB_CRAWLER: "crawler", MOB_SCREAMER: "screamer", MOB_SPITTER: "spitter"}
 const MF_HURT := 1
 const MF_ATTACK := 2
 const MF_DEAD := 4
+const MF_BLOOD := 8       # a Blood Moon zombie (red eyes, hunts everyone)
+const MF_SCREAM := 16     # a Screamer screaming
 
 ## ENet gives up on a connection after this much silence (ms): at least TIMEOUT_MIN_MS, at most
 ## TIMEOUT_MAX_MS. Generous, so a Wi-Fi hiccup doesn't drop anyone (Minecraft waits 30 s too).

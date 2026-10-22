@@ -8,7 +8,9 @@ extends Node
 ##   2. Per region: a spatial hash of where its zombies are at the start of the tick.
 ##   3. Per region, zombies by id: think and move. Zombies only read the world and the start-of-tick
 ##      hash, and block damage is queued instead of applied.
-##   4. Apply the queued block damage, sorted by zombie id.
+##   4. Move the Spitters' acid globs (in the order they were spat), then make this tick's new
+##      globs and the zombies Screamers called, sorted by zombie id.
+##   5. Apply the queued block damage, sorted by zombie id.
 ## Animals still run their own _physics_process for now.
 
 const REGION_LINK := 64.0
@@ -38,6 +40,13 @@ var keep_edit_log := false
 var _next_zombie_id := 1
 var _region_t := 0.0
 var _edits: Array = []
+var _calls: Array = []     # [zombie id, seq, spots (Vector2 x/z), mood]
+var _spits: Array = []     # [zombie id, seq, from, velocity, damage, block damage]
+## Acid globs in flight, oldest first.
+var acids: Array = []
+## Counts for tests: acid globs spat, and zombies Screamers called.
+var acids_made := 0
+var zombies_called := 0
 
 
 func _ready() -> void:
@@ -67,6 +76,16 @@ func queue_block_damage(p: Vector3i, amount: float, zombie_id: int) -> void:
 	_edits.append([zombie_id, _edits.size(), p, amount])
 
 
+## A Screamer's call: walkers of `mood` come to these spots (x, z) after this tick.
+func queue_call(zombie_id: int, spots: Array, mood: String) -> void:
+	_calls.append([zombie_id, _calls.size(), spots, mood])
+
+
+## A Spitter's acid glob, made after this tick.
+func queue_spit(zombie_id: int, from: Vector3, vel: Vector3, dmg: float, block_dmg: float) -> void:
+	_spits.append([zombie_id, _spits.size(), from, vel, dmg, block_dmg])
+
+
 func _physics_process(delta: float) -> void:
 	if run_until >= 0 and tick_count >= run_until:
 		return
@@ -86,6 +105,9 @@ func _physics_process(delta: float) -> void:
 		for z in r.zombies:
 			if is_instance_valid(z) and not z.dead and z.is_inside_tree():
 				z.sim_tick(delta)
+	_tick_acids(delta)
+	_flush_spits()
+	_flush_calls()
 	_flush_edits()
 	tick_count += 1
 
@@ -170,6 +192,67 @@ func _build_grid(r: Region) -> void:
 			r.grid[c] = [[z.id, p]]
 		else:
 			cell.append([z.id, p])
+
+
+func _tick_acids(delta: float) -> void:
+	if acids.is_empty():
+		return
+	var ps := _live_players()
+	var keep := []
+	for a in acids:
+		if not is_instance_valid(a):
+			continue
+		if a.step(delta, ps):
+			keep.append(a)
+		else:
+			a.queue_free()
+	acids = keep
+
+
+func _flush_spits() -> void:
+	if _spits.is_empty():
+		return
+	_spits.sort_custom(func(a, b): return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1]))
+	for s in _spits:
+		var acid := preload("res://scripts/acid.gd").new()
+		acid.owner_id = s[0]
+		acid.vel = s[3]
+		acid.dmg = s[4]
+		acid.block_dmg = s[5]
+		acid.net_id = G.game._new_mob_id()
+		G.game.mobs.add_child(acid)
+		acid.global_position = s[2]
+		acids.append(acid)
+		acids_made += 1
+	_spits.clear()
+
+
+## Called zombies come up out of the ground at the spots, if there is ground and room for them
+## (and the world isn't full).
+func _flush_calls() -> void:
+	if _calls.is_empty():
+		return
+	_calls.sort_custom(func(a, b): return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1]))
+	var w = G.world
+	var count := get_tree().get_nodes_in_group("zombies").size()
+	for c in _calls:
+		for spot in c[2]:
+			if count >= G.game.MAX_ZOMBIES:
+				break
+			var x := floori(spot.x)
+			var z := floori(spot.y)
+			var y: int = w.surface_y(x, z)
+			if y < 0 or w.get_block(x, y, z) == Blocks.LEAVES:
+				continue
+			var at := Vector3(x + 0.5, y + 1.02, z + 0.5)
+			if not w.is_ready_at(at) or Blocks.is_solid(w.get_block(x, y + 1, z)) or Blocks.is_solid(w.get_block(x, y + 2, z)):
+				continue
+			var zb = G.game.spawn_zombie(c[3], at)
+			if zb != null:
+				zb.hunting = true
+				count += 1
+				zombies_called += 1
+	_calls.clear()
 
 
 func _flush_edits() -> void:

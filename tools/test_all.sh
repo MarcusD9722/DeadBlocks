@@ -45,6 +45,7 @@ h1=$(sed -n 's/^REGIONTEST order=.* hash=//p' "$LOG_DIR/regiontest_forward.log")
 h2=$(sed -n 's/^REGIONTEST order=.* hash=//p' "$LOG_DIR/regiontest_reverse.log")
 printf '%-24s' "regiontest_same_result"
 if [ -n "$h1" ] && [ "$h1" = "$h2" ]; then echo "ok"; else echo "FAILED (forward $h1 vs reverse $h2)"; fails=$((fails + 1)); fi
+stage typetest "TYPETEST DONE fails=0" 600 "$GODOT" --headless --path . -- --typetest --server-mode --seed=4242
 
 # The full gate runs the 3-player building soak for 60 s, the Blood Moon soak for 120 s (the
 # plan's targets) and 6 server crashes in the saving test; --quick 20 s, 20 s and 3 crashes.

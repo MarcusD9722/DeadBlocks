@@ -435,14 +435,14 @@ func apply_stats(hp: int, f: int, is_dead: bool, k: int) -> void:
 
 
 ## Online: the server says we were hit (from = Vector3.ZERO: no knockback).
-func hurt_effect(_amount: int, from: Vector3) -> void:
+func hurt_effect(amount: int, from: Vector3) -> void:
 	hurt_flash = 1.0
 	G.sfx.play("hurt", -2.0)
 	if from != Vector3.ZERO:
 		var k := global_position - from
 		k.y = 0.0
 		if k.length() > 0.01:
-			velocity += k.normalized() * 5.0
+			velocity += k.normalized() * clampf(3.0 + amount * 0.35, 4.0, 10.0)  # a Brute knocks you far
 		velocity.y = maxf(velocity.y, 3.0)
 
 

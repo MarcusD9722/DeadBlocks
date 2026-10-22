@@ -22,6 +22,9 @@ func _ready() -> void:
 	streams["click"] = _noise(0.03, 0.4, 4000.0)
 	streams["craft"] = _craft()
 	streams["siren"] = _siren()
+	streams["scream"] = _scream()
+	streams["spit"] = _noise(0.16, 0.6, 2200.0)
+	streams["splash"] = _sizzle()
 	for i in 10:
 		var p := AudioStreamPlayer.new()
 		add_child(p)
@@ -160,6 +163,38 @@ func _groan() -> AudioStreamWAV:
 		var x := saw * 0.8 + randf_range(-1, 1) * 0.35
 		y = (1.0 - a) * x + a * y
 		s[i] = y * 1.1 * pow(sin(PI * t), 0.6)
+	return _wav(s)
+
+
+## A Screamer: a shrill, wavering shriek that rises and breaks.
+func _scream() -> AudioStreamWAV:
+	var dur := 1.4
+	var n := int(dur * RATE)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var ph := 0.0
+	var ph2 := 0.0
+	for i in n:
+		var t := float(i) / n
+		var f := 620.0 + 900.0 * t + 60.0 * sin(TAU * 11.0 * t * dur)
+		ph += f / RATE
+		ph2 += f * 1.51 / RATE
+		var x := sin(ph * TAU) * 0.5 + sin(ph2 * TAU) * 0.2 + randf_range(-1, 1) * 0.18
+		s[i] = x * 0.6 * pow(sin(PI * minf(1.0, t * 1.15)), 0.5)
+	return _wav(s)
+
+
+## Acid landing: a short hiss that fades.
+func _sizzle() -> AudioStreamWAV:
+	var n := int(0.5 * RATE)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var y := 0.0
+	var a := _lp(5000.0)
+	for i in n:
+		var t := float(i) / n
+		y = (1.0 - a) * randf_range(-1, 1) + a * y
+		s[i] = y * 0.45 * pow(1.0 - t, 2.0)
 	return _wav(s)
 
 

@@ -15,6 +15,8 @@ var base_cols: Array[Color] = []
 var model: Node3D
 var height := 1.8
 var half := 0.3
+## Cells of height the body needs: a crawler 1, most 2, a brute 3.
+var tall := 2
 ## Online: the id clients know this mob by (S_MOBS).
 var net_id := 0
 ## Client online: only a picture of a mob the server runs, moved by its snapshots.
@@ -97,22 +99,26 @@ func walk(dir: Vector3, spd: float, delta: float) -> bool:
 	var ahead := global_position + dir * (half + 0.45)
 	var fp := Vector3i(floori(ahead.x), f.y, floori(ahead.z))
 	var w = G.world
-	if Blocks.is_solid(w.get_blockv(fp)) and not Blocks.is_solid(w.get_blockv(fp + Vector3i.UP)) \
-			and not Blocks.is_solid(w.get_blockv(fp + Vector3i(0, 2, 0))) and not Blocks.is_solid(w.get_blockv(f + Vector3i(0, 2, 0))):
-		velocity.y = 8.2
-		return false
+	if Blocks.is_solid(w.get_blockv(fp)) and not Blocks.is_solid(w.get_blockv(f + Vector3i(0, tall, 0))):
+		var room := true
+		for k in range(1, tall + 1):
+			if Blocks.is_solid(w.get_blockv(fp + Vector3i(0, k, 0))):
+				room = false
+		if room:
+			velocity.y = 8.2
+			return false
 	return true
 
 
+## The block in the way: the highest solid cell the body needs in front of it.
 func blocking_cell(dir: Vector3) -> Vector3i:
 	var f := feet_cell()
 	var ahead := global_position + dir * (half + 0.45)
 	var fp := Vector3i(floori(ahead.x), f.y, floori(ahead.z))
 	var w = G.world
-	if Blocks.is_solid(w.get_blockv(fp + Vector3i.UP)):
-		return fp + Vector3i.UP
-	if Blocks.is_solid(w.get_blockv(fp)):
-		return fp
+	for k in range(tall - 1, -1, -1):
+		if Blocks.is_solid(w.get_blockv(fp + Vector3i(0, k, 0))):
+			return fp + Vector3i(0, k, 0)
 	return Vector3i(0, -999, 0)
 
 

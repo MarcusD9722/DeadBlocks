@@ -30,6 +30,7 @@ var hud: CanvasLayer
 
 const ZombieScript := preload("res://scripts/zombie.gd")
 const AnimalScript := preload("res://scripts/animal.gd")
+const AcidScript := preload("res://scripts/acid.gd")
 const RemotePlayerScript := preload("res://scripts/net/remote_player.gd")
 
 ## Client mode: other players' figures by net id.
@@ -141,6 +142,11 @@ func _ready() -> void:
 	elif G.has_arg("--regiontest"):
 		var rt := preload("res://scripts/tests/regiontest.gd").new()
 		add_child(rt)
+	elif G.has_arg("--typetest"):
+		var tt := preload("res://scripts/tests/typetest.gd").new()
+		add_child(tt)
+	elif G.has_arg("--lineup"):
+		add_child(preload("res://scripts/tests/lineup.gd").new())
 
 
 func _setup_input() -> void:
@@ -313,12 +319,22 @@ func _sync_mob_views(delta: float) -> void:
 			# It changed kind (horde zombies calm down at dawn): a new picture for the new kind.
 			v.queue_free()
 			v = null
+		var smp: Array = G.net.mobs[id]["samples"]
+		var blood: bool = not smp.is_empty() and (int(smp.back()[4]) & Proto.MF_BLOOD) != 0
+		if v != null and is_instance_valid(v) and v is ZombieScript and v.type != "walker" and v.blood != blood:
+			v.queue_free()  # a Blood Moon runner (say) calming down at dawn
+			v = null
 		if v == null or not is_instance_valid(v):
 			if kind == Proto.MOB_BOAR:
 				v = AnimalScript.new()
+			elif kind == Proto.MOB_ACID:
+				v = AcidScript.new()
 			else:
 				v = ZombieScript.new()
-				v.setup(["day", "night", "horde"][kind], day)
+				if Proto.KIND_TYPES.has(kind):
+					v.setup("horde" if blood else "night", day, Proto.KIND_TYPES[kind])
+				else:
+					v.setup(["day", "night", "horde"][kind], day)
 			v.view = true
 			v.net_id = id
 			mobs.add_child(v)
@@ -328,8 +344,11 @@ func _sync_mob_views(delta: float) -> void:
 			v.view_update(s["pos"], s["yaw"], s["flags"], delta)
 	for id in mob_views.keys():
 		if not G.net.mobs.has(id):
-			if is_instance_valid(mob_views[id]):
-				mob_views[id].queue_free()
+			var gone = mob_views[id]
+			if is_instance_valid(gone):
+				if gone.net_kind() == Proto.MOB_ACID:
+					G.sfx.play_at("splash", gone.global_position, -4.0)
+				gone.queue_free()
 			mob_views.erase(id)
 
 
@@ -747,7 +766,8 @@ func _server_spawner(delta: float) -> void:
 			if total >= MAX_ZOMBIES:
 				break
 			if _count_near(zs, p, 72.0) < cap:
-				if spawn_zombie("horde" if horde_active else ("night" if night else "day"), Vector3.INF, p) != null:
+				var mood := "horde" if horde_active else ("night" if night else "day")
+				if spawn_zombie(mood, Vector3.INF, p, zombie_type(mood, day, randf())) != null:
 					total += 1
 	if animal_timer <= 0.0:
 		animal_timer = 6.0
@@ -772,13 +792,37 @@ static func _count_near(nodes: Array, p: Vector3, dist: float) -> int:
 	return n
 
 
-## Admins' /spawn: a mob 8-14 m from a player.
+## Which type a new zombie is (M3, docs/M3-plan.md): day zombies are walkers; at night and in
+## the Blood Moon the tougher types mix in as the days go by. `roll` is a random number in 0..1.
+static func zombie_type(mood: String, d: int, roll: float) -> String:
+	if mood == "day":
+		return "walker"
+	var odds: Array
+	if mood == "horde":
+		odds = [["runner", 0.25], ["crawler", 0.15], ["brute", 0.10], ["screamer", 0.08], ["spitter", 0.10 if d >= 14 else 0.0]]
+	else:
+		odds = [["runner", minf(0.20 + 0.02 * (d - 2), 0.35) if d >= 2 else 0.0], ["crawler", 0.15 if d >= 3 else 0.0],
+			["screamer", 0.05 if d >= 5 else 0.0], ["brute", 0.05 if d >= 10 else 0.0], ["spitter", 0.05 if d >= 12 else 0.0]]
+	var acc := 0.0
+	for o in odds:
+		acc += o[1]
+		if roll < acc:
+			return o[0]
+	return "walker"
+
+
+## Admins' /spawn: a mob 8-14 m from a player. A zombie type comes in tonight's mood.
 func spawn_near(what: String, pos: Vector3) -> Node:
 	if what == "boar":
 		return _spawn_animal(pos, 8.0, 14.0)
 	var p := _find_ground(8.0, 14.0, false, pos)
 	if p == Vector3.INF:
 		return null
+	if ZombieScript.TYPES.has(what):
+		var t := spawn_zombie("horde" if horde_active else "night", p, Vector3.INF, what)
+		if t != null:
+			t.hunting = true
+		return t
 	var z := spawn_zombie("day" if what == "zombie" else what, p)
 	if z != null:
 		z.hunting = true  # an admin's /spawn comes straight for them
@@ -810,14 +854,14 @@ func _find_ground(min_d: float, max_d: float, need_grass: bool, center := Vector
 	return Vector3.INF
 
 
-func spawn_zombie(kind: String, at := Vector3.INF, near := Vector3.INF) -> Node:
+func spawn_zombie(kind: String, at := Vector3.INF, near := Vector3.INF, type := "walker") -> Node:
 	var p := at
 	if p == Vector3.INF:
 		p = _find_ground(16.0 if kind == "horde" else 22.0, 30.0 if kind == "horde" else 36.0, false, near)
 	if p == Vector3.INF:
 		return null
 	var z := ZombieScript.new()
-	z.setup(kind, day)
+	z.setup(kind, day, type)
 	z.net_id = _new_mob_id()
 	G.sim.register_zombie(z)
 	mobs.add_child(z)

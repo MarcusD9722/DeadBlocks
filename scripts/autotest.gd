@@ -7,6 +7,8 @@ extends "res://scripts/tests/nettest.gd"
 ## world, and quitting and continuing with everything still there.
 ## Prints AUTOTEST PASS/FAIL lines and ends with `AUTOTEST DONE fails=N`.
 
+const ZombieScript := preload("res://scripts/zombie.gd")
+
 ## The backpack from the night's death, left lying until after Save and Quit.
 var _night_bp := Vector3i.MIN
 ## Our bed, the respawn point (placed after the workbench).
@@ -249,7 +251,7 @@ func _play() -> void:
 	# Blood Moon, then dawn.
 	G.net.send_chat("/bloodmoon")
 	check(await _until(func(): return g.horde_active, 20.0), "F7 / /bloodmoon: the Blood Moon starts (day %d)" % g.day)
-	check(await _until(func(): return _mob_ids([Proto.MOB_HORDE]).size() >= 4, 25.0), "the horde comes (%d)" % _mob_ids([Proto.MOB_HORDE]).size())
+	check(await _until(func(): return _blood_ids().size() >= 4, 25.0), "the horde comes (%d)" % _blood_ids().size())
 	p.set_look(PI, -0.05)
 	await _wait(0.3)
 	await _shot("06_blood_moon")
@@ -258,17 +260,41 @@ func _play() -> void:
 		await _until(func(): return g.state == "playing", 10.0)
 	G.net.send_chat("/time 5.98")
 	check(await _until(func(): return not g.horde_active, 20.0), "the horde ends at dawn")
-	check(await _until(func(): return _mob_ids([Proto.MOB_HORDE]).is_empty(), 10.0),
-		"the horde calms down into day zombies (%d still horde)" % _mob_ids([Proto.MOB_HORDE]).size())
-	check(await _until(func(): return g.mob_views.values().all(func(v): return not is_instance_valid(v) or v.net_kind() != Proto.MOB_HORDE), 5.0),
+	check(await _until(func(): return _blood_ids().is_empty(), 10.0),
+		"the horde calms down into day zombies (%d still horde)" % _blood_ids().size())
+	check(await _until(func(): return g.mob_views.values().all(func(v): return not is_instance_valid(v) or not v is ZombieScript or not v.blood), 5.0),
 		"and they look like day zombies again")
+
+	# The M3 zombie types: each comes when called and looks like itself.
+	if p.dead:
+		g.respawn()
+		await _until(func(): return g.state == "playing", 10.0)
+	await _clear_mobs()
+	for t in NEW_TYPES:
+		var kind: int = Proto.ZOMBIE_KINDS[t]
+		G.net.send_chat("/spawn %s 1" % t)
+		check(await _until(func(): return not _mob_ids([kind]).is_empty(), 10.0), "/spawn %s" % t)
+		var ids := _mob_ids([kind])
+		if ids.is_empty():
+			continue
+		var zid: int = ids[0]
+		check(await _until(func(): return g.mob_views.has(zid) and is_instance_valid(g.mob_views[zid]) and g.mob_views[zid].type == t, 5.0),
+			"a %s shows up looking like one" % t)
+		if G.arg_value("--shots=") != "":
+			var s: Dictionary = G.net.mob_sample(zid)
+			if not s.is_empty():
+				_look_at(s["pos"] + Vector3(0, 1.0, 0))
+			await _wait(0.4)
+			await _shot("11_" + t)
+		await _clear_mobs()
+		await _until(func(): return not G.net.mobs.has(zid), 3.0)
 
 	# Stuck somewhere: the pause menu's Die and Respawn, falling out of the world, being buried.
 	# Each death drops a backpack, which we pick up again.
 	if p.dead:
 		g.respawn()
 		await _until(func(): return g.state == "playing", 10.0)
-	var zs0: Array = _mob_ids([Proto.MOB_ZOMBIE, Proto.MOB_NIGHT, Proto.MOB_HORDE])
+	var zs0: Array = _zombie_ids()
 	var cleared: bool = await _clear_mobs()
 	check(cleared and await _until(func(): return zs0.all(func(id): return not G.net.mobs.has(id)), 5.0),
 		"/clear removes the zombies (%d of them)" % zs0.size())

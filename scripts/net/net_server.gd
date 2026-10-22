@@ -1310,8 +1310,8 @@ func _command(sp, text: String) -> void:
 		"/spawn":
 			var what := parts[1].to_lower() if parts.size() > 1 else ""
 			var n := clampi(int(parts[2]) if parts.size() > 2 else 1, 1, 50)
-			if not what in ["zombie", "night", "horde", "boar"]:
-				_send_to(sp.peer_id, _notice_bytes("Usage: /spawn zombie|night|horde|boar [count]", Color(1, 0.6, 0.5)))
+			if not what in ["zombie", "night", "horde", "boar", "runner", "brute", "crawler", "screamer", "spitter"]:
+				_send_to(sp.peer_id, _notice_bytes("Usage: /spawn zombie|night|horde|runner|brute|crawler|screamer|spitter|boar [count]", Color(1, 0.6, 0.5)))
 				return
 			var made := 0
 			for i in n:
@@ -1332,7 +1332,7 @@ func _command(sp, text: String) -> void:
 			_send_to(sp.peer_id, _notice_bytes("Gave you %d %s." % [n - left, Items.name_of(id)], Color(0.8, 0.9, 1)))
 			return
 		_:
-			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|night|horde|boar> [count] /clear /save", Color(0.8, 0.9, 1)))
+			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|night|horde|runner|brute|crawler|screamer|spitter|boar> [count] /clear /save", Color(0.8, 0.9, 1)))
 			return
 	print("SERVER %s used %s" % [sp.player_name, text])
 	_broadcast(_time_bytes())

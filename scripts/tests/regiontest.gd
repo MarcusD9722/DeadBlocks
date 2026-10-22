@@ -7,8 +7,9 @@ extends Node
 ## (tools/test_all.sh runs both and compares) — the rule M3's multi-core regions rely on.
 
 const TICKS := 600
-const PER_GROUP := 60
+const PER_GROUP := 50  # leaves room under the 120 cap for the zombies Screamers call
 const VirtualPlayer := preload("res://scripts/server/virtual_player.gd")
+const ZombieScript := preload("res://scripts/zombie.gd")
 
 
 func _ready() -> void:
@@ -70,7 +71,8 @@ func _run() -> void:
 			var px := floori(vp.global_position.x + cos(a) * d)
 			var pz := floori(vp.global_position.z + sin(a) * d)
 			var py: int = w.surface_y(px, pz)
-			g.spawn_zombie("horde", Vector3(px + 0.5, py + 1.02, pz + 0.5))
+			# Every type (M3): Screamer calls and Spitter acid must not depend on the order either.
+			g.spawn_zombie("horde", Vector3(px + 0.5, py + 1.02, pz + 0.5), Vector3.INF, ZombieScript.TYPES[i % ZombieScript.TYPES.size()])
 	sim.run_until = sim.tick_count + TICKS
 	while sim.tick_count < sim.run_until:
 		await get_tree().physics_frame
@@ -99,8 +101,8 @@ func _run() -> void:
 	for e in sim.edit_log:
 		if w.get_block(e[0], e[1], e[2]) == Blocks.AIR:
 			broken += 1
-	print("REGIONTEST order=%s ticks=%d zombies=%d regions=%d edits=%d blocks_now_air=%d hits=%d hash=%s" % [
-		order, TICKS, zs.size(), sim.regions.size(), sim.edit_log.size(), broken, hits, ctx.finish().hex_encode()])
+	print("REGIONTEST order=%s ticks=%d zombies=%d regions=%d edits=%d blocks_now_air=%d hits=%d called=%d acid=%d hash=%s" % [
+		order, TICKS, zs.size(), sim.regions.size(), sim.edit_log.size(), broken, hits, sim.zombies_called, sim.acids_made, ctx.finish().hex_encode()])
 	print("REGIONTEST DONE")
 	get_tree().quit()
 

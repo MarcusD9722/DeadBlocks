@@ -39,7 +39,7 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
   1 player → 120, 2 → 60 each, 3 → 40 each, … 8 → 15 each.
 - **Players close together share one combined horde**: their allocations merge and attack the group together.
 - Every horde zombie hunts players (no proximity limit), until dawn.
-- Difficulty comes from **tougher zombie types**, not just numbers. Planned types:
+- Difficulty comes from **tougher zombie types**, not just numbers. Planned types (**built in 0.9.0, M3.1**; numbers and when each appears in `docs/M3-plan.md`):
   - **Runner** — fast.
   - **Brute** — heavy damage to blocks.
   - **Crawler** — fits through 1-block gaps.
@@ -169,6 +169,7 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
   - M2.1 (done): the backpack.
   - M2.2 (done): beds and random respawns. M2.3 (done): the linger after a lost connection. Marcus tried the backpack, Die and Respawn and beds in 0.8.1; next is M3.
   - M1.8 (the friends evening and its stats) waits until Marcus has his home-lab parts and the router forward.
-- **M3 — Zombie rework**: proximity-only aggression on normal days (a first version is in 0.7.1), Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
+- **M3 — Zombie rework** (plan: `docs/M3-plan.md`): proximity-only aggression on normal days (a first version is in 0.7.1), Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot.
+  - M3.1 (0.9.0): the five new types (Runner, Brute, Crawler, Screamer, Spitter), mixed into nights and Blood Moons by day. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
 - **M4 — Exploration & loot**: distance-based danger scaling, ruins/POIs, chests, loot tables with rarity, 3-day refill, doors with locks/PIN.
 - **M5 — Smarter zombies**: pathfinding toward the weakest part of a base.
