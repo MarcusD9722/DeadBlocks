@@ -1,6 +1,6 @@
 class_name Mob
 extends CharacterBody3D
-## Shared creature logic: blocky models, walking, hopping up ledges, taking hits.
+## Shared creature logic: box models with rounded edges, walking, hopping up ledges, taking hits.
 
 const GRAVITY := 26.0
 
@@ -46,9 +46,7 @@ func _setup_body(w: float, h: float) -> void:
 
 func _box(parent: Node3D, size: Vector3, pos: Vector3, col: Color, glow := false) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = size
-	mi.mesh = bm
+	mi.mesh = RoundBox.mesh(size)
 	var m := StandardMaterial3D.new()
 	m.albedo_color = col
 	m.roughness = 1.0

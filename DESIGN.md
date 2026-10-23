@@ -95,6 +95,13 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - Chests and doors are **open to everyone by default**.
 - A player can add a **lock / PIN code** to a door or chest to restrict it.
 
+## Look (graphics overhaul, after 0.9.0)
+- **Decided (Marcus):** a more 3D look with rounded edges, closer to 7 Days to Die than Minecraft. The players' PCs are an RTX 5080 and an RTX 3080. Free texture and model packs (CC0). Smooth terrain. M3 waits until the graphics are done.
+- Forward+ renderer with a Graphics quality setting (Low/Medium/High/Ultra).
+- The natural ground is drawn smooth and rounded; built blocks stay cubes with softened edges. **Collision stays whole blocks**: tunnels, doorways, mining, zombies and the server work exactly as before. The player steps up 1-block ledges by itself.
+- Caves and roofed rooms are dark (only torches and the flashlight light them).
+- Details and steps: `docs/V-plan.md`.
+
 ## Parked for later
 - Taming and mounts (original creatures, no copyrighted names).
 - Spell-card system, boss fights with dodge-roll, special ability moves (all original).
@@ -171,5 +178,7 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
   - M1.8 (the friends evening and its stats) waits until Marcus has his home-lab parts and the router forward.
 - **M3 — Zombie rework** (plan: `docs/M3-plan.md`): proximity-only aggression on normal days (a first version is in 0.7.1), Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot.
   - M3.1 (0.9.0): the five new types (Runner, Brute, Crawler, Screamer, Spitter), mixed into nights and Blood Moons by day. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
+  - Paused after M3.1 for the graphics overhaul (below); M3.2–M3.4 come after it.
+- **V — Graphics overhaul** (plan: `docs/V-plan.md`): V1 renderer and lighting, V2 smooth terrain and rounded models (0.10.0), V3 CC0 textures, V4 CC0 models (V3/V4 wait for the asset sites to be allowed in the cloud environment).
 - **M4 — Exploration & loot**: distance-based danger scaling, ruins/POIs, chests, loot tables with rarity, 3-day refill, doors with locks/PIN.
 - **M5 — Smarter zombies**: pathfinding toward the weakest part of a base.

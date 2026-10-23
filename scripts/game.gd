@@ -20,9 +20,7 @@ var spawn_pos := Vector3.ZERO
 ## Positions the world keeps loaded besides the local player (benchmark explorers now, remote players later).
 var extra_stream_points: Array = []
 
-var env: Environment
-var sky_mat: ProceduralSkyMaterial
-var sun: DirectionalLight3D
+var gfx: Node
 var world: Node3D
 var player: CharacterBody3D
 var mobs: Node3D
@@ -147,6 +145,8 @@ func _ready() -> void:
 		add_child(tt)
 	elif G.has_arg("--lineup"):
 		add_child(preload("res://scripts/tests/lineup.gd").new())
+	elif G.has_arg("--scenery"):
+		add_child(preload("res://scripts/tests/scenery.gd").new())
 
 
 func _setup_input() -> void:
@@ -221,29 +221,10 @@ func _ready_server() -> void:
 
 
 func _setup_env() -> void:
-	var we := WorldEnvironment.new()
-	env = Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	sky_mat = ProceduralSkyMaterial.new()
-	sky_mat.sun_angle_max = 8.0
-	sky.sky_material = sky_mat
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.fog_enabled = true
-	env.fog_mode = Environment.FOG_MODE_DEPTH
-	env.fog_depth_begin = 55.0
-	env.fog_depth_end = 100.0
-	env.fog_depth_curve = 1.5
-	env.fog_sky_affect = 0.0
-	we.environment = env
-	add_child(we)
-	sun = DirectionalLight3D.new()
-	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 70.0
-	sun.shadow_bias = 0.05
-	sun.shadow_normal_bias = 1.5
-	add_child(sun)
+	gfx = preload("res://scripts/gfx.gd").new()
+	gfx.name = "Gfx"
+	add_child(gfx)
+	G.gfx = gfx
 
 
 func _find_spawn() -> Vector3:
@@ -308,6 +289,7 @@ func _process(delta: float) -> void:
 	if G.mode == "client":
 		_sync_remote_players()
 		_sync_mob_views(delta)
+	_update_sky(delta)
 
 
 ## Keep one picture per mob the server tells us about, placed where its snapshots say.
@@ -627,7 +609,6 @@ func _tick_time(delta: float) -> void:
 	elif not night and was_night:
 		_on_dawn()
 	was_night = night
-	_update_sky()
 
 
 func _on_dusk() -> void:
@@ -688,45 +669,10 @@ func skip_time(blood: bool) -> void:
 	_update_sky()
 
 
-func _update_sky() -> void:
-	if env == null:
+func _update_sky(delta := 0.0) -> void:
+	if gfx == null:
 		return
-	var t := time
-	var day_f := clampf(smoothstep(5.0, 7.0, t) - smoothstep(18.5, 20.5, t), 0.0, 1.0)
-	var dusk_f := maxf(0.0, 1.0 - absf(t - 19.0) / 1.6) + maxf(0.0, 1.0 - absf(t - 6.0) / 1.6)
-	dusk_f = clampf(dusk_f, 0.0, 1.0)
-	var blood := horde_active or (day % 7 == 0 and t >= 18.0)
-	if day_f > 0.35:
-		var ang := clampf((t - 6.0) / 12.0 * PI, 0.12, PI - 0.12)
-		sun.rotation = Vector3(-ang, deg_to_rad(35.0), 0.0)
-		sun.light_color = Color(1.0, 0.97, 0.9).lerp(Color(1.0, 0.62, 0.38), dusk_f)
-		sun.light_energy = 1.15 * day_f
-	else:
-		var mt := fmod(t - 18.0 + 24.0, 24.0)
-		var ang2 := clampf(mt / 12.0 * PI, 0.25, PI - 0.25)
-		sun.rotation = Vector3(-ang2, deg_to_rad(-20.0), 0.0)
-		sun.light_color = Color(1.0, 0.35, 0.3) if blood else Color(0.6, 0.7, 1.0)
-		sun.light_energy = (0.32 if blood else 0.2) * (1.0 - day_f)
-	var top_day := Color(0.3, 0.52, 0.9)
-	var hor_day := Color(0.66, 0.78, 0.92)
-	var hor_dusk := Color(0.95, 0.55, 0.35)
-	var top_night := Color(0.02, 0.03, 0.08)
-	var hor_night := Color(0.07, 0.09, 0.16)
-	if blood:
-		top_night = Color(0.14, 0.0, 0.02)
-		hor_night = Color(0.5, 0.06, 0.04)
-		hor_dusk = Color(0.85, 0.2, 0.1)
-	var top := top_night.lerp(top_day, day_f)
-	var hor := hor_night.lerp(hor_day, day_f).lerp(hor_dusk, dusk_f * 0.75)
-	sky_mat.sky_top_color = top
-	sky_mat.sky_horizon_color = hor
-	sky_mat.ground_horizon_color = hor
-	sky_mat.ground_bottom_color = top.darkened(0.4)
-	env.fog_light_color = hor
-	var amb_day := Color(0.62, 0.68, 0.8)
-	var amb_night := Color(0.34, 0.1, 0.08) if blood else Color(0.2, 0.24, 0.42)
-	env.ambient_light_color = amb_night.lerp(amb_day, day_f)
-	env.ambient_light_energy = lerpf(0.35, 0.65, day_f)
+	gfx.update_sky(time, horde_active or (day % 7 == 0 and time >= 18.0), delta)
 
 
 # ------------------------------------------------------------ spawning

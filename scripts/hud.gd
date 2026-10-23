@@ -159,6 +159,7 @@ func _build_title() -> void:
 		var b := _button(e[0], e[1])
 		b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		title_menu.add_child(b)
+	title_menu.add_child(_graphics_row())
 
 	solo_panel = _panel(vb, "PLAY SOLO")
 	s_world = _label("", 18, Color(0.85, 0.95, 0.7))
@@ -511,17 +512,45 @@ func _build_pause() -> void:
 	sl.min_value = 0.5
 	sl.max_value = 6.0
 	sl.step = 0.1
-	sl.value = 2.5
+	sl.value = G.gfx.sens if G.gfx != null else 2.5
 	sl.custom_minimum_size = Vector2(260, 24)
 	sl.focus_mode = Control.FOCUS_NONE
-	sl.value_changed.connect(func(v): G.player.sens = v * 0.001)
+	sl.value_changed.connect(_on_sens)
+	sl.drag_ended.connect(func(_changed): if G.gfx != null: G.gfx.save_settings())
 	sens_row.add_child(sl)
+	vb.add_child(_graphics_row())
 	var ctl := _label(CONTROLS, 16, Color(0.8, 0.82, 0.8))
 	ctl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(ctl)
 	seed_lbl = _label("", 14, Color(0.6, 0.6, 0.6))
 	seed_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(seed_lbl)
+
+
+func _on_sens(v: float) -> void:
+	G.player.sens = v * 0.001
+	if G.gfx != null:
+		G.gfx.sens = v
+
+
+## "Graphics: Low / Medium / High / Ultra" (gfx.gd), on the title screen and in the pause menu.
+func _graphics_row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	row.add_child(_label("Graphics", 18))
+	var ob := OptionButton.new()
+	ob.focus_mode = Control.FOCUS_NONE
+	ob.add_theme_font_size_override("font_size", 18)
+	ob.custom_minimum_size = Vector2(160, 36)
+	for n in G.gfx.QUALITY_NAMES if G.gfx != null else []:
+		ob.add_item(n)
+	if G.gfx != null:
+		ob.selected = G.gfx.quality
+	ob.item_selected.connect(func(i): if G.gfx != null: G.gfx.set_quality(i))
+	ob.visibility_changed.connect(func(): if G.gfx != null: ob.selected = G.gfx.quality)
+	row.add_child(ob)
+	return row
 
 
 func show_pause(on: bool) -> void:

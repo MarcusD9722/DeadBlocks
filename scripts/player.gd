@@ -38,6 +38,9 @@ var sprinting := false
 var held_id := -1
 var hints := {}
 var stuck_t := 0.0
+## The camera's lag behind a step up a ledge (eases back to 0, so a step feels like a slope).
+var step_cam := 0.0
+const HEAD_Y := 1.62
 
 
 func _ready() -> void:
@@ -52,7 +55,7 @@ func _ready() -> void:
 	add_child(cs)
 
 	head = Node3D.new()
-	head.position = Vector3(0, 1.62, 0)
+	head.position = Vector3(0, HEAD_Y, 0)
 	add_child(head)
 	cam = Camera3D.new()
 	cam.fov = 75
@@ -105,6 +108,9 @@ func _ready() -> void:
 	add_child(mine_crack)
 
 	inv = Inventory.new()
+	if G.gfx != null:
+		sens = G.gfx.sens * 0.001
+		flashlight.shadow_enabled = G.gfx.quality >= 1
 
 
 func _wire_cube(h: float) -> ImmediateMesh:
@@ -198,6 +204,8 @@ func _physics_process(delta: float) -> void:
 		velocity.y = JUMP_V
 		stamina = maxf(0.0, stamina - 2.0)
 	var pre_vy := velocity.y
+	if can_move and input != Vector2.ZERO:
+		_step_up(dir)
 	move_and_slide()
 	if not is_on_floor():
 		air_min_vy = minf(air_min_vy, velocity.y)
@@ -214,6 +222,37 @@ func _physics_process(delta: float) -> void:
 		# Online the server sees this and it counts as a death (the respawn brings us back).
 		global_position = spawn_point
 		velocity = Vector3.ZERO
+
+
+## Walking into a ledge one block high (or a bed) with room above it: step up onto it, as on
+## the rounded ground it looks like a slope. Grid checks only, like the zombies' hops.
+func _step_up(dir: Vector3) -> void:
+	if not is_on_floor() or dir.length() < 0.1:
+		return
+	var w = G.world
+	var p := global_position
+	var fy := floori(p.y + 0.05)
+	if p.y - fy > 0.08:
+		return  # not standing on a block's top
+	var ahead := p + dir.normalized() * 0.45
+	var c := Vector3i(floori(ahead.x), fy, floori(ahead.z))
+	if c.x == floori(p.x) and c.z == floori(p.z):
+		return
+	var id: int = w.get_blockv(c)
+	if not Blocks.is_solid(id):
+		return
+	var top := 1.0
+	if Blocks.SHAPE[id] == Blocks.SH_BOX:
+		top = Blocks.BOX[id][1].y
+	for dy in range(1, 3):
+		if Blocks.is_solid(w.get_blockv(c + Vector3i(0, dy, 0))):
+			return
+	var own := Vector3i(floori(p.x), fy, floori(p.z))
+	if Blocks.is_solid(w.get_blockv(own + Vector3i(0, 2, 0))):
+		return  # no room above our head to rise
+	var rise := fy + top + 0.01 - p.y
+	global_position.y += rise
+	step_cam -= rise
 
 
 ## Stuck inside solid blocks (a glitch, or the world changed around us) for half a second:
@@ -245,6 +284,8 @@ func _process(delta: float) -> void:
 	var st: String = G.game.state
 	attack_cd -= delta
 	hurt_flash = maxf(0.0, hurt_flash - delta * 1.5)
+	step_cam = move_toward(step_cam, 0.0, delta * maxf(5.0, absf(step_cam) * 9.0))
+	head.position.y = HEAD_Y + step_cam
 	swing = maxf(0.0, swing - delta * 4.0)
 	if st == "playing" or st == "menu" or st == "chat" or (st == "paused" and G.mode == "client"):
 		if sprinting:

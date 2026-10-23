@@ -10,6 +10,10 @@ var atlas_img: Image
 var atlas: ImageTexture
 var icons := {}
 var crack_tex: Array[ImageTexture] = []
+## The smooth ground's materials (SmoothMesher layers): albedo with height in alpha, and normals.
+var terrain_albedo: Texture2DArray
+var terrain_normal: Texture2DArray
+const TERRAIN_PX := 256
 
 
 func _init() -> void:
@@ -27,6 +31,7 @@ func _init() -> void:
 		icons[int(id)] = ImageTexture.create_from_image(_item_icon(int(id)))
 	for s in 4:
 		crack_tex.append(ImageTexture.create_from_image(_crack(s)))
+	_terrain()
 
 
 func icon(id: int) -> Texture2D:
@@ -463,3 +468,101 @@ func _crack(s: int) -> Image:
 		var y0 := 8.0 + r.randf_range(-3.0, 3.0)
 		_line(img, x0, y0, x0 + cos(a) * ln, y0 + sin(a) * ln, Color(0, 0, 0, 0.8), 1)
 	return img
+
+
+# ---------------------------------------------------------------- smooth ground
+
+## One seamless noise image as bytes (0-255), TERRAIN_PX square.
+func _noise(sd: int, type: int, freq: float, octaves := 3, cell_ret := -1) -> PackedByteArray:
+	var n := FastNoiseLite.new()
+	n.seed = sd
+	n.noise_type = type
+	n.frequency = freq
+	n.fractal_octaves = octaves
+	n.fractal_type = FastNoiseLite.FRACTAL_FBM if octaves > 1 else FastNoiseLite.FRACTAL_NONE
+	if cell_ret >= 0:
+		n.cellular_return_type = cell_ret
+	var img := n.get_seamless_image(TERRAIN_PX, TERRAIN_PX, false, false, 0.1, true)
+	img.convert(Image.FORMAT_L8)
+	return img.get_data()
+
+
+## The seven ground materials, painted from noise: grass, dirt, stone, sand, coal ore, iron ore,
+## bedrock (the order of SmoothMesher's layers).
+func _terrain() -> void:
+	var N := TERRAIN_PX * TERRAIN_PX
+	var fine := _noise(11, FastNoiseLite.TYPE_VALUE, 0.35, 1)
+	var blades := _noise(12, FastNoiseLite.TYPE_CELLULAR, 0.09, 1, FastNoiseLite.RETURN_DISTANCE)
+	var patch := _noise(13, FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.012, 3)
+	var fbm := _noise(14, FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.03, 5)
+	var cracks := _noise(15, FastNoiseLite.TYPE_CELLULAR, 0.018, 2, FastNoiseLite.RETURN_DISTANCE2_SUB)
+	var pebbles := _noise(16, FastNoiseLite.TYPE_CELLULAR, 0.05, 1, FastNoiseLite.RETURN_DISTANCE)
+	var cellv := _noise(17, FastNoiseLite.TYPE_CELLULAR, 0.05, 1, FastNoiseLite.RETURN_CELL_VALUE)
+	var spots := _noise(18, FastNoiseLite.TYPE_CELLULAR, 0.03, 1, FastNoiseLite.RETURN_DISTANCE)
+	var spotv := _noise(19, FastNoiseLite.TYPE_CELLULAR, 0.03, 1, FastNoiseLite.RETURN_CELL_VALUE)
+	var albs: Array[Image] = []
+	var nrms: Array[Image] = []
+	for layer in 7:
+		var rgba := PackedByteArray()
+		rgba.resize(N * 4)
+		var hgt := PackedByteArray()
+		hgt.resize(N)
+		for i in N:
+			var f := fine[i] / 255.0
+			var pa := patch[i] / 255.0
+			var fb := fbm[i] / 255.0
+			var col: Color
+			var h: float
+			match layer:
+				0:  # grass: blades over darker roots, with drier patches
+					var bl := 1.0 - blades[i] / 255.0
+					h = clampf(bl * 0.75 + f * 0.25, 0.0, 1.0)
+					col = Color(0.13, 0.25, 0.07).lerp(Color(0.36, 0.55, 0.17), h)
+					col = col.lerp(Color(0.48, 0.5, 0.2), smoothstep(0.55, 0.85, pa) * 0.55)
+				1:  # dirt with small stones
+					var pb := pebbles[i] / 255.0
+					var stone := 1.0 - smoothstep(0.18, 0.3, pb)
+					h = clampf(fb * 0.5 + f * 0.2 + stone * 0.5, 0.0, 1.0)
+					col = Color(0.24, 0.16, 0.1).lerp(Color(0.42, 0.3, 0.19), fb * 0.7 + f * 0.3)
+					col = col.lerp(Color(0.42, 0.38, 0.33).lerp(Color(0.3, 0.27, 0.24), cellv[i] / 255.0), stone)
+				2, 4, 5, 6:  # rock (and the ores and bedrock in it)
+					var cr := smoothstep(0.0, 0.12, cracks[i] / 255.0)
+					h = clampf(fb * 0.7 + f * 0.15 + cr * 0.25 - (1.0 - cr) * 0.3, 0.0, 1.0)
+					var lo := Color(0.3, 0.3, 0.31)
+					var hi := Color(0.58, 0.57, 0.56)
+					if layer == 6:
+						lo = Color(0.1, 0.1, 0.11)
+						hi = Color(0.3, 0.3, 0.32)
+					col = lo.lerp(hi, fb * 0.75 + f * 0.25)
+					col = col.lerp(col * 0.45, 1.0 - cr)
+					if layer == 4 or layer == 5:
+						var sp := spots[i] / 255.0
+						var on := (1.0 - smoothstep(0.22, 0.36, sp)) * float(spotv[i] > 70)
+						var ore := Color(0.06, 0.06, 0.07).lerp(Color(0.16, 0.16, 0.18), f) if layer == 4 \
+							else Color(0.62, 0.4, 0.24).lerp(Color(0.85, 0.62, 0.42), f)
+						col = col.lerp(ore, on)
+						h = lerpf(h, 0.85 + f * 0.15, on)
+				3:  # sand: fine grains and wind ripples
+					@warning_ignore("integer_division")
+					var y := float(i / TERRAIN_PX)
+					var rip := 0.5 + 0.5 * sin(y * 0.3 + fb * 9.0)
+					h = clampf(rip * 0.45 + f * 0.4 + fb * 0.15, 0.0, 1.0)
+					col = Color(0.66, 0.58, 0.4).lerp(Color(0.85, 0.77, 0.56), h)
+			var o := i * 4
+			rgba[o] = int(clampf(col.r, 0.0, 1.0) * 255.0)
+			rgba[o + 1] = int(clampf(col.g, 0.0, 1.0) * 255.0)
+			rgba[o + 2] = int(clampf(col.b, 0.0, 1.0) * 255.0)
+			rgba[o + 3] = int(h * 255.0)
+			hgt[i] = int(h * 255.0)
+		var a := Image.create_from_data(TERRAIN_PX, TERRAIN_PX, false, Image.FORMAT_RGBA8, rgba)
+		a.generate_mipmaps()
+		albs.append(a)
+		var nm := Image.create_from_data(TERRAIN_PX, TERRAIN_PX, false, Image.FORMAT_L8, hgt)
+		nm.convert(Image.FORMAT_RGBA8)
+		nm.bump_map_to_normal_map([3.0, 4.0, 5.0, 2.5, 5.0, 5.0, 6.0][layer])
+		nm.generate_mipmaps(true)
+		nrms.append(nm)
+	terrain_albedo = Texture2DArray.new()
+	terrain_albedo.create_from_images(albs)
+	terrain_normal = Texture2DArray.new()
+	terrain_normal.create_from_images(nrms)

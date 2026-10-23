@@ -33,8 +33,9 @@ class MeshBuf:
 		[Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 1, 0), Vector3(0, 1, 0)],
 	]
 	const NORMALS := [Vector3(0, 1, 0), Vector3(0, -1, 0), Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)]
-	const SHADE := [1.0, 0.55, 0.8, 0.8, 0.9, 0.9]
+	const DIRS := [Vector3i(0, 1, 0), Vector3i(0, -1, 0), Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
 
+	## Cubes, boxes and plants (the colour's alpha is the sky light, see SmoothMesher.sky_at).
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var uvs := PackedVector2Array()
@@ -43,13 +44,19 @@ class MeshBuf:
 	var faces := PackedVector3Array()
 	var lights: Array = []
 	var beacons: Array = []
+	## The smooth ground (SmoothMesher): material weights in the colour and uv/uv2, sky in uv2.y.
+	var t_verts := PackedVector3Array()
+	var t_norms := PackedVector3Array()
+	var t_cols := PackedColorArray()
+	var t_uv := PackedVector2Array()
+	var t_uv2 := PackedVector2Array()
+	var t_idx := PackedInt32Array()
 
-	func face(dir: int, x: int, y: int, z: int, tile: int, solid: bool) -> void:
+	func face(dir: int, x: int, y: int, z: int, tile: int, solid: bool, lit := 1.0) -> void:
 		var base := verts.size()
 		var cs: Array = CORNERS[dir]
 		var n: Vector3 = NORMALS[dir]
-		var sh: float = SHADE[dir]
-		var col := Color(sh, sh, sh)
+		var col := Color(1, 1, 1, lit)
 		var o := Vector3(x, y, z)
 		var tu := float(tile % 8) * 0.125
 		@warning_ignore("integer_division")
@@ -87,7 +94,7 @@ class MeshBuf:
 
 	## An SH_BOX block: all six faces of the box lo..hi inside the cell, each showing the whole
 	## tile ([top, side, bottom]). `solid` adds them to the collision faces too.
-	func box(x: int, y: int, z: int, tl: Array, lo: Vector3, hi: Vector3, solid: bool) -> void:
+	func box(x: int, y: int, z: int, tl: Array, lo: Vector3, hi: Vector3, solid: bool, lit := 1.0) -> void:
 		var o := Vector3(x, y, z)
 		var ext := hi - lo
 		for dir in 6:
@@ -97,7 +104,6 @@ class MeshBuf:
 			var tv := float(tile / 8) * 0.125
 			var cs: Array = CORNERS[dir]
 			var n: Vector3 = NORMALS[dir]
-			var sh: float = SHADE[dir]
 			var base := verts.size()
 			var pts: Array[Vector3] = []
 			for k in 4:
@@ -106,7 +112,7 @@ class MeshBuf:
 				pts.append(v3)
 				verts.append(v3)
 				norms.append(n)
-				cols.append(Color(sh, sh, sh))
+				cols.append(Color(1, 1, 1, lit))
 				var u: float
 				var v: float
 				if dir < 2:
@@ -133,12 +139,12 @@ class MeshBuf:
 				faces.append(pts[2])
 				faces.append(pts[3])
 
-	func cross(x: int, y: int, z: int, tile: int) -> void:
+	func cross(x: int, y: int, z: int, tile: int, lit := 1.0) -> void:
 		var o := Vector3(x, y, z)
 		var tu := float(tile % 8) * 0.125
 		@warning_ignore("integer_division")
 		var tv := float(tile / 8) * 0.125
-		var col := Color(0.95, 0.95, 0.95)
+		var col := Color(0.95, 0.95, 0.95, lit)
 		var pairs := [[Vector3(0.15, 0, 0.15), Vector3(0.85, 0, 0.85)], [Vector3(0.85, 0, 0.15), Vector3(0.15, 0, 0.85)]]
 		for pr in pairs:
 			var a: Vector3 = pr[0]
@@ -180,7 +186,9 @@ var centers: Array[Vector2i] = []
 var tasks: Array[int] = []
 var max_tasks := 4
 var urgent: Array[Vector2i] = []
-var material: StandardMaterial3D
+var material: Material
+## The smooth ground's material (shaders/terrain.gdshader).
+var terrain_material: ShaderMaterial
 var damage := {}
 var crack_nodes := {}
 var crack_mats: Array[StandardMaterial3D] = []
@@ -216,19 +224,23 @@ func setup(s: int, tex) -> void:
 	if G.server_mode:
 		# 5 chunks (80 m) covers the 72 m zombie despawn distance.
 		render_radius = 5
+	elif G.gfx != null and DisplayServer.get_name() != "headless":
+		render_radius = G.gfx.view_radius()  # the graphics quality's view distance
 	if G.arg_value("--radius=") != "":
 		render_radius = clampi(int(G.arg_value("--radius=")), 2, 12)
 	max_tasks = clampi(OS.get_processor_count() - 2, 2, 8)
-	material = StandardMaterial3D.new()
 	if tex == null:
+		material = StandardMaterial3D.new()
 		return  # dedicated server: nothing is drawn
-	material.albedo_texture = tex.atlas
-	material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	material.vertex_color_use_as_albedo = true
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-	material.alpha_scissor_threshold = 0.5
-	material.roughness = 1.0
-	material.metallic_specular = 0.0
+	SmoothMesher.init_tables()
+	var bm := ShaderMaterial.new()
+	bm.shader = preload("res://shaders/blocks.gdshader")
+	bm.set_shader_parameter("atlas", tex.atlas)
+	material = bm
+	terrain_material = ShaderMaterial.new()
+	terrain_material.shader = preload("res://shaders/terrain.gdshader")
+	terrain_material.set_shader_parameter("albedo_tex", tex.terrain_albedo)
+	terrain_material.set_shader_parameter("normal_tex", tex.terrain_normal)
 	crack_mesh = BoxMesh.new()
 	crack_mesh.size = Vector3(1.012, 1.012, 1.012)
 	beacon_mesh = BoxMesh.new()
@@ -276,6 +288,15 @@ func update_centers(positions: Array) -> void:
 	_schedule()
 
 
+## The graphics quality changed the view distance.
+func set_render_radius(r: int) -> void:
+	if r == render_radius or G.arg_value("--radius=") != "":
+		return
+	render_radius = r
+	_rebuild_order()
+	_unload_far()
+
+
 func _near_center(k: Vector2i, lim: int) -> bool:
 	for c in centers:
 		if absi(k.x - c.x) <= lim and absi(k.y - c.y) <= lim:
@@ -286,7 +307,7 @@ func _near_center(k: Vector2i, lim: int) -> bool:
 func _rebuild_order() -> void:
 	order.clear()
 	mesh_set.clear()
-	var r1 := render_radius + 1
+	var r1 := render_radius + (2 if render else 1)
 	# Each chunk is ranked by its distance to the nearest center.
 	var best := {}
 	for c in centers:
@@ -307,10 +328,22 @@ func _rebuild_order() -> void:
 	var mesh_lim := render_radius * render_radius + 1
 	for d2 in buckets.size():
 		for k in buckets[d2]:
-			order.append(k)
 			if d2 <= mesh_lim:
 				mesh_set[k] = true
+	for d2 in buckets.size():
+		for k in buckets[d2]:
+			# Drawn chunks need all eight neighbours (SmoothMesher); collision only the four sides.
+			if mesh_set.has(k) or not render or _next_to_mesh(k):
+				order.append(k)
 	sched_dirty = true
+
+
+func _next_to_mesh(k: Vector2i) -> bool:
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			if mesh_set.has(k + Vector2i(dx, dz)):
+				return true
+	return false
 
 
 ## Free chunks farther than lim chunks from every center (default: render radius + 3).
@@ -387,14 +420,29 @@ func _try_mesh(k: Vector2i) -> bool:
 	var c: Chunk = chunks.get(k)
 	if c == null or not c.has_data or c.meshing or c.built_ver >= c.mesh_ver:
 		return false
-	var n: Array = [chunks.get(k + Vector2i(1, 0)), chunks.get(k + Vector2i(-1, 0)), chunks.get(k + Vector2i(0, 1)), chunks.get(k + Vector2i(0, -1))]
-	for nc in n:
-		if nc == null or not nc.has_data:
-			return false
+	var nb := _neighbours(k)
+	if nb.is_empty():
+		return false
 	c.meshing = true
 	var ver := c.mesh_ver
-	tasks.append(WorkerThreadPool.add_task(_task_mesh.bind(k, ver, c.data, n[0].data, n[1].data, n[2].data, n[3].data), false, "mesh"))
+	tasks.append(WorkerThreadPool.add_task(_task_mesh.bind(k, ver, nb), false, "mesh"))
 	return true
+
+
+## The block data of chunk k and its neighbours, nb[(dz + 1) * 3 + dx + 1] (all eight when the
+## chunk is drawn, the four sides for collision only), or [] if one isn't there yet.
+func _neighbours(k: Vector2i) -> Array:
+	var nb := []
+	nb.resize(9)
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			if not render and dx != 0 and dz != 0:
+				continue
+			var nc: Chunk = chunks.get(k + Vector2i(dx, dz))
+			if nc == null or not nc.has_data:
+				return []
+			nb[(dz + 1) * 3 + dx + 1] = nc.data
+	return nb
 
 
 func _task_gen(k: Vector2i) -> void:
@@ -419,15 +467,15 @@ func _gen_done(k: Vector2i, d: PackedByteArray) -> void:
 	_apply_pending(c)
 
 
-func _task_mesh(k: Vector2i, ver: int, d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> void:
-	call_deferred("_mesh_done", k, ver, _make_buf(d, px, nx, pz, nz))
+func _task_mesh(k: Vector2i, ver: int, nb: Array) -> void:
+	call_deferred("_mesh_done", k, ver, _make_buf(nb))
 
 
-func _make_buf(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> MeshBuf:
+func _make_buf(nb: Array) -> MeshBuf:
 	if render:
-		return _build(d, px, nx, pz, nz)
+		return _build(nb)
 	var buf := MeshBuf.new()
-	buf.faces = _build_collision(d, px, nx, pz, nz)
+	buf.faces = _build_collision(nb[4], nb[5], nb[3], nb[7], nb[1])
 	return buf
 
 
@@ -478,12 +526,21 @@ func _quad(out: PackedVector3Array, o: Vector3, dir: int, lo := Vector3.ZERO, hi
 	out.append(o + lo + cs[3] * e)
 
 
-func _build(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> MeshBuf:
+func _build(nb: Array) -> MeshBuf:
 	var buf := MeshBuf.new()
+	var sky := SmoothMesher.build(nb, buf)
+	var d: PackedByteArray = nb[4]
+	var px: PackedByteArray = nb[5]
+	var nx: PackedByteArray = nb[3]
+	var pz: PackedByteArray = nb[7]
+	var nz: PackedByteArray = nb[1]
+	# Collision is whole blocks, the same as on the server (the rounding is only drawn).
+	buf.faces = _build_collision(d, px, nx, pz, nz)
 	var opq: Array = Blocks.OPAQUE
-	var sol: Array = Blocks.SOLID
 	var shp: Array = Blocks.SHAPE
 	var tiles: Array = Blocks.TILES
+	var nat: Array = SmoothMesher.NAT
+	var dirs: Array = MeshBuf.DIRS
 	for y in H:
 		var yo := y * CH2
 		for z in CH:
@@ -491,40 +548,36 @@ func _build(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: Pa
 			for x in CH:
 				var i := x + zo
 				var b := d[i]
-				if b == 0:
-					continue
+				if b == 0 or nat[b]:
+					continue  # natural ground is part of the smooth surface
 				var tl: Array = tiles[b]
 				if shp[b] == 2:
-					buf.cross(x, y, z, tl[1])
+					buf.cross(x, y, z, tl[1], SmoothMesher.sky_at(sky, x, y, z))
 					if b == Blocks.TORCH or b == Blocks.CAMPFIRE:
 						buf.lights.append(Vector3i(x, y, z))
 					continue
 				if shp[b] == Blocks.SH_BOX:
 					var bx: Array = Blocks.BOX[b]
-					buf.box(x, y, z, tl, bx[0], bx[1], sol[b])
+					buf.box(x, y, z, tl, bx[0], bx[1], false, SmoothMesher.sky_at(sky, x, y + 1, z))
 					if b == Blocks.BACKPACK:
 						buf.beacons.append(Vector3i(x, y, z))
 					continue
-				var solid: bool = sol[b]
 				var leaf := b == Blocks.LEAVES
-				var nb := d[i + CH2] if y < H - 1 else 0
-				if nb == 0 or (not opq[nb] and not (leaf and nb == b)):
-					buf.face(0, x, y, z, tl[0], solid)
-				nb = d[i - CH2] if y > 0 else 11
-				if nb == 0 or (not opq[nb] and not (leaf and nb == b)):
-					buf.face(1, x, y, z, tl[2], solid)
-				nb = d[i + 1] if x < CH - 1 else px[zo]
-				if nb == 0 or (not opq[nb] and not (leaf and nb == b)):
-					buf.face(2, x, y, z, tl[1], solid)
-				nb = d[i - 1] if x > 0 else nx[15 + zo]
-				if nb == 0 or (not opq[nb] and not (leaf and nb == b)):
-					buf.face(3, x, y, z, tl[1], solid)
-				nb = d[i + CH] if z < CH - 1 else pz[x + yo]
-				if nb == 0 or (not opq[nb] and not (leaf and nb == b)):
-					buf.face(4, x, y, z, tl[1], solid)
-				nb = d[i - CH] if z > 0 else nz[x + 15 * CH + yo]
-				if nb == 0 or (not opq[nb] and not (leaf and nb == b)):
-					buf.face(5, x, y, z, tl[1], solid)
+				var nbs := [
+					d[i + CH2] if y < H - 1 else 0,
+					d[i - CH2] if y > 0 else 11,
+					d[i + 1] if x < CH - 1 else px[zo],
+					d[i - 1] if x > 0 else nx[15 + zo],
+					d[i + CH] if z < CH - 1 else pz[x + yo],
+					d[i - CH] if z > 0 else nz[x + 15 * CH + yo],
+				]
+				for dir in 6:
+					var nbk: int = nbs[dir]
+					# A face shows next to air, see-through blocks and the (rounded) natural ground.
+					if nbk == 0 or nat[nbk] or (not opq[nbk] and not (leaf and nbk == b)):
+						var dv: Vector3i = dirs[dir]
+						var tile: int = tl[0] if dir == 0 else (tl[2] if dir == 1 else tl[1])
+						buf.face(dir, x, y, z, tile, false, SmoothMesher.sky_at(sky, x + dv.x, y + dv.y, z + dv.z))
 	return buf
 
 
@@ -562,6 +615,18 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		c.node = MeshInstance3D.new()
 		add_child(c.node)
 		c.node.position = origin
+	var am := ArrayMesh.new()
+	if buf.t_verts.size() > 0:
+		var ta := []
+		ta.resize(Mesh.ARRAY_MAX)
+		ta[Mesh.ARRAY_VERTEX] = buf.t_verts
+		ta[Mesh.ARRAY_NORMAL] = buf.t_norms
+		ta[Mesh.ARRAY_COLOR] = buf.t_cols
+		ta[Mesh.ARRAY_TEX_UV] = buf.t_uv
+		ta[Mesh.ARRAY_TEX_UV2] = buf.t_uv2
+		ta[Mesh.ARRAY_INDEX] = buf.t_idx
+		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ta)
+		am.surface_set_material(am.get_surface_count() - 1, terrain_material)
 	if buf.verts.size() > 0:
 		var arr := []
 		arr.resize(Mesh.ARRAY_MAX)
@@ -570,12 +635,9 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		arr[Mesh.ARRAY_TEX_UV] = buf.uvs
 		arr[Mesh.ARRAY_COLOR] = buf.cols
 		arr[Mesh.ARRAY_INDEX] = buf.idx
-		var am := ArrayMesh.new()
 		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-		am.surface_set_material(0, material)
-		c.node.mesh = am
-	else:
-		c.node.mesh = null
+		am.surface_set_material(am.get_surface_count() - 1, material)
+	c.node.mesh = am if am.get_surface_count() > 0 else null
 	_apply_collision(c, origin, buf.faces)
 	for l in c.lights:
 		if is_instance_valid(l):
@@ -635,13 +697,12 @@ func _mesh_now(k: Vector2i) -> void:
 	var c: Chunk = chunks.get(k)
 	if c == null or not c.has_data or not c.ready:
 		return
-	var n: Array = [chunks.get(k + Vector2i(1, 0)), chunks.get(k + Vector2i(-1, 0)), chunks.get(k + Vector2i(0, 1)), chunks.get(k + Vector2i(0, -1))]
-	for nc in n:
-		if nc == null or not nc.has_data:
-			return
+	var nb := _neighbours(k)
+	if nb.is_empty():
+		return
 	c.built_ver = c.mesh_ver
 	mesh_count += 1
-	apply_mesh(c, k, _make_buf(c.data, n[0].data, n[1].data, n[2].data, n[3].data))
+	apply_mesh(c, k, _make_buf(nb))
 
 
 # ------------------------------------------------------------ queries & edits
@@ -752,14 +813,16 @@ func set_block(p: Vector3i, id: int) -> bool:
 		save_dirty[k] = true
 	_clear_damage(p)
 	_dirty(k)
-	if lx == 0:
-		_dirty(k + Vector2i(-1, 0))
-	elif lx == 15:
-		_dirty(k + Vector2i(1, 0))
-	if lz == 0:
-		_dirty(k + Vector2i(0, -1))
-	elif lz == 15:
-		_dirty(k + Vector2i(0, 1))
+	# The smooth ground near a chunk border is shaped by blocks up to SmoothMesher.P away.
+	var reach := SmoothMesher.P if render else 0
+	var ex := -1 if lx <= reach else (1 if lx >= 15 - reach else 0)
+	var ez := -1 if lz <= reach else (1 if lz >= 15 - reach else 0)
+	if ex != 0:
+		_dirty(k + Vector2i(ex, 0))
+	if ez != 0:
+		_dirty(k + Vector2i(0, ez))
+	if ex != 0 and ez != 0:
+		_dirty(k + Vector2i(ex, ez))
 	return true
 
 
@@ -865,8 +928,9 @@ func net_chunk(seq: int, k: Vector2i, data: PackedByteArray) -> void:
 	sub_state[k] = SUB_FRESH
 	sub_seq[k] = seq
 	_apply_pending(c)
-	for kk in [k, k + Vector2i(1, 0), k + Vector2i(-1, 0), k + Vector2i(0, 1), k + Vector2i(0, -1)]:
-		_dirty(kk)
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			_dirty(k + Vector2i(dx, dz))  # the smooth ground of all eight neighbours reads this chunk
 	sched_dirty = true
 
 

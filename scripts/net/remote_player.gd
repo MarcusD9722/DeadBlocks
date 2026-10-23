@@ -81,9 +81,7 @@ func _ready() -> void:
 
 func _box(parent: Node3D, size: Vector3, pos: Vector3, col: Color) -> void:
 	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = size
-	mi.mesh = bm
+	mi.mesh = RoundBox.mesh(size)
 	var m := StandardMaterial3D.new()
 	m.albedo_color = col
 	m.roughness = 1.0
