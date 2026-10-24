@@ -30,6 +30,7 @@ const ZombieScript := preload("res://scripts/zombie.gd")
 const AnimalScript := preload("res://scripts/animal.gd")
 const AcidScript := preload("res://scripts/acid.gd")
 const RemotePlayerScript := preload("res://scripts/net/remote_player.gd")
+const WorldScript := preload("res://scripts/world.gd")
 
 ## Client mode: other players' figures by net id.
 var remote_players := {}
@@ -330,8 +331,54 @@ func _sync_mob_views(delta: float) -> void:
 			if is_instance_valid(gone):
 				if gone.net_kind() == Proto.MOB_ACID:
 					G.sfx.play_at("splash", gone.global_position, -4.0)
-				gone.queue_free()
+				if gone.die_t < 0.0:
+					gone.queue_free()
+				# (a dead one finishes falling over and sinking away by itself)
 			mob_views.erase(id)
+
+
+# ------------------------------------------------------------ standing on the drawn ground
+
+## The ground is drawn rounded, but creatures stand on whole blocks (on the server too). So that
+## they stand on what the player sees, each picture's model is lowered or raised to the drawn
+## ground under its feet (world.VISUAL_LAYER), measured a quarter of the creatures per tick.
+var _snap_i := 0
+
+
+func _physics_process(_delta: float) -> void:
+	if G.mode != "client" or world == null or not world.render:
+		return
+	_snap_i = (_snap_i + 1) % 4
+	var space := get_world_3d().direct_space_state
+	var i := 0
+	for v in mob_views.values():
+		i += 1
+		if i % 4 == _snap_i and is_instance_valid(v) and v.die_t < 0.0 and v.net_kind() != Proto.MOB_ACID:
+			v.ground_target = _ground_offset(space, v, v.half * 0.5)
+	for rp in remote_players.values():
+		i += 1
+		if i % 4 == _snap_i and is_instance_valid(rp) and rp.visible:
+			rp.ground_target = _ground_offset(space, rp, 0.15)
+
+
+## How far the drawn ground under it is above (+) or below (-) its feet: the highest of five
+## points under its footprint. 0 while it is jumping or falling.
+func _ground_offset(space: PhysicsDirectSpaceState3D, who, r: float) -> float:
+	var pos: Vector3 = who.global_position
+	var moved: float = absf(pos.y - who.snap_y)
+	who.snap_y = pos.y
+	if moved > 0.08:
+		return 0.0
+	var best := -INF
+	for o in [Vector2.ZERO, Vector2(r, 0), Vector2(-r, 0), Vector2(0, r), Vector2(0, -r)]:
+		var from := pos + Vector3(o.x, 0.7, o.y)
+		var q := PhysicsRayQueryParameters3D.create(from, from + Vector3(0, -1.6, 0), WorldScript.VISUAL_LAYER)
+		var hit := space.intersect_ray(q)
+		if not hit.is_empty():
+			best = maxf(best, hit["position"].y)
+	if best == -INF:
+		return 0.0
+	return clampf(best - pos.y, -0.75, 0.15)
 
 
 ## Keep one RemotePlayer figure per other player the server has told us about.

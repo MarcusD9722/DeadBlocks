@@ -18,6 +18,10 @@ var held_id := 0
 var _swing := 0.0
 var _anim := 0.0
 var _last_pos := Vector3.INF
+## The drawn ground's height under the feet (game.gd), so the figure stands on what we see.
+var ground_target := 0.0
+var ground_off := 0.0
+var snap_y := INF
 
 
 func _ready() -> void:
@@ -111,6 +115,8 @@ func _process(delta: float) -> void:
 	label.modulate = Color(1, 1, 1, 0.55) if away else Color(1, 1, 1)
 	var pos: Vector3 = s["pos"]
 	global_position = pos
+	ground_off = move_toward(ground_off, ground_target, delta * 2.5)
+	model.position.y = ground_off
 	# The player's camera yaw points down -Z; the model faces +Z, so turn it around.
 	model.rotation.y = s["yaw"] + PI
 	head.rotation.x = -s["pitch"]

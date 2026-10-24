@@ -53,6 +53,8 @@ var _pause_refresh_t := 0.0
 const CLIENT_CFG := "user://client.cfg"
 var style_slot: StyleBoxFlat
 var style_sel: StyleBoxFlat
+## The Settings screen (settings_panel.gd), opened from the title screen and the pause menu.
+var settings: Control
 
 
 func _ready() -> void:
@@ -71,6 +73,8 @@ func _ready() -> void:
 	_build_death()
 	_build_title()
 	_build_chat()
+	settings = preload("res://scripts/settings_panel.gd").new()
+	add_child(settings)  # last, so it covers the title and pause screens
 	slot_btns.resize(36)
 	slot_lbls.resize(36)
 	G.net.status.connect(_on_net_status)
@@ -155,11 +159,10 @@ func _build_title() -> void:
 	solo_btn = _button("Play solo", func(): _show_panel(solo_panel))
 	solo_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	title_menu.add_child(solo_btn)
-	for e in [["Host game", func(): _show_panel(host_panel)], ["Join server", func(): _show_panel(join_panel)], ["Quit", func(): get_tree().quit()]]:
+	for e in [["Host game", func(): _show_panel(host_panel)], ["Join server", func(): _show_panel(join_panel)], ["Settings", func(): settings.open()], ["Quit", func(): get_tree().quit()]]:
 		var b := _button(e[0], e[1])
 		b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		title_menu.add_child(b)
-	title_menu.add_child(_graphics_row())
 
 	solo_panel = _panel(vb, "PLAY SOLO")
 	s_world = _label("", 18, Color(0.85, 0.95, 0.7))
@@ -498,59 +501,18 @@ func _build_pause() -> void:
 	row.add_child(pause_respawn)
 	pause_leave = _button("Leave Server", func(): G.end_client_session("Your world is saved." if G.solo else "You left the server."))
 	row.add_child(pause_leave)
+	row.add_child(_button("Settings", func(): settings.open()))
 	pause_quit = _button("Quit Game", func(): get_tree().quit())
 	row.add_child(pause_quit)
 	pause_players = _label("", 18, Color(0.85, 0.95, 0.85))
 	pause_players.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(pause_players)
-	var sens_row := HBoxContainer.new()
-	sens_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	sens_row.add_theme_constant_override("separation", 12)
-	vb.add_child(sens_row)
-	sens_row.add_child(_label("Mouse sensitivity", 18))
-	var sl := HSlider.new()
-	sl.min_value = 0.5
-	sl.max_value = 6.0
-	sl.step = 0.1
-	sl.value = G.gfx.sens if G.gfx != null else 2.5
-	sl.custom_minimum_size = Vector2(260, 24)
-	sl.focus_mode = Control.FOCUS_NONE
-	sl.value_changed.connect(_on_sens)
-	sl.drag_ended.connect(func(_changed): if G.gfx != null: G.gfx.save_settings())
-	sens_row.add_child(sl)
-	vb.add_child(_graphics_row())
 	var ctl := _label(CONTROLS, 16, Color(0.8, 0.82, 0.8))
 	ctl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(ctl)
 	seed_lbl = _label("", 14, Color(0.6, 0.6, 0.6))
 	seed_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(seed_lbl)
-
-
-func _on_sens(v: float) -> void:
-	G.player.sens = v * 0.001
-	if G.gfx != null:
-		G.gfx.sens = v
-
-
-## "Graphics: Low / Medium / High / Ultra" (gfx.gd), on the title screen and in the pause menu.
-func _graphics_row() -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 12)
-	row.add_child(_label("Graphics", 18))
-	var ob := OptionButton.new()
-	ob.focus_mode = Control.FOCUS_NONE
-	ob.add_theme_font_size_override("font_size", 18)
-	ob.custom_minimum_size = Vector2(160, 36)
-	for n in G.gfx.QUALITY_NAMES if G.gfx != null else []:
-		ob.add_item(n)
-	if G.gfx != null:
-		ob.selected = G.gfx.quality
-	ob.item_selected.connect(func(i): if G.gfx != null: G.gfx.set_quality(i))
-	ob.visibility_changed.connect(func(): if G.gfx != null: ob.selected = G.gfx.quality)
-	row.add_child(ob)
-	return row
 
 
 func show_pause(on: bool) -> void:
@@ -884,6 +846,8 @@ func _draw_hud() -> void:
 		return
 	var p = G.player
 	var vs := canvas.size
+	if G.gfx != null and G.gfx.opt["show_fps"]:
+		_text(Vector2(vs.x - 130, 28), "%d FPS" % Engine.get_frames_per_second(), 18, Color(0.85, 1.0, 0.7))
 	if p.hurt_flash > 0.0:
 		canvas.draw_rect(Rect2(Vector2.ZERO, vs), Color(0.6, 0.0, 0.0, 0.3 * p.hurt_flash))
 	if p.health < 30.0 and not p.dead:

@@ -17,11 +17,11 @@ func _wait(s: float) -> void:
 	await get_tree().create_timer(s, true, false, true).timeout
 
 
-func _shot(name: String) -> void:
+func _shot(name: String, settle := 1.5) -> void:
 	var only := G.arg_value("--only=")
 	if only != "" and not name.contains(only):
 		return
-	await _wait(1.5)
+	await _wait(settle)
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(dir.path_join(name + ".png"))
 	print("SHOT " + name)
@@ -98,6 +98,8 @@ func _run() -> void:
 		z.queue_free()
 	await _cave(p, w, sp)
 	await _hut(p, w, best)
+	await _slope_and_death(p, w, best)
+	await _settings()
 	get_tree().quit()
 
 
@@ -125,6 +127,11 @@ func _cave(p, w, sp: Vector3) -> void:
 						p.flashlight.visible = true
 						await _shot("07_cave_flashlight")
 						p.flashlight.visible = false
+						for v in [[0, 50], [100, 50], [100, 80]]:
+							G.gfx.set_opt("cave_light", v[0])
+							G.gfx.set_opt("brightness", v[1])
+							await _shot("07_cave_light%d_brightness%d" % v)
+						G.gfx.reset_settings()
 						return
 	print("SCENERY no cave found")
 
@@ -170,3 +177,65 @@ func _hut(p, w, best: Vector3i) -> void:
 	await _shot("08_hut_night")
 	_clock(11.0)
 	await _shot("09_hut_day")
+
+
+## Zombies on a hillside standing on the drawn (rounded) ground, then one dying: falling over,
+## lying, sinking away. Their pictures are measured here as game.gd does for an online game.
+func _slope_and_death(p, w, best: Vector3i) -> void:
+	var g = G.game
+	_clock(12.0)
+	# The steepest drop near the hill top: stand zombies across it.
+	var spot := best
+	var drop := 0
+	for dz in range(-12, 13):
+		for dx in range(-12, 13):
+			var x := best.x + dx
+			var z := best.z + dz
+			var y: int = w.surface_y(x, z)
+			var y2: int = w.surface_y(x + 1, z)
+			if y - y2 > drop and y - y2 <= 2 and Blocks.SOLID[w.get_block(x, y, z)] and w.get_block(x, y, z) != Blocks.LEAVES:
+				drop = y - y2
+				spot = Vector3i(x, y, z)
+	var zs := []
+	for i in 5:
+		var at := Vector3(spot.x + 0.15 + i * 0.35, 0.0, spot.z + 0.5 + (i - 2) * 1.1)
+		var y: int = w.surface_y(floori(at.x), floori(at.z))
+		var z := ZombieScript.new()
+		z.setup("night", 1, "walker")
+		z.view = true
+		z.net_id = 100 + i
+		g.mobs.add_child(z)
+		z.global_position = Vector3(at.x, y + 1.0, at.z)
+		z.rotation.y = -PI * 0.5
+		zs.append(z)
+	_place(p, Vector3(spot.x + 6.5, w.surface_y(spot.x + 6, spot.z) + 1.02, spot.z + 0.5), PI * 0.5, -0.15)
+	await _wait(1.0)
+	await _shot("10_slope_blocks")
+	for k in 2:
+		await get_tree().physics_frame
+		var space: PhysicsDirectSpaceState3D = g.get_world_3d().direct_space_state
+		for z in zs:
+			z.ground_target = g._ground_offset(space, z, z.half * 0.5)
+	for z in zs:
+		z.ground_off = z.ground_target
+		z.model.position.y = z.ground_off
+		print("SCENERY zombie at %.2f stands %.2f lower/higher on the drawn ground" % [z.global_position.x, z.ground_off])
+	await _shot("11_slope_drawn_ground")
+	var dying = zs[2]
+	dying.view_update(dying.global_position, dying.rotation.y, Proto.MF_DEAD, 0.016)
+	await _wait(0.25)
+	await _shot("12_death_falling", 0.0)
+	await _wait(1.0)
+	await _shot("13_death_lying", 0.0)
+	await _wait(2.2)
+	await _shot("14_death_sinking", 0.0)
+	for z in zs:
+		if is_instance_valid(z):
+			z.queue_free()
+
+
+## The Settings screen over the game.
+func _settings() -> void:
+	G.hud.settings.open()
+	await _shot("15_settings")
+	G.hud.settings.close()

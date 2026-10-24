@@ -37,6 +37,7 @@ Marcus asked (after 0.9.0) for "more of a 3D feel with rounded edges to the worl
 |---|---|---|
 | V1 | Forward+, soft shadows, SSAO/SSIL, glow, volumetric fog, AgX tonemapping, sky shader (clouds, stars, moon, Blood Moon), quality setting | built |
 | V2 | Smooth terrain (surface nets, `smooth_mesher.gd`), triplanar terrain shader with blended materials and normal maps, sky light, auto-step, rounded models | built |
+| V2.1 (0.10.1) | After Marcus's test of 0.10.0 (Ultra smooth, hills and building fine; "a little too dark"; zombies float a little; deaths freeze): a Settings screen with brightness, light in caves, FOV, shadows, AO, fog, AA, render scale, V-Sync, frame cap, window, FPS counter; creatures stand on the drawn ground; zombies and boars fall over when they die | built |
 | V3 | CC0 PBR textures (ambientCG / Poly Haven) for the ground and the built blocks | waiting: the asset sites are blocked by the cloud environment's network settings |
 | V4 | CC0 models (Quaternius Zombie Apocalypse Kit: zombies, survivors; animals) with animations | waiting: same |
 

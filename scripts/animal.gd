@@ -37,6 +37,15 @@ func _build_model() -> void:
 		legs.append(pv)
 
 
+## Dying (client view): a boar falls over onto its side.
+func _death_tilt() -> Vector3:
+	return Vector3(0.0, 0.0, PI * 0.5 * (1.0 if net_id % 2 == 0 else -1.0))
+
+
+func _death_lift() -> float:
+	return 0.3
+
+
 func _physics_process(delta: float) -> void:
 	if dead or not G.world.is_ready_at(global_position):
 		return

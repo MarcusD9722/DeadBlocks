@@ -5,6 +5,9 @@ const CH := 16
 const H := 64
 const CH2 := 256
 const BEACON_H := 48.0
+## Collision layer of the drawn ground (clients only; nothing collides with it, it is only for
+## measuring where the rounded ground is). Layers 1-3 are blocks, mobs and the player.
+const VISUAL_LAYER := 8
 
 
 class Chunk:
@@ -18,6 +21,8 @@ class Chunk:
 	var node: MeshInstance3D = null
 	var body: StaticBody3D = null
 	var shape: CollisionShape3D = null
+	var vbody: StaticBody3D = null
+	var vshape: CollisionShape3D = null
 	var lights: Array = []
 	var modified := false
 	var ready := false
@@ -42,6 +47,9 @@ class MeshBuf:
 	var cols := PackedColorArray()
 	var idx := PackedInt32Array()
 	var faces := PackedVector3Array()
+	## Drawn chunks: the ground as it is drawn (rounded ground, solid cubes and boxes), for
+	## standing creatures on what the player sees (VISUAL_LAYER, see game.gd).
+	var vfaces := PackedVector3Array()
 	var lights: Array = []
 	var beacons: Array = []
 	## The smooth ground (SmoothMesher): material weights in the colour and uv/uv2, sky in uv2.y.
@@ -85,12 +93,12 @@ class MeshBuf:
 		idx.append(base + 2)
 		idx.append(base + 3)
 		if solid:
-			faces.append(o + cs[0])
-			faces.append(o + cs[1])
-			faces.append(o + cs[2])
-			faces.append(o + cs[0])
-			faces.append(o + cs[2])
-			faces.append(o + cs[3])
+			vfaces.append(o + cs[0])
+			vfaces.append(o + cs[1])
+			vfaces.append(o + cs[2])
+			vfaces.append(o + cs[0])
+			vfaces.append(o + cs[2])
+			vfaces.append(o + cs[3])
 
 	## An SH_BOX block: all six faces of the box lo..hi inside the cell, each showing the whole
 	## tile ([top, side, bottom]). `solid` adds them to the collision faces too.
@@ -132,12 +140,12 @@ class MeshBuf:
 			idx.append(base + 2)
 			idx.append(base + 3)
 			if solid:
-				faces.append(pts[0])
-				faces.append(pts[1])
-				faces.append(pts[2])
-				faces.append(pts[0])
-				faces.append(pts[2])
-				faces.append(pts[3])
+				vfaces.append(pts[0])
+				vfaces.append(pts[1])
+				vfaces.append(pts[2])
+				vfaces.append(pts[0])
+				vfaces.append(pts[2])
+				vfaces.append(pts[3])
 
 	func cross(x: int, y: int, z: int, tile: int, lit := 1.0) -> void:
 		var o := Vector3(x, y, z)
@@ -171,6 +179,7 @@ class MeshBuf:
 var render_radius := 6
 ## False in server mode: chunks get collision only (no render mesh, lights or crack overlays).
 var render := true
+var _headless := DisplayServer.get_name() == "headless"
 ## Tests: rebuild an edited chunk immediately instead of on a worker thread, so runs repeat exactly.
 var sync_mesh := false
 ## Tests (server mode): make no collision bodies until flush_bodies(), which then makes them in
@@ -184,6 +193,10 @@ var order: Array[Vector2i] = []
 var mesh_set := {}
 var centers: Array[Vector2i] = []
 var tasks: Array[int] = []
+## Finished meshes waiting to go into the world ([key, version, MeshBuf]), and the main-thread
+## time per frame for putting them in.
+var _done_q: Array = []
+const APPLY_BUDGET_US := 3000
 var max_tasks := 4
 var urgent: Array[Vector2i] = []
 var material: Material
@@ -241,6 +254,8 @@ func setup(s: int, tex) -> void:
 	terrain_material.shader = preload("res://shaders/terrain.gdshader")
 	terrain_material.set_shader_parameter("albedo_tex", tex.terrain_albedo)
 	terrain_material.set_shader_parameter("normal_tex", tex.terrain_normal)
+	if G.gfx != null:
+		set_min_light(G.gfx.min_light())
 	crack_mesh = BoxMesh.new()
 	crack_mesh.size = Vector3(1.012, 1.012, 1.012)
 	beacon_mesh = BoxMesh.new()
@@ -285,7 +300,15 @@ func update_centers(positions: Array) -> void:
 		_rebuild_order()
 		_unload_far()
 	_reap()
+	_drain_done()
 	_schedule()
+
+
+## Settings: ambient light left in caves and under roofs.
+func set_min_light(v: float) -> void:
+	for m in [material, terrain_material]:
+		if m is ShaderMaterial:
+			m.set_shader_parameter("min_light", v)
 
 
 ## The graphics quality changed the view distance.
@@ -372,6 +395,10 @@ func _free_visual(c: Chunk) -> void:
 		c.body.queue_free()
 		c.body = null
 		c.shape = null
+	if c.vbody != null:
+		c.vbody.queue_free()
+		c.vbody = null
+		c.vshape = null
 	_deferred_faces.erase(c.key)
 	c.ready = false
 
@@ -558,11 +585,12 @@ func _build(nb: Array) -> MeshBuf:
 					continue
 				if shp[b] == Blocks.SH_BOX:
 					var bx: Array = Blocks.BOX[b]
-					buf.box(x, y, z, tl, bx[0], bx[1], false, SmoothMesher.sky_at(sky, x, y + 1, z))
+					buf.box(x, y, z, tl, bx[0], bx[1], Blocks.SOLID[b], SmoothMesher.sky_at(sky, x, y + 1, z))
 					if b == Blocks.BACKPACK:
 						buf.beacons.append(Vector3i(x, y, z))
 					continue
 				var leaf := b == Blocks.LEAVES
+				var solid: bool = Blocks.SOLID[b] and not leaf
 				var nbs := [
 					d[i + CH2] if y < H - 1 else 0,
 					d[i - CH2] if y > 0 else 11,
@@ -577,11 +605,31 @@ func _build(nb: Array) -> MeshBuf:
 					if nbk == 0 or nat[nbk] or (not opq[nbk] and not (leaf and nbk == b)):
 						var dv: Vector3i = dirs[dir]
 						var tile: int = tl[0] if dir == 0 else (tl[2] if dir == 1 else tl[1])
-						buf.face(dir, x, y, z, tile, false, SmoothMesher.sky_at(sky, x + dv.x, y + dv.y, z + dv.z))
+						buf.face(dir, x, y, z, tile, solid, SmoothMesher.sky_at(sky, x + dv.x, y + dv.y, z + dv.z))
+	for i in buf.t_idx:
+		buf.vfaces.append(buf.t_verts[i])
 	return buf
 
 
 func _mesh_done(k: Vector2i, ver: int, buf: MeshBuf) -> void:
+	if render:
+		_done_q.append([k, ver, buf])  # put in the world a few at a time (_drain_done)
+		return
+	_finish_mesh(k, ver, buf)
+
+
+## Drawn chunks: finished meshes go into the world within a small time budget per frame, so
+## streaming new land never stalls a frame (or the game's network replies) for long.
+func _drain_done() -> void:
+	var t0 := Time.get_ticks_usec()
+	while not _done_q.is_empty():
+		var d: Array = _done_q.pop_front()
+		_finish_mesh(d[0], d[1], d[2])
+		if Time.get_ticks_usec() - t0 > APPLY_BUDGET_US:
+			break
+
+
+func _finish_mesh(k: Vector2i, ver: int, buf: MeshBuf) -> void:
 	var c: Chunk = chunks.get(k)
 	if c == null:
 		return
@@ -639,6 +687,8 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		am.surface_set_material(am.get_surface_count() - 1, material)
 	c.node.mesh = am if am.get_surface_count() > 0 else null
 	_apply_collision(c, origin, buf.faces)
+	if not _headless:
+		_apply_visual_ground(c, origin, buf.vfaces)  # (nothing is shown in a headless game)
 	for l in c.lights:
 		if is_instance_valid(l):
 			l.queue_free()
@@ -678,6 +728,23 @@ func _apply_collision(c: Chunk, origin: Vector3, faces: PackedVector3Array) -> v
 		c.shape.shape = sh
 	else:
 		c.shape.shape = null
+
+
+func _apply_visual_ground(c: Chunk, origin: Vector3, faces: PackedVector3Array) -> void:
+	if c.vbody == null:
+		c.vbody = StaticBody3D.new()
+		c.vbody.collision_layer = VISUAL_LAYER
+		c.vbody.collision_mask = 0
+		c.vshape = CollisionShape3D.new()
+		c.vbody.add_child(c.vshape)
+		add_child(c.vbody)
+		c.vbody.position = origin
+	if faces.size() > 0:
+		var sh := ConcavePolygonShape3D.new()
+		sh.set_faces(faces)
+		c.vshape.shape = sh
+	else:
+		c.vshape.shape = null
 
 
 ## Tests: make the collision bodies held back by defer_bodies, in chunk order, and stop holding back.

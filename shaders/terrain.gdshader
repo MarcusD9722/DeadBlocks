@@ -11,6 +11,7 @@ uniform sampler2DArray normal_tex : hint_normal, filter_linear_mipmap_anisotropi
 uniform float scale = 0.5;          // texture repeats per metre
 uniform float blend_depth = 0.3;
 uniform float normal_strength = 1.0;
+uniform float min_light = 0.12;  // ambient light left in caves (Settings: light in caves)
 
 const float ROUGH[7] = float[7](0.95, 0.95, 0.82, 0.92, 0.62, 0.7, 0.85);
 
@@ -88,6 +89,6 @@ void fragment() {
 	NORMAL = normalize((VIEW_MATRIX * vec4(nw, 0.0)).xyz);
 	ROUGHNESS = rough / max(total, 0.0001);
 	SPECULAR = 0.3;
-	AO = mix(0.05, 1.0, UV2.y);
+	AO = mix(min_light, 1.0, UV2.y);
 	AO_LIGHT_AFFECT = 0.0;
 }

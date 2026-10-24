@@ -100,6 +100,7 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - Forward+ renderer with a Graphics quality setting (Low/Medium/High/Ultra).
 - The natural ground is drawn smooth and rounded; built blocks stay cubes with softened edges. **Collision stays whole blocks**: tunnels, doorways, mining, zombies and the server work exactly as before. The player steps up 1-block ledges by itself.
 - Caves and roofed rooms are dark (only torches and the flashlight light them).
+- **0.10.1 (after Marcus's test):** a Settings screen like other games (brightness, light in caves, FOV, view distance, shadows, effects, anti-aliasing, render scale, V-Sync, frame cap, window, FPS counter, mouse). Creatures are drawn standing on the rounded ground, and zombies and boars fall over and sink away when they die.
 - Details and steps: `docs/V-plan.md`.
 
 ## Parked for later

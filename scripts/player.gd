@@ -110,7 +110,8 @@ func _ready() -> void:
 	inv = Inventory.new()
 	if G.gfx != null:
 		sens = G.gfx.sens * 0.001
-		flashlight.shadow_enabled = G.gfx.quality >= 1
+		flashlight.shadow_enabled = G.gfx.opt["shadows"] >= 1
+		cam.fov = G.gfx.opt["fov"]
 
 
 func _wire_cube(h: float) -> ImmediateMesh:

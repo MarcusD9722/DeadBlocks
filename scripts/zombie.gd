@@ -384,6 +384,28 @@ func _pose(spd: float) -> void:
 	model.rotation.x = 0.2 * mv if type == "runner" else 0.0
 
 
+## Dying (client view): a crawler rolls onto its side; the others fall flat, arms going limp.
+func _death_tilt() -> Vector3:
+	if type == "crawler":
+		return Vector3(0.0, 0.0, PI * 0.45 * (1.0 if net_id % 2 == 0 else -1.0))
+	return super()
+
+
+func _death_lift() -> float:
+	return {"brute": 0.26, "crawler": 0.12}.get(type, 0.18)
+
+
+func _death_pose(_t: float) -> void:
+	if arm_l == null or type == "crawler":
+		return
+	arm_l.rotation.x = lerpf(arm_l.rotation.x, -0.25, 0.12)
+	arm_r.rotation.x = lerpf(arm_r.rotation.x, -0.45, 0.12)
+	arm_l.rotation.z = lerpf(arm_l.rotation.z, -0.35, 0.12)
+	arm_r.rotation.z = lerpf(arm_r.rotation.z, 0.3, 0.12)
+	leg_l.rotation.x = lerpf(leg_l.rotation.x, 0.15, 0.12)
+	leg_r.rotation.x = lerpf(leg_r.rotation.x, -0.1, 0.12)
+
+
 func _on_hurt(attacker: Node) -> void:
 	if attacker != null:
 		hunting = true  # hit by a player: goes after the nearest one, as long as they stay in chase_range
