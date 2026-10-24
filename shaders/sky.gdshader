@@ -46,6 +46,12 @@ float fbm(vec2 p) {
 	return s;
 }
 
+// Cloud density: fbm swirled by two more fbm lookups (domain warping).
+float clouds(vec2 uv) {
+	vec2 q = vec2(fbm(uv), fbm(uv + vec2(5.2, 1.3)));
+	return fbm(uv * 1.1 + 1.6 * q + vec2(cloud_offset.y, -cloud_offset.x) * 0.6);
+}
+
 void sky() {
 	vec3 d = normalize(EYEDIR);
 	float h = d.y;
@@ -80,17 +86,23 @@ void sky() {
 		}
 	}
 	if (h > 0.0) {
-		vec2 uv = d.xz / (h + 0.12);
-		float fade = smoothstep(0.0, 0.18, h);
-		float n1 = fbm(uv * 1.3 + cloud_offset);
-		float n2 = fbm(uv * 3.1 - cloud_offset * 1.7 + vec2(5.0, 3.0));
-		float n = n1 * 0.75 + n2 * 0.35;
-		float c = smoothstep(1.0 - cloud_cover, 1.25 - cloud_cover, n) * fade;
-		// Lit from the sun's side, darker underneath.
-		float lit = clamp(0.55 + 0.45 * dot(normalize(vec3(d.x, 0.25, d.z)), sun_dir), 0.0, 1.0);
-		vec3 cc = mix(cloud_dark, cloud_light, clamp(lit * (1.15 - n2 * 0.6), 0.0, 1.0));
-		cc += sun_color * pow(max(sd, 0.0), 12.0) * 0.5 * sun_glow;
-		col = mix(col, cc, c * 0.92);
+		// Clouds on a high flat layer: swirled noise for their shapes, a look one step towards
+		// the sun for shading (thick towards the sun = darker), bright thin edges near the sun.
+		vec2 uv = d.xz / (h + 0.08) * 0.75 + cloud_offset;
+		float fade = smoothstep(0.0, 0.22, h);
+		float n = clouds(uv);
+		float lo = 1.0 - cloud_cover;
+		float c = smoothstep(lo - 0.06, lo + 0.22, n) * fade;
+		if (c > 0.001) {
+			vec2 to_sun = normalize(sun_dir.xz + vec2(1e-4)) * 0.06;
+			float n2 = clouds(uv + to_sun);
+			float shade = clamp(0.75 - (n2 - n) * 5.0 + (n - lo) * 0.4, 0.15, 1.1);
+			vec3 cc = mix(cloud_dark, cloud_light, shade);
+			float rim = (1.0 - smoothstep(lo, lo + 0.18, n)) * pow(max(sd, 0.0), 6.0);
+			cc += sun_color * rim * 1.6 * sun_glow;
+			cc += sun_color * pow(max(sd, 0.0), 16.0) * 0.35 * sun_glow;
+			col = mix(col, cc, c * 0.95);
+		}
 	}
 	COLOR = col;
 }

@@ -1,0 +1,29 @@
+[remap]
+
+importer="2d_array_texture"
+type="CompressedTexture2DArray"
+uid="uid://dw7t46b7i7epu"
+path.bptc="res://.godot/imported/blocks_normal.jpg-4b0349ae736055f33c7c0144cbe876b1.bptc.ctexarray"
+metadata={
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
+}
+
+[deps]
+
+source_file="res://assets/textures/blocks_normal.jpg"
+dest_files=["res://.godot/imported/blocks_normal.jpg-4b0349ae736055f33c7c0144cbe876b1.bptc.ctexarray"]
+
+[params]
+
+compress/mode=2
+compress/high_quality=true
+compress/lossy_quality=0.7
+compress/uastc_level=0
+compress/rdo_quality_loss=0.0
+compress/hdr_compression=1
+compress/channel_pack=0
+mipmaps/generate=true
+mipmaps/limit=-1
+slices/horizontal=14
+slices/vertical=1

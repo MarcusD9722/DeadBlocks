@@ -58,7 +58,7 @@ static func init_tables() -> void:
 	LAYER.resize(Blocks.COUNT)
 	for id in Blocks.COUNT:
 		NAT[id] = id in [Blocks.GRASS, Blocks.DIRT, Blocks.STONE, Blocks.SAND, Blocks.COAL_ORE, Blocks.IRON_ORE, Blocks.BEDROCK]
-		FIELD[id] = Blocks.FULL[id] and id != Blocks.LEAVES
+		FIELD[id] = Blocks.FULL[id] and id != Blocks.LEAVES and id != Blocks.LOG  # (drawn round / leafy)
 		LAYER[id] = {Blocks.GRASS: L_GRASS, Blocks.DIRT: L_DIRT, Blocks.STONE: L_STONE, Blocks.SAND: L_SAND,
 			Blocks.COAL_ORE: L_COAL, Blocks.IRON_ORE: L_IRON, Blocks.BEDROCK: L_BEDROCK}.get(id, -1)
 	for i in 64:

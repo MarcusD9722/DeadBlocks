@@ -44,7 +44,8 @@ const TILES := [[0, 0, 0], [0, 1, 2], [2, 2, 2], [3, 3, 3], [4, 4, 4], [6, 5, 6]
 const SHAPE := [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 2, 1, 3, 3]
 const SOLID := [false, true, true, true, true, true, true, true, true, true, true, true, true, true,
 	false, false, false, true, false, true, false, true]
-const OPAQUE := [false, true, true, true, true, true, false, true, true, true, true, true, true, true,
+# (Logs are drawn as round trunks, so what is beside them shows its faces.)
+const OPAQUE := [false, true, true, true, true, false, false, true, true, true, true, true, true, true,
 	false, false, false, true, false, true, false, false]
 # Solid full cubes (collision between neighbours is left out only between these).
 const FULL := [false, true, true, true, true, true, true, true, true, true, true, true, true, true,

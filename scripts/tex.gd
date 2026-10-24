@@ -10,10 +10,21 @@ var atlas_img: Image
 var atlas: ImageTexture
 var icons := {}
 var crack_tex: Array[ImageTexture] = []
-## The smooth ground's materials (SmoothMesher layers): albedo with height in alpha, and normals.
-var terrain_albedo: Texture2DArray
-var terrain_normal: Texture2DArray
+## The smooth ground's materials (SmoothMesher layers): albedo, and normals with the height map
+## in blue. From assets/textures (CC0 photo textures, tools/make_textures.py); painted from noise
+## if those are missing.
+var terrain_albedo: TextureLayered
+var terrain_normal: TextureLayered
 const TERRAIN_PX := 256
+## Built blocks (cubes, boxes, log trunks): one array layer per atlas tile they use.
+var block_albedo: TextureLayered
+var block_normal: TextureLayered
+## Leaves: a tile of leaves with see-through gaps.
+var leaves_albedo: Texture2D
+var leaves_normal: Texture2D
+## Atlas tile -> block array layer (the order of tools/make_textures.py's blocks list).
+const BLOCK_LAYERS := {4: 0, 5: 1, 6: 2, 8: 3, 13: 4, 14: 5, 15: 6, 16: 7, 20: 8, 22: 9, 25: 10, 26: 11, 23: 12, 24: 13}
+static var layer_of_tile := PackedInt32Array()
 
 
 func _init() -> void:
@@ -31,7 +42,8 @@ func _init() -> void:
 		icons[int(id)] = ImageTexture.create_from_image(_item_icon(int(id)))
 	for s in 4:
 		crack_tex.append(ImageTexture.create_from_image(_crack(s)))
-	_terrain()
+	if not _load_assets():
+		_terrain()
 
 
 func icon(id: int) -> Texture2D:
@@ -470,6 +482,29 @@ func _crack(s: int) -> Image:
 	return img
 
 
+# ---------------------------------------------------------------- photo textures
+
+static func block_layer(tile: int) -> int:
+	if layer_of_tile.is_empty():
+		layer_of_tile.resize(64)
+		layer_of_tile.fill(3)  # planks for anything without its own picture
+		for t in BLOCK_LAYERS:
+			layer_of_tile[t] = BLOCK_LAYERS[t]
+	return layer_of_tile[tile]
+
+
+func _load_assets() -> bool:
+	block_layer(0)  # fill the table on the main thread
+	var d := "res://assets/textures/"
+	terrain_albedo = load(d + "terrain_albedo.jpg")
+	terrain_normal = load(d + "terrain_normal.jpg")
+	block_albedo = load(d + "blocks_albedo.jpg")
+	block_normal = load(d + "blocks_normal.jpg")
+	leaves_albedo = load(d + "leaves_albedo.png")
+	leaves_normal = load(d + "leaves_normal.jpg")
+	return terrain_albedo != null and terrain_normal != null and block_albedo != null and leaves_albedo != null
+
+
 # ---------------------------------------------------------------- smooth ground
 
 ## One seamless noise image as bytes (0-255), TERRAIN_PX square.
@@ -555,14 +590,23 @@ func _terrain() -> void:
 			rgba[o + 3] = int(h * 255.0)
 			hgt[i] = int(h * 255.0)
 		var a := Image.create_from_data(TERRAIN_PX, TERRAIN_PX, false, Image.FORMAT_RGBA8, rgba)
+		a.convert(Image.FORMAT_RGB8)
 		a.generate_mipmaps()
 		albs.append(a)
 		var nm := Image.create_from_data(TERRAIN_PX, TERRAIN_PX, false, Image.FORMAT_L8, hgt)
 		nm.convert(Image.FORMAT_RGBA8)
 		nm.bump_map_to_normal_map([3.0, 4.0, 5.0, 2.5, 5.0, 5.0, 6.0][layer])
+		for j in N:  # the height map goes into blue, as in the photo textures
+			@warning_ignore("integer_division")
+			var py := j / TERRAIN_PX
+			var c := nm.get_pixel(j % TERRAIN_PX, py)
+			nm.set_pixel(j % TERRAIN_PX, py, Color(c.r, c.g, hgt[j] / 255.0))
+		nm.convert(Image.FORMAT_RGB8)
 		nm.generate_mipmaps(true)
 		nrms.append(nm)
-	terrain_albedo = Texture2DArray.new()
-	terrain_albedo.create_from_images(albs)
-	terrain_normal = Texture2DArray.new()
-	terrain_normal.create_from_images(nrms)
+	var ta := Texture2DArray.new()
+	ta.create_from_images(albs)
+	terrain_albedo = ta
+	var tn := Texture2DArray.new()
+	tn.create_from_images(nrms)
+	terrain_normal = tn
