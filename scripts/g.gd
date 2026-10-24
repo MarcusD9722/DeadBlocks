@@ -2,7 +2,7 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.10.1"
+const VERSION := "0.10.2"
 const BUILD_NAME := "New look"
 
 var game: Node = null
@@ -54,7 +54,7 @@ func _ready() -> void:
 		print("Dead Blocks %s" % VERSION)  # update.sh checks a new server program runs with this
 		get_tree().quit()
 		return
-	var test_run := has_arg("--autotest") or has_arg("--bench") or has_arg("--regiontest") or has_arg("--typetest") or has_arg("--lineup") or has_arg("--scenery") or has_arg("--worldgen-hash") or has_arg("--savetest")
+	var test_run := has_arg("--autotest") or has_arg("--bench") or has_arg("--regiontest") or has_arg("--typetest") or has_arg("--lineup") or has_arg("--scenery") or has_arg("--worldgen-hash") or has_arg("--savetest") or has_arg("--meshtest")
 	if has_arg("--server") or (OS.has_feature("dedicated_server") and not test_run):
 		mode = "server"
 	server_mode = mode == "server" or has_arg("--server-mode") or OS.has_feature("dedicated_server")

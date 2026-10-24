@@ -39,6 +39,7 @@ stage() {
 
 stage autotest "AUTOTEST DONE fails=0" 900 "$GODOT" --headless --path . -- --autotest --seed=4242
 stage savetest "SAVETEST DONE fails=0" 120 "$GODOT" --headless --path . -- --savetest
+stage meshtest "MESHTEST DONE fails=0" 300 "$GODOT" --headless --path . -- --meshtest --seed=4242
 stage regiontest_forward "REGIONTEST DONE" 600 "$GODOT" --headless --path . -- --regiontest --server-mode --seed=4242 --region-order=forward
 stage regiontest_reverse "REGIONTEST DONE" 600 "$GODOT" --headless --path . -- --regiontest --server-mode --seed=4242 --region-order=reverse
 h1=$(sed -n 's/^REGIONTEST order=.* hash=//p' "$LOG_DIR/regiontest_forward.log")

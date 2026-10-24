@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_back, diffuse_burley, specular_schlick_ggx;
+render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 // The smooth ground (SmoothMesher). Each vertex carries how much of each ground material is
 // around it: grass, dirt, stone, sand in COLOR, coal and iron in UV, bedrock in UV2.x; UV2.y is
 // the sky light (dims ambient light under cover). The textures are projected from three sides

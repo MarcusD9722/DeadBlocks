@@ -59,9 +59,11 @@ func _ready() -> void:
 		seed_v = int(G.session["seed"])
 		day_minutes = float(G.session["day_minutes"])
 	G.game = self
-	if G.has_arg("--worldgen-hash") or G.has_arg("--savetest"):
+	if G.has_arg("--worldgen-hash") or G.has_arg("--savetest") or G.has_arg("--meshtest"):
 		if G.has_arg("--savetest"):
 			preload("res://scripts/tests/savetest.gd").run()
+		elif G.has_arg("--meshtest"):
+			preload("res://scripts/tests/meshtest.gd").run(seed_v)
 		else:
 			preload("res://scripts/tests/worldgen_hash.gd").run(seed_v)
 		state = "quitting"

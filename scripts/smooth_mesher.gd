@@ -183,6 +183,7 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 	var vgrad := PackedVector3Array()
 	var vmask := PackedInt32Array()
 	var vkey := PackedInt32Array()
+	var vpin := PackedByteArray()
 	var bits: Dictionary = _bit
 	var disp: Array = _disp
 	var grad: Array = _grad
@@ -200,6 +201,10 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 			var na := nm[c0] | nm[c0 + 1] | nm[c0 + W] | nm[c0 + W + 1]
 			na |= na >> 1
 			var cells := any_ & ~all_ & na & MASK63
+			# Next to a built block (natural blocks only are drawn smooth): the vertex stays on the
+			# block corner, so the ground meets the cube's edge with no gap.
+			var built := (a & ~nm[c0]) | (b & ~nm[c0 + 1]) | (c & ~nm[c0 + W]) | (e & ~nm[c0 + W + 1])
+			built |= built >> 1
 			while cells != 0:
 				var lb := cells & -cells
 				cells ^= lb
@@ -209,7 +214,9 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 				var lat := Vector3(ci - P + 1, y + 1, ck - P + 1)
 				var key := ci + ck * NC + y * NC2
 				keys[key] = vpos.size()
-				vpos.append(lat + disp[m])
+				var pin := (built >> y) & 1
+				vpos.append(lat if pin else lat + disp[m])
+				vpin.append(pin)
 				vlat.append(lat)
 				vgrad.append(grad[m])
 				vmask.append(m)
@@ -221,6 +228,9 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 		var next := PackedVector3Array()
 		next.resize(nv)
 		for v in nv:
+			if vpin[v]:
+				next[v] = vlat[v]
+				continue
 			var key := vkey[v]
 			var ci := key % NC
 			var ck := (key / NC) % NC
