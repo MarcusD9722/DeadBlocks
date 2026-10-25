@@ -486,7 +486,9 @@ func _run_screens() -> void:
 
 func _run_host() -> void:
 	check(await _until(func(): return G.game != null and G.game.state == "title", 120.0), "reached the title screen")
-	var err: String = await G.host_game("hoster", "4321", "pw", int(G.arg_value("--nettest-port=")))
+	# A fresh world of the test's own each run (an old one's hoster could have starved to death
+	# over many runs, and the player's own hosted world stays untouched).
+	var err: String = await G.host_game("hoster", "4321", "pw", int(G.arg_value("--nettest-port=")), true, "nettest_host")
 	check(err == "" and G.host_pid > 0, "started the server process (%s)" % err)
 	print("NETTEST host_pid=%d" % G.host_pid)
 	if not await _until(_playing, 60.0):
@@ -843,6 +845,27 @@ func _run_builder() -> void:
 	check(int(_chat_from(other, "NT boxgot ").split(" ")[2]) == planks, "the watcher took the %d planks" % planks)
 	check(await _until(func(): return in_box.call() == 0, 5.0), "our open box screen shows it empty now")
 	G.game.close_inventory()
+	# Ranged weapons (M4.3): a spear thrown at the ground lies there for the watcher too, who
+	# picks it up; then it's gone for us as well.
+	G.net.send_chat("/give wooden_spear")
+	check(await _until(func(): return _count(Items.WOOD_SPEAR) == 1, 10.0), "admin /give a spear")
+	await _hold(Items.WOOD_SPEAR)
+	var spot := _free_spot([door, box])
+	if spot != Vector3i.MIN:
+		_look_at(Vector3(spot) + Vector3(0.5, 0.02, 0.5))
+		var lying: Array = G.net.ground.keys()
+		p._shoot(Items.WOOD_SPEAR, 0.5)
+		check(await _until(func(): return G.net.ground.keys().any(func(id): return not lying.has(id)), 5.0), "the thrown spear lies on the ground")
+		var gid := -1
+		for id in G.net.ground:
+			if not lying.has(id):
+				gid = id
+		G.net.send_chat("NT spear %d" % gid)
+		check(await _until(func(): return _chat_from(other, "NT gotspear") != "", 30.0), "the watcher picked it up")
+		check(await _until(func(): return not G.net.ground.has(gid), 5.0), "and it's gone for us too")
+	else:
+		check(false, "somewhere to throw the spear")
+		G.net.send_chat("NT spear -1")
 	await _hash_check("still the same blocks as the server", chunk)
 	G.net.send_chat("NT done")
 	await _wait(1.0)
@@ -891,6 +914,14 @@ func _run_watcher() -> void:
 	await _until(func(): return _count(Blocks.PLANKS) == planks0 + want, 5.0)
 	G.net.request_close_box()
 	G.net.send_chat("NT boxgot %d" % (_count(Blocks.PLANKS) - planks0))
+	# The builder's thrown spear (M4.3): we see it lying there and pick it up.
+	check(await _until(func(): return _chat_from(other, "NT spear ") != "", 60.0), "the builder threw a spear")
+	var sgid := int(_chat_from(other, "NT spear ").split(" ")[2])
+	check(sgid >= 0 and await _until(func(): return G.net.ground.has(sgid), 5.0), "sees it lying there")
+	var spears := _count(Items.WOOD_SPEAR)
+	G.net.request_pickup(sgid)
+	check(await _until(func(): return _count(Items.WOOD_SPEAR) == spears + 1 and not G.net.ground.has(sgid), 5.0), "picks it up")
+	G.net.send_chat("NT gotspear")
 	check(await _until(func(): return _chat_from(other, "NT done") != "", 60.0), "the builder finished")
 
 

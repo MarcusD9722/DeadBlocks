@@ -24,6 +24,10 @@ const RECIPES := [
 	{"out": Blocks.FRAME_RAMP, "n": 2, "needs": {Blocks.PLANKS: 1, Items.STICK: 2}, "st": ""},
 	{"out": Blocks.FRAME_PILLAR, "n": 4, "needs": {Blocks.PLANKS: 1, Items.STICK: 1}, "st": ""},
 	{"out": Items.WOOD_MALLET, "n": 1, "needs": {Blocks.PLANKS: 2, Items.STICK: 2}, "st": ""},
+	# M4.3: a sharpened spear, a bow and stone-tipped arrows by hand.
+	{"out": Items.WOOD_SPEAR, "n": 1, "needs": {Items.STICK: 3}, "st": ""},
+	{"out": Items.BOW, "n": 1, "needs": {Items.STICK: 3, Items.FIBER: 3}, "st": ""},
+	{"out": Items.STONE_ARROW, "n": 6, "needs": {Items.STICK: 2, Blocks.COBBLE: 1, Items.FIBER: 1}, "st": ""},
 	# Workbench: stone, iron and steel tools and weapons, building blocks, the other stations.
 	{"out": Items.STONE_PICK, "n": 1, "needs": {Blocks.COBBLE: 3, Items.STICK: 2}, "st": "workbench"},
 	{"out": Items.STONE_AXE, "n": 1, "needs": {Blocks.COBBLE: 3, Items.STICK: 2}, "st": "workbench"},
@@ -40,6 +44,11 @@ const RECIPES := [
 	{"out": Items.STONE_HAMMER, "n": 1, "needs": {Blocks.COBBLE: 2, Items.STICK: 2}, "st": "workbench"},
 	{"out": Items.IRON_HAMMER, "n": 1, "needs": {Items.IRON_INGOT: 2, Items.STICK: 2}, "st": "workbench"},
 	{"out": Items.STEEL_HAMMER, "n": 1, "needs": {Items.STEEL_INGOT: 2, Items.STICK: 2}, "st": "workbench"},
+	{"out": Items.STONE_SPEAR, "n": 1, "needs": {Items.STICK: 3, Blocks.COBBLE: 1, Items.FIBER: 1}, "st": "workbench"},
+	{"out": Items.IRON_SPEAR, "n": 1, "needs": {Items.STICK: 3, Items.IRON_INGOT: 1}, "st": "workbench"},
+	{"out": Items.IRON_ARROW, "n": 6, "needs": {Items.STICK: 2, Items.IRON_INGOT: 1, Items.FIBER: 1}, "st": "workbench"},
+	{"out": Items.CROSSBOW, "n": 1, "needs": {Blocks.PLANKS: 3, Items.IRON_INGOT: 2, Items.FIBER: 3}, "st": "workbench"},
+	{"out": Items.IRON_BOLT, "n": 6, "needs": {Items.STICK: 2, Items.IRON_INGOT: 1}, "st": "workbench"},
 	{"out": Blocks.WOOD_DOOR, "n": 1, "needs": {Blocks.PLANKS: 6}, "st": "workbench"},
 	{"out": Blocks.WOOD_HATCH, "n": 1, "needs": {Blocks.PLANKS: 4}, "st": "workbench"},
 	{"out": Blocks.WOOD_BOX, "n": 1, "needs": {Blocks.PLANKS: 6, Items.STICK: 2}, "st": "workbench"},

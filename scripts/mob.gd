@@ -202,6 +202,16 @@ func _on_hurt(_attacker: Node) -> void:
 	pass
 
 
+## Can an arrow, bolt or thrown spear hit it (M4.3)? Living creatures; not acid or projectiles.
+func shootable() -> bool:
+	return not dead and die_t < 0.0
+
+
+## S_MOBS: the net id of the player it belongs to (a projectile's shooter), else 0.
+func net_owner() -> int:
+	return 0
+
+
 ## S_MOBS: what kind of mob this is (Proto.MOB_*).
 func net_kind() -> int:
 	return Proto.MOB_BOAR

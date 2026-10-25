@@ -129,6 +129,7 @@ func _play() -> void:
 	check(await _until(func(): return _count(Blocks.SPIKES) == 2, 5.0), "spikes at the workbench")
 
 	await _building()
+	await _ranged()
 
 	# The controller (M4.1): the right stick looks, RB turns the hotbar, Y opens the inventory and
 	# B closes it, the left stick walks.
@@ -626,3 +627,138 @@ func _hammer_until(b: Vector3i, done: Callable) -> bool:
 		await _wait(secs)
 	return done.call()
 
+
+## M4.3: a spear thrown at the ground stays there and E picks it up again; a zombie shot with the
+## bow (the crosshair marks every hit) and with the crossbow, which reloads by itself.
+func _ranged() -> void:
+	var p = G.player
+	var g = G.game
+	if p.dead:
+		g.respawn()
+		await _until(func(): return g.state == "playing", 10.0)
+	var look := Vector2(p.head.rotation.y, p.cam.rotation.x)  # (looked at again at the end)
+	await _ranged_shots()
+	p.set_look(look.x, look.y)
+	await _clear_mobs()
+
+
+func _ranged_shots() -> void:
+	var p = G.player
+	await _clear_mobs()
+	for give in ["wooden_spear", "bow", "stone_arrow 12", "crossbow", "iron_bolt 6"]:
+		G.net.send_chat("/give " + give)
+	check(await _until(func(): return _count(Items.WOOD_SPEAR) == 1 and _count(Items.BOW) == 1 and _count(Items.STONE_ARROW) >= 12 \
+		and _count(Items.CROSSBOW) == 1 and _count(Items.IRON_BOLT) >= 6, 10.0), "/give the spear, bow, crossbow and their ammo")
+	# The spear.
+	var spot := _free_spot([])
+	check(spot != Vector3i.MIN, "somewhere to throw a spear at (%s)" % spot)
+	if spot == Vector3i.MIN:
+		return
+	await _hold(Items.WOOD_SPEAR)
+	_look_at(Vector3(spot) + Vector3(0.5, 0.02, 0.5))
+	var before: Array = G.net.ground.keys()
+	p._shoot(Items.WOOD_SPEAR, 0.5)
+	check(await _until(func(): return _server_count(Items.WOOD_SPEAR) == 0, 3.0), "the thrown spear left our hands")
+	check(await _until(func(): return G.net.ground.keys().any(func(id): return not before.has(id)), 5.0),
+		"it lies where it landed (%d things on the ground)" % G.net.ground.size())
+	var gid := -1
+	for id in G.net.ground:
+		if not before.has(id):
+			gid = id
+	if gid < 0:
+		return
+	_look_at(G.net.ground[gid]["pos"])
+	await _wait(0.3)
+	check(p.interact_text() == "Pick up the Wooden Spear", "looking at it offers E (%s)" % p.interact_text())
+	await _press(KEY_E)
+	check(await _until(func(): return _count(Items.WOOD_SPEAR) == 1 and not G.net.ground.has(gid), 4.0), "E picks it up again")
+	# The bow, at a zombie coming for us.
+	var zid: int = await _target_zombie()
+	check(zid != 0, "/spawn zombie, for target practice, and it comes into view")
+	if zid == 0:
+		return
+	await _hold(Items.BOW)
+	var arrows0 := _server_count(Items.STONE_ARROW)
+	var hits := 0
+	var killed := false
+	for k in 10:
+		if not _zombie_alive(zid):
+			break
+		_aim_at(zid)
+		p.hit_mark = 0.0
+		p._shoot(Items.BOW, 1.0)
+		if await _until(func(): return p.hit_mark > 0.0, 1.5):
+			hits += 1
+			killed = killed or p.hit_kind == Proto.HIT_KILL
+		await _wait(0.7)
+	check(hits >= 1, "arrows hit the zombie (%d of them; the crosshair marked each)" % hits)
+	check(await _until(func(): return _server_count(Items.STONE_ARROW) < arrows0, 3.0), "each shot took an arrow (%d -> %d)" % [arrows0, _server_count(Items.STONE_ARROW)])
+	check(killed, "the arrows killed it")
+	# The crossbow: it loads itself after a moment, a bolt a shot.
+	await _clear_mobs()
+	await _hold(Items.CROSSBOW)
+	check(await _until(func(): return p.xbow_loaded, 4.0), "the crossbow loads itself")
+	zid = await _target_zombie()
+	if zid == 0 or not p.xbow_loaded:
+		check(false, "a zombie for the crossbow")
+		return
+	var bolts0 := _server_count(Items.IRON_BOLT)
+	var xhit := false
+	for k in 4:
+		await _until(func(): return p.xbow_loaded, 4.0)
+		if not _zombie_alive(zid):
+			break
+		_aim_at(zid)
+		p.hit_mark = 0.0
+		p._shoot(Items.CROSSBOW, 1.0)
+		if k == 0:
+			check(not p.xbow_loaded, "shooting empties it")
+		if await _until(func(): return p.hit_mark > 0.0, 1.5):
+			xhit = true
+			break
+	check(xhit, "a bolt hits the zombie")
+	check(await _until(func(): return _server_count(Items.IRON_BOLT) < bolts0, 3.0), "and the bolt is used up")
+	await _clear_mobs()
+
+
+## /spawn a zombie and wait until it is coming for us within 14 m with nothing in between. Its id,
+## or 0.
+func _target_zombie() -> int:
+	var kinds := [Proto.MOB_ZOMBIE, Proto.MOB_NIGHT]
+	var before: Array = G.net.mobs.keys()
+	G.net.send_chat("/spawn zombie 1")
+	if not await _until(func(): return _mob_ids(kinds).any(func(id): return not before.has(id)), 10.0):
+		return 0
+	var zid := 0
+	for id in _mob_ids(kinds):
+		if not before.has(id):
+			zid = id
+	var p = G.player
+	var clear := func():
+		if not _zombie_alive(zid) or _mob_dist(zid) > 14.0:
+			return false
+		var at: Vector3 = (G.net.mobs[zid]["samples"].back()[1] as Vector3) + Vector3(0, 1.1, 0)
+		var eye: Vector3 = p.cam.global_position
+		var hit: Dictionary = G.world.raycast(eye, (at - eye).normalized(), eye.distance_to(at))
+		return not hit.get("hit", false)
+	return zid if await _until(clear, 25.0) else 0
+
+
+func _zombie_alive(id: int) -> bool:
+	return G.net.mobs.has(id) and not G.net.mobs[id]["samples"].is_empty() \
+		and (int(G.net.mobs[id]["samples"].back()[4]) & Proto.MF_DEAD) == 0
+
+
+## Look at a zombie's chest where it will be when an arrow gets there (a little ahead of it, and
+## above for the drop).
+func _aim_at(id: int) -> void:
+	var smp: Array = G.net.mobs[id]["samples"]
+	var at: Vector3 = smp.back()[1]
+	var vel := Vector3.ZERO
+	if smp.size() >= 2:
+		var a: Array = smp[smp.size() - 2]
+		var b: Array = smp.back()
+		vel = ((b[1] as Vector3) - (a[1] as Vector3)) / maxf(0.02, float(b[0]) - float(a[0]))
+	var d := at.distance_to(G.player.global_position)
+	var t := d / 55.0 + 0.1
+	_look_at(at + vel * t + Vector3(0, 1.1 + 4.9 * t * t, 0))

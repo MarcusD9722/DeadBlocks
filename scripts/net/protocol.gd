@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 9
+const PROTOCOL := 10
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -45,6 +45,10 @@ const S_BACKPACKS := 42  # count u8, count x (block pos, seconds left u16): your
 const S_BED := 43        # has u8, block pos: your bed (the death screen offers it)
 const S_BOX := 44        # block pos, open u8 (0: closed, it's gone or out of reach), title, count u8,
                          # count x (item u16, count u8): a storage box or bag you have open (M4.2)
+# M4.3: things lying in the world (a thrown spear, an arrow that missed), and hits you made.
+const S_GROUND := 50     # count u16, count x ground record (see put_ground): new ones (all of them on joining)
+const S_GROUND_GONE := 51  # count u16, count x id u16: picked up or fallen apart
+const S_HIT := 52        # kind u8 (HIT_*): your arrow, bolt or spear hit something
 # Client -> server
 const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8, hotbar slot u8
 const C_READY := 31      # my chunks are loaded, count me as online
@@ -65,6 +69,12 @@ const C_UPGRADE := 46    # seq, block pos, slot u8 (the hammer): repair it, or u
 const C_OPEN := 47       # seq, block pos: open a storage box or bag (E); S_BOX answers
 const C_BOX := 48        # seq, action u8 (0 take a box slot, 1 put an inventory slot in, 2 take everything), slot u8
 const C_CLOSE := 49      # the box screen was closed
+# M4.3
+const C_SHOOT := 53      # seq, slot u8 (bow, crossbow or spear), power u8 (0-255), aim 3xf32
+const C_PICKUP := 54     # seq, ground id u16 (E on a spear or arrow lying in the world)
+const HIT_MOB := 1
+const HIT_HEAD := 2
+const HIT_KILL := 3
 
 # Player record flags
 const F_SPRINT := 1
@@ -107,6 +117,10 @@ const MOB_CRAWLER := 6
 const MOB_SCREAMER := 7
 const MOB_SPITTER := 8
 const MOB_ACID := 9
+## M4.3: an arrow, bolt or spear in flight. Its flags: the type (Items.PROJECTILES index) in bits
+## 0-5, and MF_YOURS when the player receiving it shot it (their game already shows its own).
+const MOB_PROJ := 10
+const MF_YOURS := 128
 const ZOMBIE_KINDS := {"runner": MOB_RUNNER, "brute": MOB_BRUTE, "crawler": MOB_CRAWLER, "screamer": MOB_SCREAMER, "spitter": MOB_SPITTER}
 const KIND_TYPES := {MOB_RUNNER: "runner", MOB_BRUTE: "brute", MOB_CRAWLER: "crawler", MOB_SCREAMER: "screamer", MOB_SPITTER: "spitter"}
 const MF_HURT := 1
@@ -328,6 +342,23 @@ static func get_mob(b: StreamPeerBuffer, origin: Vector2i) -> Dictionary:
 	var z := b.get_16() / 32.0 + origin.y * 16
 	var yaw := b.get_u8() / 256.0 * TAU
 	return {"id": id, "kind": kind, "pos": Vector3(x, y, z), "yaw": yaw, "flags": b.get_u8()}
+
+
+## Something lying in the world (M4.3): id u16, item u16, position 3xf32, yaw u16, pitch s16.
+static func put_ground(b: StreamPeerBuffer, id: int, item: int, pos: Vector3, yaw: float, pitch: float) -> void:
+	b.put_u16(id)
+	b.put_u16(item)
+	put_vec3(b, pos)
+	b.put_u16(yaw_to_u16(yaw))
+	b.put_16(clampi(int(pitch * 10000.0), -32767, 32767))
+
+
+static func get_ground(b: StreamPeerBuffer) -> Dictionary:
+	var id := b.get_u16()
+	var item := b.get_u16()
+	var pos := get_vec3(b)
+	var yaw := u16_to_yaw(b.get_u16())
+	return {"id": id, "item": item, "pos": pos, "yaw": yaw, "pitch": b.get_16() / 10000.0}
 
 
 ## 19 bytes: net id u16, position 3xf32, yaw u16, pitch s16, flags u8.

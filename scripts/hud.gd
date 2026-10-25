@@ -975,6 +975,38 @@ func _draw_backpack_markers(vs: Vector2) -> void:
 		_text(at + Vector2(-70, 14), "%d m  ·  %d:%02d" % [int(dist), mins, left % 60], 15, col, HORIZONTAL_ALIGNMENT_CENTER, 140)
 
 
+## Ranged weapons (M4.3): a mark on the crosshair when a shot hits (red in the head or for a
+## kill), the ammo left, and a bar while the bow is drawn, a spear held back or the crossbow
+## reloading.
+func _draw_ranged(p, c: Vector2, vs: Vector2) -> void:
+	if p.hit_mark > 0.0:
+		var a := clampf(p.hit_mark / 0.35, 0.0, 1.0)
+		var hc := Color(1, 1, 1, a) if p.hit_kind == Proto.HIT_MOB else Color(1, 0.25, 0.2, a)
+		for sx in [-1.0, 1.0]:
+			for sy in [-1.0, 1.0]:
+				canvas.draw_line(c + Vector2(sx, sy) * 7.0, c + Vector2(sx, sy) * 14.0, hc, 2.5)
+	var cur: int = p.cur_id()
+	var tt := Items.tool_type(cur)
+	var bar := -1.0
+	if tt == "bow" or tt == "crossbow":
+		var slot := Items.ammo_slot(p.inv, cur)
+		var txt := "No arrows" if tt == "bow" else "No bolts"
+		if slot >= 0:
+			var ammo: int = p.inv.id_at(slot)
+			txt = "%d %s" % [p.inv.count(ammo), Items.name_of(ammo)]
+		_text(Vector2(0, c.y + 74), txt, 16, Color(1, 1, 1, 0.85) if slot >= 0 else Color(1, 0.6, 0.5, 0.9), HORIZONTAL_ALIGNMENT_CENTER, vs.x)
+		if tt == "bow" and p.draw > 0.0:
+			bar = p.draw
+		elif tt == "crossbow" and not p.xbow_loaded and slot >= 0:
+			bar = 1.0 - clampf(p.xbow_t / Items.CROSSBOW_RELOAD_S, 0.0, 1.0)
+	elif tt == "spear" and p.charge > 0.0:
+		bar = p.charge
+	if bar >= 0.0:
+		var full := bar >= 0.999
+		canvas.draw_rect(Rect2(c + Vector2(-32, 18), Vector2(64, 6)), Color(0, 0, 0, 0.6))
+		canvas.draw_rect(Rect2(c + Vector2(-31, 19), Vector2(62 * bar, 4)), Color(1, 0.85, 0.4, 0.95) if full else Color(1, 1, 1, 0.9))
+
+
 func _draw_hud() -> void:
 	if G.game == null or G.player == null:
 		return
@@ -1010,6 +1042,7 @@ func _draw_hud() -> void:
 		if p.mine_progress > 0.0:
 			canvas.draw_rect(Rect2(c + Vector2(-32, 18), Vector2(64, 6)), Color(0, 0, 0, 0.6))
 			canvas.draw_rect(Rect2(c + Vector2(-31, 19), Vector2(62 * clampf(p.mine_progress, 0, 1), 4)), Color(1, 1, 1, 0.9))
+		_draw_ranged(p, c, vs)
 
 	if G.net != null and not G.net.my_backpacks.is_empty() and not p.dead:
 		_draw_backpack_markers(vs)

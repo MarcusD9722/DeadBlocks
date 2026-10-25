@@ -8,7 +8,8 @@ extends Node
 ##   2. Per region: a spatial hash of where its zombies are at the start of the tick.
 ##   3. Per region, zombies by id: think and move. Zombies only read the world and the start-of-tick
 ##      hash, and block damage is queued instead of applied.
-##   4. Move the Spitters' acid globs (in the order they were spat), then make this tick's new
+##   4. Move the Spitters' acid globs (in the order they were spat) and the players' arrows,
+##      bolts and thrown spears (M4.3, in the order they were shot), then make this tick's new
 ##      globs and the zombies Screamers called, sorted by zombie id.
 ##   5. Apply the queued block damage, sorted by zombie id.
 ## Animals still run their own _physics_process for now.
@@ -106,6 +107,7 @@ func _physics_process(delta: float) -> void:
 			if is_instance_valid(z) and not z.dead and z.is_inside_tree():
 				z.sim_tick(delta)
 	_tick_acids(delta)
+	_tick_projectiles(delta)
 	_flush_spits()
 	_flush_calls()
 	_flush_edits()
@@ -207,6 +209,40 @@ func _tick_acids(delta: float) -> void:
 		else:
 			a.queue_free()
 	acids = keep
+
+
+## Arrows, bolts and thrown spears in flight (M4.3), oldest first.
+var projectiles: Array = []
+var projectiles_made := 0
+
+
+## A player shoots or throws `item` (NetServer checked it): it flies from `from` along `dir`.
+func shoot(item: int, power: float, from: Vector3, dir: Vector3, shooter: Node) -> Node:
+	var p := preload("res://scripts/projectile.gd").new()
+	p.item = item
+	p.vel = dir.normalized() * p.speed(item, power)
+	p.dmg = p.damage(item, power)
+	p.shooter = shooter
+	p.net_id = G.game._new_mob_id()
+	G.game.mobs.add_child(p)
+	p.global_position = from
+	projectiles.append(p)
+	projectiles_made += 1
+	return p
+
+
+func _tick_projectiles(delta: float) -> void:
+	if projectiles.is_empty():
+		return
+	var keep := []
+	for p in projectiles:
+		if not is_instance_valid(p):
+			continue
+		if p.step(delta):
+			keep.append(p)
+		else:
+			p.queue_free()
+	projectiles = keep
 
 
 func _flush_spits() -> void:

@@ -49,8 +49,9 @@ func _init() -> void:
 		_terrain()
 
 
+## An item's icon: drawn from its 3D model once those are ready (ToolModels), else painted.
 func icon(id: int) -> Texture2D:
-	return icons.get(id)
+	return ToolModels.icons.get(id, icons.get(id))
 
 
 ## A block's icon in the outline of its shape (half block, ramp, pillar, door, hatch).
@@ -608,6 +609,21 @@ func _item_icon(id: int) -> Image:
 				_disc(img, 11.2, 4.8, 3.0, col)
 				_line(img, 9.6, 6.4, 13.4, 2.6, col.lightened(0.25), 1)
 				_disc(img, 9.2, 7.2, 1.2, col.darkened(0.25))
+			elif tool == "spear":
+				_line(img, 2, 14, 11, 5, handle, 1)
+				_line(img, 10, 6, 14, 2, col if id != Items.WOOD_SPEAR else _c(80, 58, 36), 2)
+			elif tool == "bow":
+				for k in 13:
+					var a := -1.0 + k / 6.0
+					_ipx(img, int(9.5 - 5.5 * cos(a * 1.1)), int(8 + a * 6.0), _c(140, 100, 56))
+				_line(img, 4, 2, 4, 14, _c(225, 220, 205), 1)
+			elif tool == "crossbow":
+				_line(img, 3, 13, 12, 4, _c(120, 86, 50), 2)
+				_line(img, 5, 3, 13, 11, _c(110, 112, 118), 1)
+			elif Items.info(id).has("ammo_of"):
+				_line(img, 3, 13, 12, 4, _c(196, 170, 120), 1)
+				_line(img, 11, 5, 13, 3, _c(90, 90, 98) if id == Items.STONE_ARROW else _c(170, 172, 180), 2)
+				_line(img, 2, 12, 4, 14, _c(230, 228, 220) if id != Items.IRON_ARROW else _c(200, 50, 40), 2)
 			elif id == Items.WOOD_CLUB:
 				_line(img, 3, 13, 11, 5, _c(130, 96, 56), 3)
 				_disc(img, 11.5, 4.5, 2.7, _c(152, 114, 68))
@@ -653,6 +669,8 @@ func _load_assets() -> bool:
 	block_normal = load(d + "blocks_normal.jpg")
 	leaves_albedo = load(d + "leaves_albedo.png")
 	leaves_normal = load(d + "leaves_normal.jpg")
+	ToolModels.block_tex = block_albedo as Texture2DArray
+	ToolModels.terrain_tex = terrain_albedo as Texture2DArray
 	return terrain_albedo != null and terrain_normal != null and block_albedo != null and leaves_albedo != null
 
 
@@ -758,6 +776,7 @@ func _terrain() -> void:
 	var ta := Texture2DArray.new()
 	ta.create_from_images(albs)
 	terrain_albedo = ta
+	ToolModels.terrain_tex = ta as Texture2DArray
 	var tn := Texture2DArray.new()
 	tn.create_from_images(nrms)
 	terrain_normal = tn

@@ -6,7 +6,6 @@ const SPRINT := 6.9
 const JUMP_V := 8.3
 const GRAVITY := 26.0
 const REACH := 5.0
-const MOB_REACH := 3.2
 
 var head: Node3D
 var cam: Camera3D
@@ -43,6 +42,17 @@ var air_min_vy := 0.0
 var spawn_point := Vector3.ZERO
 var sprinting := false
 var held_id := -1
+## The tool or weapon in hand as a 3D model (M4.3; other things in hand stay a flat picture).
+var held_model: Node3D = null
+## M4.3: the bow drawn (0..1), a spear held back to throw (0..1), the crossbow loaded or
+## reloading (seconds left), and the crosshair's mark for a hit (seconds left, Proto.HIT_*).
+var draw := 0.0
+var charge := 0.0
+var xbow_loaded := false
+var xbow_t := 0.0
+var hit_mark := 0.0
+var hit_kind := 0
+var _no_ammo_said := false
 var hints := {}
 var stuck_t := 0.0
 ## The camera's lag behind a step up a ledge (eases back to 0, so a step feels like a slope).
@@ -115,6 +125,8 @@ func _ready() -> void:
 	add_child(mine_crack)
 
 	inv = Inventory.new()
+	if G.net != null:
+		G.net.shot_hit.connect(_on_shot_hit)
 	if G.gfx != null:
 		sens = G.gfx.sens * 0.001
 		flashlight.shadow_enabled = G.gfx.opt["shadows"] >= 1
@@ -295,6 +307,7 @@ func _process(delta: float) -> void:
 	step_cam = move_toward(step_cam, 0.0, delta * maxf(5.0, absf(step_cam) * 9.0))
 	head.position.y = HEAD_Y + step_cam
 	swing = maxf(0.0, swing - delta * 4.0)
+	hit_mark = maxf(0.0, hit_mark - delta)
 	if st == "playing" or st == "menu" or st == "chat" or (st == "paused" and G.mode == "client"):
 		if sprinting:
 			stamina = maxf(0.0, stamina - 16.0 * delta)
@@ -303,9 +316,12 @@ func _process(delta: float) -> void:
 	if st == "playing":
 		_stick_look(delta)
 		_buttons()
+		_ranged(delta)
 		_handle_mining(delta)
 	else:
 		mine_progress = 0.0
+		draw = 0.0
+		charge = 0.0
 		outline.visible = false
 		_use_was = true  # (a button still held as a menu closes does nothing)
 		_attack_was = true
@@ -333,8 +349,84 @@ func _buttons() -> void:
 	_use_was = use_now
 	var attack_now := Input.is_action_pressed("attack") and captured
 	if attack_now and not _attack_was:
-		swing = 1.0
+		var cur := cur_id()
+		var tool := Items.tool_type(cur)
+		if tool == "crossbow":
+			if xbow_loaded:
+				_shoot(cur, 1.0)
+			elif Items.ammo_slot(inv, cur) < 0:
+				G.hud.msg("No bolts.")
+		elif tool == "bow":
+			if Items.ammo_slot(inv, cur) < 0:
+				G.hud.msg("No arrows.")
+		else:
+			swing = 1.0
 	_attack_was = attack_now
+
+
+## The bow (hold the attack button to draw, let go to shoot), the crossbow (it reloads by itself
+## while you have bolts; _buttons shoots it) and throwing a spear (hold the use button, let go).
+func _ranged(delta: float) -> void:
+	var cur := cur_id()
+	var tool := Items.tool_type(cur)
+	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	var attack_now := Input.is_action_pressed("attack") and captured
+	if tool == "bow" and attack_now and Items.ammo_slot(inv, cur) >= 0:
+		if draw == 0.0:
+			G.sfx.play("click", -10.0, 0.6)
+		draw = minf(1.0, draw + delta / Items.BOW_DRAW_S)
+	elif draw > 0.0:
+		if tool == "bow" and draw >= 0.2:
+			_shoot(cur, draw)
+		draw = 0.0
+	if tool == "crossbow" and not xbow_loaded:
+		if Items.ammo_slot(inv, cur) >= 0:
+			xbow_t -= delta
+			if xbow_t <= 0.0:
+				xbow_loaded = true
+				G.sfx.play("click", -6.0, 0.8)
+		else:
+			xbow_t = Items.CROSSBOW_RELOAD_S
+	if tool == "spear" and Input.is_action_pressed("use") and captured:
+		charge = minf(1.0, charge + delta / Items.SPEAR_CHARGE_S)
+	elif charge > 0.0:
+		if tool == "spear" and charge >= 0.3:
+			_shoot(cur, charge)
+		charge = 0.0
+
+
+## Let fly: an arrow from the bow, a bolt from the crossbow, or the spear itself. The server makes
+## the real one; ours flies at once (projectile.gd `local`).
+func _shoot(tool: int, power: float) -> void:
+	var tt := Items.tool_type(tool)
+	var from_slot := selected if tt == "spear" else Items.ammo_slot(inv, tool)
+	if from_slot < 0:
+		return
+	var item := inv.id_at(from_slot)
+	var aim := -cam.global_transform.basis.z
+	G.net.request_shoot(selected, power, aim, from_slot)
+	var pr := preload("res://scripts/projectile.gd").new()
+	pr.item = item
+	pr.local = true
+	pr.vel = aim * pr.speed(item, power)
+	G.game.mobs.add_child(pr)
+	pr.global_position = cam.global_position + aim * 0.35
+	match tt:
+		"bow":
+			G.sfx.play("bow", -3.0)
+		"crossbow":
+			G.sfx.play("xbow", -2.0)
+			xbow_loaded = false
+			xbow_t = Items.CROSSBOW_RELOAD_S
+			swing = 0.6  # (the kick)
+		"spear":
+			G.sfx.play("throw", -2.0)
+
+
+func _on_shot_hit(kind: int) -> void:
+	hit_mark = 0.35
+	hit_kind = kind
+	G.sfx.play("hit", -6.0 if kind == Proto.HIT_MOB else -2.0, 1.4 if kind == Proto.HIT_HEAD else 1.0)
 
 
 func _update_target() -> void:
@@ -343,7 +435,7 @@ func _update_target() -> void:
 	target = G.world.raycast(origin, fwd, REACH)
 	mob_target = null
 	var space := get_world_3d().direct_space_state
-	var q := PhysicsRayQueryParameters3D.create(origin, origin + fwd * MOB_REACH, 2)
+	var q := PhysicsRayQueryParameters3D.create(origin, origin + fwd * Items.reach(cur_id()), 2)
 	var r := space.intersect_ray(q)
 	if not r.is_empty():
 		var md := origin.distance_to(r["position"])
@@ -361,7 +453,8 @@ func _break_time(id: int) -> float:
 
 
 func _handle_mining(delta: float) -> void:
-	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED or not Input.is_action_pressed("attack"):
+	var tt := Items.tool_type(cur_id())
+	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED or not Input.is_action_pressed("attack") or tt == "bow" or tt == "crossbow":
 		mine_progress = 0.0
 		return
 	if mob_target != null and is_instance_valid(mob_target):
@@ -449,6 +542,11 @@ func place_meta(id: int) -> int:
 ## E (interact): open the station we look at, open or close a door or hatch, open a storage box
 ## or a bag.
 func interact() -> void:
+	var gid := ground_target()
+	if gid >= 0:
+		G.net.request_pickup(gid)
+		G.sfx.play("click", -6.0)
+		return
 	if not target.get("hit", false):
 		return
 	var id: int = target["id"]
@@ -470,6 +568,9 @@ func interact() -> void:
 
 ## What E would do on what we look at ("" for nothing), for the prompt by the crosshair.
 func interact_text() -> String:
+	var gid := ground_target()
+	if gid >= 0:
+		return "Pick up the " + Items.name_of(int(G.net.ground[gid]["item"]))
 	if not target.get("hit", false):
 		return ""
 	var id: int = target["id"]
@@ -484,6 +585,35 @@ func interact_text() -> String:
 	if Blocks.is_container(id):
 		return "Open the " + Blocks.NAMES[id].to_lower()
 	return ""
+
+
+## The spear or arrow lying in the world that we look at (M4.3): within reach and not behind the
+## block we look at. Its ground id, or -1.
+func ground_target() -> int:
+	if G.net == null or G.net.ground.is_empty():
+		return -1
+	var origin := cam.global_position
+	var fwd := -cam.global_transform.basis.z
+	var limit := REACH
+	if target.get("hit", false):
+		limit = minf(limit, float(target["dist"]) + 0.7)
+	var best := -1
+	var best_d := INF
+	for id in G.net.ground:
+		var g: Dictionary = G.net.ground[id]
+		var c: Vector3 = g["pos"]
+		if c.distance_to(origin) > limit + 1.0:
+			continue
+		var yaw: float = g["yaw"]
+		var pitch: float = g["pitch"]
+		var d := Vector3(-sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch))
+		var half := 0.8 if Items.tool_type(int(g["item"])) == "spear" else 0.25
+		var cp := Geometry3D.get_closest_points_between_segments(origin, origin + fwd * limit, c - d * half, c + d * half)
+		var along := origin.distance_to(cp[0])
+		if cp[0].distance_to(cp[1]) < 0.2 and along < best_d:
+			best_d = along
+			best = id
+	return best
 
 
 ## Holding a hammer and looking at a block: what it would do ("" when it can't), and whether we
@@ -661,13 +791,36 @@ func _update_held() -> void:
 		id = 0
 	if id != held_id:
 		held_id = id
-		if id <= 0:
-			held.visible = false
-		else:
+		held.visible = false
+		if held_model != null:
+			held_model.queue_free()
+			held_model = null
+		if id > 0 and ToolModels.has_model(id):
+			held_model = ToolModels.make(id, true)
+			cam.add_child(held_model)
+		elif id > 0:
 			held_mat.albedo_texture = G.tex.icon(id)
 			held.visible = true
 	var s := swing
 	if mine_progress > 0.0:
 		s = absf(sin(Time.get_ticks_msec() * 0.018))
+	if held_model != null:
+		_pose_held(s)
+		return
 	held.rotation = Vector3(deg_to_rad(-10.0 - s * 55.0), deg_to_rad(-20.0), deg_to_rad(8.0 + s * 10.0))
 	held.position = Vector3(0.3, -0.24 + s * 0.05, -0.5 - s * 0.06)
+
+
+## The tool or weapon in hand, placed in front of the camera (ToolModels.held_pose).
+func _pose_held(s: float) -> void:
+	var m := held_model
+	match Items.tool_type(held_id):
+		"bow":
+			var arrow := 0
+			if draw > 0.0:
+				var a := Items.ammo_slot(inv, held_id)
+				arrow = inv.id_at(a) if a >= 0 else 0
+			ToolModels.set_draw(m, draw, arrow)
+		"crossbow":
+			ToolModels.set_loaded(m, xbow_loaded)
+	m.transform = ToolModels.held_pose(held_id, s, draw, charge)

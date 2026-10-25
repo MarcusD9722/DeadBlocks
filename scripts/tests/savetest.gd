@@ -52,7 +52,8 @@ static func run() -> void:
 	reset["pin_key"] = PackedByteArray()  # after `dbctl reset-pin`
 	var packs := [{"pos": [5, 20, -7], "owner": "Bob", "left": 412.5, "inv": [[7, 5], null, [110, 1]]}]
 	var boxes := [{"pos": [1, 30, 2], "inv": [null, [Items.IRON_INGOT, 4]]}]
-	check(s.save_now(3, 19.5, chunks, {"bob": bob, "ann": reset}, {"backpacks": packs, "boxes": boxes}), "save_now wrote the world")
+	var ground := [{"item": Items.IRON_SPEAR, "pos": [3.5, 31.2, -1.25], "dir": [0.0, -0.6, -0.8], "left": 900.0}]
+	check(s.save_now(3, 19.5, chunks, {"bob": bob, "ann": reset}, {"backpacks": packs, "boxes": boxes, "ground": ground}), "save_now wrote the world")
 	s.release_lock()
 	s.free()
 
@@ -70,6 +71,8 @@ static func run() -> void:
 	check(same, "the 3 chunks came back identical, block states too (%d loaded)" % got.size())
 	check(s.boxes.size() == 1 and s.boxes[0]["pos"].map(func(v): return int(v)) == [1, 30, 2] and int(s.boxes[0]["inv"][1][1]) == 4,
 		"the storage boxes came back (%s)" % str(s.boxes))
+	check(s.ground.size() == 1 and int(s.ground[0]["item"]) == Items.IRON_SPEAR and is_equal_approx(float(s.ground[0]["left"]), 900.0),
+		"a spear lying in the world came back (%s)" % str(s.ground))
 	var players := s.load_players()
 	check(players.has("bob") and _same_account(players["bob"], bob), "Bob came back identical")
 	check(players.has("ann") and players["ann"]["pin_key"].is_empty(), "a reset PIN stays reset")

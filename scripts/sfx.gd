@@ -25,6 +25,11 @@ func _ready() -> void:
 	streams["scream"] = _scream()
 	streams["spit"] = _noise(0.16, 0.6, 2200.0)
 	streams["splash"] = _sizzle()
+	# M4.3: the bow's string, the crossbow, a thrown spear, an arrow striking.
+	streams["bow"] = _twang(98.0, 0.32)
+	streams["xbow"] = _twang(150.0, 0.2, 0.9)
+	streams["throw"] = _whoosh()
+	streams["arrow"] = _thump(0.09, 420.0, 150.0, 0.7)
 	for i in 10:
 		var p := AudioStreamPlayer.new()
 		add_child(p)
@@ -101,6 +106,37 @@ func _thump(dur: float, f0: float, f1: float, vol: float) -> AudioStreamWAV:
 		ph += lerpf(f0, f1, t) / RATE
 		y = (1.0 - a) * randf_range(-1, 1) + a * y
 		s[i] = (sin(ph * TAU) * 0.8 + y * 0.9) * vol * exp(-t * 5.0)
+	return _wav(s)
+
+
+## A plucked string: a falling tone with a snap of noise at the start (`snap` how much).
+func _twang(f: float, dur: float, snap := 0.5) -> AudioStreamWAV:
+	var n := int(dur * RATE)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var ph := 0.0
+	var y := 0.0
+	var a := _lp(2500.0)
+	for i in n:
+		var t := float(i) / n
+		ph += f * (1.0 - 0.25 * t) / RATE
+		y = (1.0 - a) * randf_range(-1, 1) + a * y
+		var tone := sin(ph * TAU) * 0.6 + sin(ph * TAU * 2.0) * 0.25 + sin(ph * TAU * 3.0) * 0.1
+		s[i] = (tone * exp(-t * 4.0) + y * snap * 1.5 * exp(-t * 30.0)) * 0.8
+	return _wav(s)
+
+
+## Air rushing past: noise that swells and fades.
+func _whoosh() -> AudioStreamWAV:
+	var n := int(0.3 * RATE)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var y := 0.0
+	for i in n:
+		var t := float(i) / n
+		var a := _lp(lerpf(500.0, 1400.0, t))
+		y = (1.0 - a) * randf_range(-1, 1) + a * y
+		s[i] = y * 1.8 * sin(PI * t) * sin(PI * t)
 	return _wav(s)
 
 

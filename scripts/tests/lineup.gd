@@ -1,7 +1,7 @@
 extends Node
 ## A picture of every zombie type side by side (night look in front, walking; Blood Moon look
 ## behind, standing) and an acid glob, then one of boars and other players' survivors (walking,
-## swinging, holding things), for checking how they look: `-- --lineup --shots=DIR` with a real
+## swinging, holding things: tool models, a torch, a bow, a spear), for checking how they look: `-- --lineup --shots=DIR` with a real
 ## renderer.
 
 const ZombieScript := preload("res://scripts/zombie.gd")
@@ -75,7 +75,8 @@ func _run() -> void:
 		b.rotation.y = PI * (0.75 if i == 0 else 1.25)
 		boars.append(b)
 	var people := []
-	var looks := [[Items.STONE_PICK, 4.4, 0], [Items.STONE_AXE, 0.0, Proto.F_SWING], [Blocks.TORCH, 0.0, 0], [0, 6.9, 0]]
+	var looks := [[Items.STONE_PICK, 4.4, 0], [Items.STONE_AXE, 0.0, Proto.F_SWING], [Blocks.TORCH, 0.0, 0], [Items.BOW, 0.0, 0],
+		[Items.IRON_SPEAR, 6.9, 0]]
 	for i in looks.size():
 		var rp := RemotePlayerScript.new()
 		rp.net_id = i

@@ -105,6 +105,7 @@ func _run() -> void:
 	await _hut(p, w, best)
 	await _slope_and_death(p, w, best)
 	await _building(p, w, best)
+	await _held(p, w, best)
 	await _settings()
 	get_tree().quit()
 
@@ -291,6 +292,64 @@ func _building(p, w, best: Vector3i) -> void:
 	_place(p, Vector3(o) + Vector3(5.5, 1.2, -4.0), PI, -0.22)
 	await _wait(2.0)
 	await _shot("17_build_doors")
+
+
+## M4.3: tools and weapons in hand (3D models), the hotbar's icons drawn from them, and a spear
+## and arrows stuck in the ground with one in flight.
+func _held(p, w, best: Vector3i) -> void:
+	var only := G.arg_value("--only=")
+	if only != "" and not "18_held".contains(only):
+		return
+	_clock(11.0)
+	_place(p, Vector3(best) + Vector3(0.5, 1.02, 0.5), 2.0, -0.12)
+	var items := [Items.IRON_PICK, Items.STONE_AXE, Items.STEEL_SWORD, Items.BOW, Items.CROSSBOW, Items.IRON_SPEAR,
+		Items.BLOOD_HAMMER, Items.STEEL_SHOVEL, Items.IRON_ARROW]
+	for i in 9:
+		p.inv.slots[i] = {"id": items[i], "n": 24 if i == 8 else 1}
+	p.inv.changed.emit()
+	var t0 := Time.get_ticks_msec()
+	while ToolModels.icons.is_empty() and Time.get_ticks_msec() - t0 < 30000:
+		await _wait(0.5)
+	p.set_process(false)  # (holds the poses below still)
+	var poses := [[0, "swing", 0.0, "18_held_1_pickaxe"], [0, "swing", 0.55, "18_held_2_pickaxe_swing"], [2, "swing", 0.0, "18_held_3_sword"],
+		[3, "draw", 0.85, "18_held_4_bow_drawn"], [4, "loaded", 1.0, "18_held_5_crossbow"], [5, "charge", 0.7, "18_held_6_spear_throw"],
+		[6, "swing", 0.0, "18_held_7_hammer"]]
+	for pose in poses:
+		p.select(pose[0])
+		p.swing = pose[2] if pose[1] == "swing" else 0.0
+		p.draw = pose[2] if pose[1] == "draw" else 0.0
+		p.charge = pose[2] if pose[1] == "charge" else 0.0
+		p.xbow_loaded = pose[1] == "loaded"
+		p._update_held()
+		await _shot(pose[3])
+	p.select(8)
+	p._update_held()
+	# A spear and arrows stuck in the ground in front of us, and an arrow on its way.
+	var fwd: Vector3 = -p.cam.global_transform.basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	var side: Vector3 = fwd.cross(Vector3.UP)
+	var base: Vector3 = p.global_position + fwd * 3.2
+	var stuck := [[Items.IRON_SPEAR, base + side * 0.6, 0.9], [Items.STONE_ARROW, base - side * 0.4, 0.7], [Items.IRON_ARROW, base - side * 0.9 + fwd * 0.5, 0.5]]
+	for k in stuck.size():
+		var at: Vector3 = stuck[k][1]
+		at.y = w.surface_y(floori(at.x), floori(at.z)) + 1.0
+		var yaw := atan2(-fwd.x, -fwd.z) + 0.4 * (k - 1)
+		var pitch: float = -stuck[k][2]
+		var d := Vector3(-sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch))
+		var half: float = 0.95 if k == 0 else 0.35
+		G.net.ground[60000 + k] = {"id": 60000 + k, "item": stuck[k][0], "pos": at - d * (half - 0.15), "yaw": yaw, "pitch": pitch}
+	G.game._sync_ground()
+	var fly := preload("res://scripts/projectile.gd").new()
+	fly.item = Items.STONE_ARROW
+	fly.view = true
+	G.game.mobs.add_child(fly)
+	fly.global_position = p.cam.global_position + fwd * 2.2 + side * 0.9 + Vector3(0, 0.1, 0)
+	fly.basis = Basis.looking_at(fwd + side * 0.4, Vector3.UP)
+	p.set_look(atan2(-fwd.x, -fwd.z), -0.35)
+	await _wait(1.0)
+	await _shot("18_held_8_ground")
+	p.set_process(true)
 
 
 func _settings() -> void:

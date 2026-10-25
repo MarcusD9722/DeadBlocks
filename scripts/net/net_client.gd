@@ -14,6 +14,9 @@ signal chat(from: String, text: String)
 signal notice(text: String, col: Color)
 ## S_BOX arrived (the box screen shows it).
 signal box_changed
+## M4.3: things lying in the world changed (`ground`), and one of your shots hit (Proto.HIT_*).
+signal ground_changed
+signal shot_hit(kind: int)
 
 const SEND_EVERY := 4          # physics ticks per movement update: 60 / 4 = 15 Hz
 const INTERP_DELAY := 0.1      # seconds remote players are drawn in the past
@@ -68,6 +71,8 @@ var box_pos := Vector3i.MIN
 var box_open := false
 var box_title := ""
 var box_slots: Array = []
+## Spears and arrows lying in the world (M4.3): id -> {"item", "pos", "yaw", "pitch"}.
+var ground := {}
 ## Our bed (S_BED), Vector3i.MIN without one: the death screen offers to wake up there.
 var bed := Vector3i.MIN
 var _req_seq := 0
@@ -257,6 +262,29 @@ func request_box(action: int, slot: int) -> void:
 	m.put_u16(_next_seq())
 	m.put_u8(action)
 	m.put_u8(slot)
+	_send(m.data_array)
+
+
+## Shoot the bow or crossbow in `slot`, or throw the spear in it (M4.3): power 0..1 along `aim`.
+## The arrow (or the spear) leaves the inventory at once, as a guess the server confirms.
+func request_shoot(slot: int, power: float, aim: Vector3, from_slot: int) -> void:
+	var seq := _next_seq()
+	var m := Proto.writer(Proto.C_SHOOT)
+	m.put_u16(seq)
+	m.put_u8(slot)
+	m.put_u8(clampi(roundi(power * 255.0), 0, 255))
+	Proto.put_vec3(m, aim)
+	_send(m.data_array)
+	if from_slot >= 0:
+		_guesses.append([seq, "remove", from_slot])
+		_apply_inventory()
+
+
+## Pick up a spear or arrow lying in the world (E).
+func request_pickup(id: int) -> void:
+	var m := Proto.writer(Proto.C_PICKUP)
+	m.put_u16(_next_seq())
+	m.put_u16(id)
 	_send(m.data_array)
 
 
@@ -591,6 +619,8 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 	var b := Proto.reader(data)
 	match data[0]:
 		Proto.S_WELCOME:
+			ground.clear()  # (the server sends what lies in the world right after)
+			ground_changed.emit()
 			var w := {}
 			w["net_id"] = b.get_u16()
 			w["seed"] = b.get_64()
@@ -727,6 +757,17 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 				var n := b.get_u8()
 				box_slots.append(null if id == 0 or n == 0 else {"id": id, "n": n})
 			box_changed.emit()
+		Proto.S_GROUND:
+			for i in b.get_u16():
+				var g := Proto.get_ground(b)
+				ground[g["id"]] = g
+			ground_changed.emit()
+		Proto.S_GROUND_GONE:
+			for i in b.get_u16():
+				ground.erase(b.get_u16())
+			ground_changed.emit()
+		Proto.S_HIT:
+			shot_hit.emit(b.get_u8())
 		Proto.S_BED:
 			var has := b.get_u8() == 1
 			var bp := Proto.get_bpos(b)

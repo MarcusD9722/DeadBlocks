@@ -98,6 +98,11 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - Blood Moon zombies drop Blood Shards to their killer (Brutes 3, Screamers and Spitters 2, half the others 1).
 - Controller support (Xbox layout), and every key can be changed in Settings.
 
+## Ranged weapons (0.15.0, from Marcus's list)
+- Spears (wood, stone, iron) stab further than other weapons, or are thrown by holding right-click; a thrown spear stays where it lands for anyone to pick up with E.
+- A bow (hold to draw) with stone and iron arrows, a crossbow (reloads by itself) with iron bolts. Headshots do double damage. Missed arrows often stay stuck and can be picked up.
+- Projectiles fly on the server and everyone sees them. Tools and weapons are rounded 3D models made in code with the game's photo textures, in hand and as icons.
+
 ## Building (decided 0.14.0, from Marcus's list)
 - Structure tiers like 7 Days to Die: **Wood Frame → Wooden (planks) → Reinforced Wood → Iron → Steel → Blood-forged**, each tougher against zombies (25, 60, 200, 400, 700, 1300). Every tier as a full block, half block, ramp and pillar.
 - Frames are made by hand and placed quickly; a **hammer** (Wooden Mallet by hand, Stone/Iron/Steel at the workbench, Blood Steel at the Blood Forge) held on a block upgrades it one tier with the materials in your inventory, or repairs zombie damage with its own material. Better hammers work faster.
@@ -107,10 +112,10 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 
 ## Character, progress and the look (decided after 0.14.0, Marcus: "a real game now")
 - **I** opens a character screen with tabs: Inventory, Armor, Players, Skills, Tribe. **M** opens a world map that each player uncovers by travelling (kept by the server with their account).
-- Players send **ally requests**; allies are marked on the map and with an on-screen waypoint and distance (like a dropped bag). **Tribes** like ARK's: a named group with a founder; members are allies with a tribe chat and shared tribe beds, and later tribe-only doors and boxes.
+- Allies and tribes are **separate** (Marcus): players send **ally requests**; allies are marked on the map and with an on-screen waypoint and distance (like a dropped bag). **Tribes** like ARK's: a named group with a founder; members are allies with a tribe chat and shared tribe beds, and later tribe-only doors and boxes.
 - **Experience** comes from zombie kills (tougher types and Blood Moon zombies give more); every level is a skill point for the skill tree. Levels and skills are kept on death.
 - **Armor and clothes** in head, chest, legs and feet slots.
-- **Look:** away from the blocky Minecraft feel, towards simple 3D like 7 Days to Die. The world stays a grid underneath (mining, building and zombies breaking things need it), but tools, weapons, trees, plants, rocks and dropped items become rounded 3D models from free CC0 sources; only built blocks look like blocks.
+- **Look (confirmed: the 7 Days to Die approach):** away from the blocky Minecraft feel, towards simple 3D like 7 Days to Die. The world stays a grid underneath (mining, building and zombies breaking things need it), but tools, weapons, trees, plants, rocks and dropped items become rounded 3D models from free CC0 sources; only built blocks look like blocks.
 
 ## Bases & ownership
 - Boxes and doors are **open to everyone by default** (as built in 0.14.0).
@@ -207,5 +212,6 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
 - **M4 — Survival depth** (plan: `docs/M4-plan.md`; Marcus's list after 0.12.0, which takes in the old "exploration & loot" milestone):
   - M4.1 (0.13.0, built): controls (E interacts, I inventory, keys in Settings, controller), crafting by station, tools in five tiers with shovels, Steel and Blood Steel, the Blood Forge, Blood Shards, Blood Brick, rounder ground and blocks.
   - M4.2 (0.14.0, built): structure tiers in four shapes, hammers that upgrade and repair, doors and hatches, storage boxes, bags opened with E, block states (facing, upper half).
-  - Planned (order revised after 0.14.0 with Marcus's second list): M4.3 thrown spears, bow, crossbow, and every tool and weapon as a 3D model; M4.4 the character screen (I with tabs: inventory, players, tribe), the world map (M, uncovered as you travel), ally requests and tribes with map markers and waypoints; M4.5 experience, levels, skill points and a skill tree, armor and clothes; M4.6 the look away from Minecraft (3D trees, plants, rocks, items; cleaner HUD); M4.7 the deep world and a living world (taller, caves, cave zombies, clouds, more animals, weather, ambient sound); M4.8 roads, towns, loot containers; M4.9 villages, farming, villagers, traders.
+  - M4.3 (0.15.0, built): spears (stab or throw, picked up again), bow and arrows, crossbow and bolts, headshots and hit marks, projectiles on the server, things lying in the world; every tool and weapon as a rounded 3D model, in hand and as icons.
+  - Planned (order revised after 0.14.0 with Marcus's second list): M4.4 the character screen (I with tabs: inventory, players, tribe), the world map (M, uncovered as you travel), ally requests and tribes with map markers and waypoints; M4.5 experience, levels, skill points and a skill tree, armor and clothes; M4.6 the look away from Minecraft (3D trees, plants, rocks, items; cleaner HUD); M4.7 the deep world and a living world (taller, caves, cave zombies, clouds, more animals, weather, ambient sound); M4.8 roads, towns, loot containers; M4.9 villages, farming, villagers, traders.
 - **M5 — Smarter zombies**: pathfinding toward the weakest part of a base.

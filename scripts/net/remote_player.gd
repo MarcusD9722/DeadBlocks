@@ -23,6 +23,12 @@ var light: SpotLight3D
 var held: Node3D
 var held_mat: StandardMaterial3D
 var held_id := 0
+## The crossed icons (for things without a 3D model), and the tool or weapon model (M4.3).
+var held_icons: Node3D
+var held_model: Node3D = null
+## How a tool model sits in the hand: along the grip of the survivor's own weapon (+Y of our
+## models along its +Z), or upright in the blocky figure's hand.
+var model_turn := Basis.IDENTITY
 var _swing := 0.0
 var _anim := 0.0
 var _spd := 0.0
@@ -54,6 +60,7 @@ func _ready() -> void:
 			held.transform = (grips[0].get_child(0) as Node3D).transform
 		icon_parent = _pivot(held, Vector3(0, 0, 0.2))
 		icon_parent.rotation.x = PI * 0.5
+		model_turn = Basis(Vector3.RIGHT, PI * 0.5)
 	else:
 		_build_boxes()
 		held = _pivot(arm_r, Vector3(0, -0.64, 0.14))  # in the hand, a little in front of it
@@ -75,6 +82,7 @@ func _ready() -> void:
 		mi.rotation.y = turn
 		icon_parent.add_child(mi)
 	held.visible = false
+	held_icons = icon_parent
 	label = Label3D.new()
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
@@ -164,8 +172,17 @@ func show_state(pos: Vector3, yaw: float, pitch: float, flags: int, hid: int, de
 	if hid != held_id:
 		held_id = hid
 		held.visible = hid > 0 and G.tex != null
-		if held.visible:
+		if held_model != null:
+			held_model.queue_free()
+			held_model = null
+		if held.visible and ToolModels.has_model(hid):
+			held_model = ToolModels.make(hid)
+			held_model.basis = model_turn  # (at the figure's own scale, like the kit's weapons)
+			held.add_child(held_model)
+			_set_icons(false)
+		elif held.visible:
 			held_mat.albedo_texture = G.tex.icon(hid)
+			_set_icons(true)
 	var dead := (flags & Proto.F_DEAD) != 0
 	var speed := 0.0
 	if _last_pos != Vector3.INF and delta > 0.0:
@@ -206,3 +223,9 @@ func _animate_rig(speed: float, flags: int, dead: bool, delta: float) -> void:
 		rig.move("Run", clampf(_spd / RUN_SPEED, 0.7, 1.8))
 	_dead = dead
 	rig.tick(delta)
+
+
+func _set_icons(on: bool) -> void:
+	for c in held_icons.get_children():
+		if c is MeshInstance3D:
+			c.visible = on

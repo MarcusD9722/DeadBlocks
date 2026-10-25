@@ -404,6 +404,7 @@ func _on_connected(id: int) -> void:
 	_send_to(id, w.data_array)
 	_send_backpacks(sp)
 	_send_bed(sp)
+	_send_ground(sp.peer_id, ground.keys())
 	var j := Proto.writer(Proto.S_JOIN)
 	j.put_u16(sp.net_id)
 	j.put_utf8_string(sp.player_name)
@@ -546,7 +547,7 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 		Proto.C_CHAT:
 			_on_chat(sp, b.get_utf8_string().strip_edges().left(Proto.MAX_CHAT))
 		Proto.C_BREAK, Proto.C_PLACE, Proto.C_SWAP, Proto.C_CRAFT, Proto.C_EAT, Proto.C_ATTACK, \
-				Proto.C_USE, Proto.C_UPGRADE, Proto.C_OPEN, Proto.C_BOX:
+				Proto.C_USE, Proto.C_UPGRADE, Proto.C_OPEN, Proto.C_BOX, Proto.C_SHOOT, Proto.C_PICKUP:
 			_on_request(sp, data[0], b)
 		Proto.C_CLOSE:
 			sp.open_box = Vector3i.MIN
@@ -595,6 +596,12 @@ func _on_request(sp, type: int, b: StreamPeerBuffer) -> void:
 		Proto.C_ATTACK:
 			var mob_id := b.get_u16()
 			_req_attack(sp, mob_id, b.get_u8())
+		Proto.C_SHOOT:
+			var slot := b.get_u8()
+			var power := b.get_u8() / 255.0
+			_req_shoot(sp, slot, power, Proto.get_vec3(b))
+		Proto.C_PICKUP:
+			_req_pickup(sp, b.get_u16())
 
 
 func _eye(sp) -> Vector3:
@@ -976,6 +983,155 @@ func _req_attack(sp, mob_id: int, slot: int) -> void:
 		return
 	sp.last_attack_ms = now
 	mob.hurt(Items.damage(sp.inv.id_at(slot)), sp.global_position, sp)
+
+
+# ------------------------------------------------------------ ranged weapons (M4.3)
+
+## Shoot the bow or crossbow in `slot` (its ammo comes from Items.ammo_slot), or throw the spear
+## in it, `power` 0..1 (how far the bow was drawn or the spear held back), along `aim`.
+func _req_shoot(sp, slot: int, power: float, aim: Vector3) -> void:
+	var tool: int = sp.inv.id_at(slot) if slot <= 8 else 0
+	var tt := Items.tool_type(tool)
+	var why := ""
+	if sp.dead or slot > 8:
+		why = "dead" if sp.dead else "bad slot"
+	elif tt != "bow" and tt != "crossbow" and tt != "spear":
+		why = "nothing to shoot"
+	elif aim.length() < 0.5:
+		why = "bad aim"
+	var from_slot := slot
+	if why == "" and tt != "spear":
+		from_slot = Items.ammo_slot(sp.inv, tool)
+		if from_slot < 0:
+			why = "no ammo"
+	if tt == "crossbow":
+		power = 1.0
+	# Drawing a bow, reloading the crossbow and holding a spear back take time (with room for lag).
+	var need: float = {"bow": Items.BOW_DRAW_S * power * 0.7, "crossbow": Items.CROSSBOW_RELOAD_S * 0.8,
+		"spear": 0.15 + Items.SPEAR_CHARGE_S * power * 0.7}.get(tt, 0.0)
+	var now := Time.get_ticks_msec()
+	if why == "" and now - sp.last_shot_ms < need * 1000.0:
+		why = "too fast"
+	if why != "":
+		sp.refused += 1
+		sp.refuse_why[why] = int(sp.refuse_why.get(why, 0)) + 1
+		return
+	sp.last_shot_ms = now
+	var item: int = sp.inv.id_at(from_slot)
+	sp.inv.remove_at(from_slot, 1)
+	var dir := aim.normalized()
+	G.sim.shoot(item, clampf(power, 0.0, 1.0), _eye(sp) + dir * 0.35, dir, sp)
+
+
+## A player's arrow, bolt or spear hit something: their crosshair shows it (Proto.HIT_*).
+func shot_hit(sp, kind: int) -> void:
+	if not (sp is Node) or not is_instance_valid(sp) or sp.peer_id == 0:
+		return
+	var m := Proto.writer(Proto.S_HIT)
+	m.put_u8(kind)
+	_send_to(sp.peer_id, m.data_array)
+
+
+## Things lying in the world: id -> {"item", "pos", "dir", "left" (seconds until it falls apart)}.
+var ground := {}
+var _next_ground := 1
+## How long a thrown spear, and an arrow or bolt, lie before they fall apart.
+const GROUND_SPEAR_S := 1200.0
+const GROUND_ARROW_S := 300.0
+## At most this many at once (the oldest goes first).
+const GROUND_MAX := 400
+
+
+func add_ground(item: int, pos: Vector3, dir: Vector3, left := -1.0) -> void:
+	if ground.size() >= GROUND_MAX:
+		var oldest: int = ground.keys().min()
+		ground.erase(oldest)
+		_ground_gone([oldest])
+	var id := _next_ground
+	_next_ground = _next_ground % 65000 + 1
+	var d := dir.normalized() if dir.length() > 0.001 else Vector3.FORWARD
+	if left < 0.0:
+		left = GROUND_SPEAR_S if Items.tool_type(item) == "spear" else GROUND_ARROW_S
+	ground[id] = {"item": item, "pos": pos, "dir": d, "left": left}
+	_send_ground(0, [id])
+
+
+## S_GROUND to one player (peer) or everyone (0).
+func _send_ground(peer: int, ids: Array) -> void:
+	var i := 0
+	while i < ids.size():
+		var n := mini(200, ids.size() - i)
+		var m := Proto.writer(Proto.S_GROUND)
+		m.put_u16(n)
+		for k in n:
+			var g: Dictionary = ground[ids[i + k]]
+			var d: Vector3 = g["dir"]
+			Proto.put_ground(m, ids[i + k], g["item"], g["pos"], atan2(-d.x, -d.z), asin(clampf(d.y, -1.0, 1.0)))
+		if peer == 0:
+			_broadcast(m.data_array)
+		else:
+			_send_to(peer, m.data_array)
+		i += n
+
+
+func _ground_gone(ids: Array) -> void:
+	if ids.is_empty():
+		return
+	var m := Proto.writer(Proto.S_GROUND_GONE)
+	m.put_u16(ids.size())
+	for id in ids:
+		m.put_u16(id)
+	_broadcast(m.data_array)
+
+
+func _tick_ground(delta: float) -> void:
+	if world_paused or ground.is_empty():
+		return
+	var gone := []
+	for id in ground:
+		ground[id]["left"] -= delta
+		if ground[id]["left"] <= 0.0:
+			gone.append(id)
+	for id in gone:
+		ground.erase(id)
+	_ground_gone(gone)
+
+
+## E on something lying in the world: it goes into the player's inventory.
+func _req_pickup(sp, id: int) -> void:
+	if sp.dead or not ground.has(id):
+		return
+	var g: Dictionary = ground[id]
+	if _eye(sp).distance_to(g["pos"]) > Proto.REACH + 0.8:
+		sp.refused += 1
+		sp.refuse_why["out of reach"] = int(sp.refuse_why.get("out of reach", 0)) + 1
+		return
+	if sp.inv.add(int(g["item"]), 1) > 0:
+		_msg(sp, "Your inventory is full.", Color(1, 0.6, 0.5))
+		return
+	ground.erase(id)
+	_ground_gone([id])
+
+
+## world.json's "ground".
+func ground_json() -> Array:
+	var out := []
+	for id in ground:
+		var g: Dictionary = ground[id]
+		var p: Vector3 = g["pos"]
+		var d: Vector3 = g["dir"]
+		out.append({"item": g["item"], "pos": [p.x, p.y, p.z], "dir": [d.x, d.y, d.z], "left": g["left"]})
+	return out
+
+
+func load_ground(list: Array) -> void:
+	for e in list:
+		if not (e is Dictionary and e.get("pos") is Array and e.get("dir") is Array and Items.name_of(int(e.get("item", 0))) != "?"):
+			continue
+		var p: Array = e["pos"]
+		var d: Array = e["dir"]
+		if p.size() == 3 and d.size() == 3:
+			add_ground(int(e["item"]), Vector3(p[0], p[1], p[2]), Vector3(d[0], d[1], d[2]), float(e.get("left", GROUND_ARROW_S)))
 
 
 ## A ServerPlayer was hit: tell its client (flash, sound, knockback).
@@ -1679,6 +1835,7 @@ func _physics_process(delta: float) -> void:
 	_tick += 1
 	_tick_players(delta)
 	_tick_backpacks(delta)
+	_tick_ground(delta)
 	_tick_lingering(delta)
 	_flush_world()
 	if _tick % SNAP_EVERY != 0:
@@ -1708,23 +1865,24 @@ func _physics_process(delta: float) -> void:
 
 
 func _send_mobs(to, mob_list: Array) -> void:
-	for pkt in mob_packets(_tick, to.global_position, mob_list):
+	for pkt in mob_packets(_tick, to.global_position, mob_list, to.net_id):
 		_send_raw(to.peer_id, pkt, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED, Proto.CH_STATE)
 
 
-## Every mob's snapshot data, gathered once per round: [pos, id, kind, yaw, flags].
+## Every mob's snapshot data, gathered once per round: [pos, id, kind, yaw, flags, the net id of
+## the player it belongs to (a projectile's shooter) or 0].
 static func mob_list(mobs_root: Node) -> Array:
 	var out := []
 	for m in mobs_root.get_children():
 		if m is Mob and m.net_id != 0:
-			out.append([m.global_position, m.net_id, m.net_kind(), m.rotation.y, m.net_flags()])
+			out.append([m.global_position, m.net_id, m.net_kind(), m.rotation.y, m.net_flags(), m.net_owner()])
 	return out
 
 
 ## S_MOBS for a player at `pos`: every mob of `mobs` (from mob_list) within Proto.MOB_RANGE, in
 ## packets of up to Proto.MOBS_PER_PACKET (always at least one, so an empty view clears the
 ## client's list). Static so the benchmark can time it for many clients.
-static func mob_packets(tick: int, pos: Vector3, mobs: Array) -> Array:
+static func mob_packets(tick: int, pos: Vector3, mobs: Array, viewer := 0) -> Array:
 	var origin := Vector2i(floori(pos.x / 16.0), floori(pos.z / 16.0))
 	var near := []
 	var r2 := Proto.MOB_RANGE * Proto.MOB_RANGE
@@ -1741,7 +1899,10 @@ static func mob_packets(tick: int, pos: Vector3, mobs: Array) -> Array:
 		s.put_u8(n)
 		for j in n:
 			var m: Array = near[i + j]
-			Proto.put_mob(s, origin, m[1], m[2], m[0], m[3], m[4])
+			var f: int = m[4]
+			if viewer != 0 and m.size() > 5 and m[5] == viewer:
+				f |= Proto.MF_YOURS  # (they shot it: their game shows its own copy)
+			Proto.put_mob(s, origin, m[1], m[2], m[0], m[3], f)
 		out.append(s.data_array)
 		i += maxi(n, 1)
 	return out
@@ -1823,7 +1984,7 @@ func save_world(now: bool) -> bool:
 		return false  # the next autosave picks these up
 	_acc_dirty.clear()
 	var chunks: Array = G.world.take_unsaved()
-	var meta := {"backpacks": backpacks_json(), "boxes": boxes_json()}
+	var meta := {"backpacks": backpacks_json(), "boxes": boxes_json(), "ground": ground_json()}
 	if now:
 		return saver.save_now(G.game.day, G.game.time, chunks, accs, meta)
 	_last_job_chunks = chunks

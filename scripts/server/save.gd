@@ -35,6 +35,8 @@ var time := 7.0
 ## world.json's "backpacks" and "boxes" as saved (NetServer reads them).
 var backpacks: Array = []
 var boxes: Array = []
+## world.json's "ground" (M4.3): spears and arrows lying in the world.
+var ground: Array = []
 var is_new := false
 var error := ""
 var warnings: Array = []
@@ -114,6 +116,7 @@ func _open_world(new_seed: int, new_world: bool) -> bool:
 	time = float(meta.get("time", 7.0))
 	backpacks = meta.get("backpacks", []) if meta.get("backpacks") is Array else []
 	boxes = meta.get("boxes", []) if meta.get("boxes") is Array else []
+	ground = meta.get("ground", []) if meta.get("ground") is Array else []
 	return true
 
 

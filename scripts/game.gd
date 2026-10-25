@@ -29,6 +29,7 @@ var hud: CanvasLayer
 const ZombieScript := preload("res://scripts/zombie.gd")
 const AnimalScript := preload("res://scripts/animal.gd")
 const AcidScript := preload("res://scripts/acid.gd")
+const ProjectileScript := preload("res://scripts/projectile.gd")
 const RemotePlayerScript := preload("res://scripts/net/remote_player.gd")
 const WorldScript := preload("res://scripts/world.gd")
 
@@ -36,6 +37,8 @@ const WorldScript := preload("res://scripts/world.gd")
 var remote_players := {}
 ## Client mode: pictures of the mobs the server runs, by net id.
 var mob_views := {}
+## Pictures of the spears and arrows lying in the world (M4.3): ground id -> node.
+var ground_views := {}
 ## Mob ids clients know mobs by (1-65535, wrapping).
 var _next_mob_id := 1
 
@@ -85,6 +88,8 @@ func _ready() -> void:
 		G.autojoin()
 		return
 	G.tex = Tex.new()
+	if DisplayServer.get_name() != "headless":
+		ToolModels.render_icons(G)  # the tools' icons, drawn from their 3D models (once per run)
 	var sfx := preload("res://scripts/sfx.gd").new()
 	add_child(sfx)
 	G.sfx = sfx
@@ -136,6 +141,8 @@ func _ready() -> void:
 		hud.hide_title()
 		hud.show_loading_overlay(true)
 		G.net.attach(world)
+		G.net.ground_changed.connect(_sync_ground)
+		_sync_ground()
 
 	if G.has_arg("--bench"):
 		var b := preload("res://scripts/bench.gd").new()
@@ -200,6 +207,7 @@ func _ready_server() -> void:
 	G.net_server = ns
 	ns.load_backpacks(saver.backpacks)
 	ns.load_boxes(saver.boxes)
+	ns.load_ground(saver.ground)
 	ns.load_beds()
 	state = "server"
 	print("SERVER world \"%s\" in %s: %s, seed %d, day %d %02d:%02d, %d edited chunks, %d players" % [
@@ -303,6 +311,10 @@ func _sync_mob_views(delta: float) -> void:
 				v = AnimalScript.new()
 			elif kind == Proto.MOB_ACID:
 				v = AcidScript.new()
+			elif kind == Proto.MOB_PROJ:
+				v = ProjectileScript.new()
+				var f: int = int(smp.back()[4]) if not smp.is_empty() else 0
+				v.item = Items.PROJECTILES[clampi(f & 63, 0, Items.PROJECTILES.size() - 1)]
 			else:
 				v = ZombieScript.new()
 				if Proto.KIND_TYPES.has(kind):
@@ -322,10 +334,37 @@ func _sync_mob_views(delta: float) -> void:
 			if is_instance_valid(gone):
 				if gone.net_kind() == Proto.MOB_ACID:
 					G.sfx.play_at("splash", gone.global_position, -4.0)
+				elif gone.net_kind() == Proto.MOB_PROJ and gone.visible:
+					G.sfx.play_at("arrow", gone.global_position, -3.0)  # (your own shot sounds by itself)
 				if gone.die_t < 0.0:
 					gone.queue_free()
 				# (a dead one finishes falling over and sinking away by itself)
 			mob_views.erase(id)
+
+
+## Show what lies in the world as G.net.ground says (spears and arrows that stuck, M4.3).
+func _sync_ground() -> void:
+	if G.net == null or mobs == null:
+		return
+	for id in ground_views.keys():
+		if not G.net.ground.has(id):
+			if is_instance_valid(ground_views[id]):
+				ground_views[id].queue_free()
+			ground_views.erase(id)
+	for id in G.net.ground:
+		if ground_views.has(id):
+			continue
+		var g: Dictionary = G.net.ground[id]
+		var v := ToolModels.make_flying(int(g["item"]))
+		if v == null:
+			continue
+		add_child(v)
+		var yaw: float = g["yaw"]
+		var pitch: float = g["pitch"]
+		var d := Vector3(-sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch))
+		v.global_position = g["pos"]
+		v.basis = Basis.looking_at(d, Vector3.UP if absf(d.y) < 0.99 else Vector3.RIGHT)
+		ground_views[id] = v
 
 
 # ------------------------------------------------------------ standing on the drawn ground
@@ -344,7 +383,7 @@ func _physics_process(_delta: float) -> void:
 	var i := 0
 	for v in mob_views.values():
 		i += 1
-		if i % 4 == _snap_i and is_instance_valid(v) and v.die_t < 0.0 and v.net_kind() != Proto.MOB_ACID:
+		if i % 4 == _snap_i and is_instance_valid(v) and v.die_t < 0.0 and v.net_kind() != Proto.MOB_ACID and v.net_kind() != Proto.MOB_PROJ:
 			v.ground_target = _ground_offset(space, v, v.half * 0.5)
 	for rp in remote_players.values():
 		i += 1

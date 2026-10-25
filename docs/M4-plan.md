@@ -35,7 +35,7 @@ themselves, so a release is the GitHub release plus `update.sh` on the Pi.
 |---|---|---|
 | **M4.1** (0.13.0) | Controls, controller, crafting by station, tool tiers up to Blood Steel, shovels, Blood Moon loot, more rounding | Everything after it adds items, blocks and screens; the keys and the crafting split come first |
 | **M4.2** (0.14.0) | Building: block format with room for many more blocks and their facing, structure tiers, hammer upgrades and repairs, doors, hatches, ramps, storage boxes, bags opened with E | Doors, ramps and tiers need the bigger block format; storage boxes are the base for all loot |
-| **M4.3** (0.15.0) | Ranged weapons (spears thrown and picked up again, bow and arrows, crossbow and bolts) and **every tool and weapon as a rounded 3D model** | The new weapons need models anyway; the first step away from the blocky look |
+| **M4.3** (0.15.0, built) | Ranged weapons (spears thrown and picked up again, bow and arrows, crossbow and bolts) and **every tool and weapon as a rounded 3D model** | The new weapons need models anyway; the first step away from the blocky look |
 | **M4.4** (0.16.0) | **Character screen and map**: I opens tabs (Inventory, Players, Tribe); M opens the world map, uncovered as you travel; ally requests and tribes, allies marked on the map and with waypoints | The tabs are the frame the next step fills; the map is wanted before the world grows |
 | **M4.5** (0.17.0) | **Progress**: experience bar, levels, skill points and a first skill tree (Skills tab); armor and clothes (Armor tab) | Fills the character screen; gives zombie kills a purpose |
 | **M4.6** (0.18.0) | **The look, away from Minecraft**: trees, bushes, grass and rocks as 3D models, items as 3D models on the ground, new icons, a cleaner HUD and menus | Before the deep world, so new worlds are made with it |
@@ -191,19 +191,53 @@ The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays a
 - The mesh test builds random land full of every shape and facing and finds no holes; the save
   test round-trips block states and boxes and still reads `DBC1` chunks.
 
-## M4.3 Ranged weapons and 3D tools (0.15.0) — outline
-- **Spears** (wood, stone, iron): stab, or hold right-click to throw; a thrown spear sticks where
-  it lands and is picked up again with E.
-- **Bow** with arrows (stone, iron tips), **crossbow** with bolts: hold to draw, release to shoot;
-  arrows that miss can sometimes be picked up again.
-- Projectiles fly on the server (like the spitter's acid) and everyone sees them.
-- **Every tool and weapon becomes a rounded 3D model** (pickaxes, axes, shovels, hammers, club,
-  swords, spears, bow, crossbow): in your hand, in other players' hands, and in flight. One shape
-  per tool, with the tier shown by its material (wood, stone, iron, steel, Blood Steel).
-- Models from free CC0 packs (Quaternius, Kenney and the like, credited in `assets/CREDITS.md`),
-  or built in code where no pack fits; held-item swings animated on the model.
-- Inventory icons are drawn from the models (rendered once when the game starts) instead of
-  pixel art.
+## M4.3 Ranged weapons and 3D tools (0.15.0) — built
+
+### Weapons
+| Weapon | Made | Use | Damage |
+|---|---|---|---|
+| Wooden Spear | by hand: 3 sticks | stab (left mouse, reaches 4.2 m instead of 3.2), or hold right-click and let go to throw (harder the longer you hold, full at 0.8 s) | stab 7, thrown up to 15 |
+| Stone Spear | workbench: 3 sticks, 1 cobblestone, 1 plant fibre | the same | stab 10, thrown up to 22 |
+| Iron Spear | workbench: 3 sticks, 1 iron ingot | the same | stab 14, thrown up to 30 |
+| Bow | by hand: 3 sticks, 3 plant fibre | hold left mouse to draw (full in 0.9 s), let go to shoot | the arrow's, less if not fully drawn |
+| Crossbow | workbench: 3 planks, 2 iron ingots, 3 plant fibre | click to shoot; it reloads itself in 1.6 s while you have bolts | the bolt's |
+| Stone Arrow (6) | by hand: 2 sticks, 1 cobblestone, 1 plant fibre | | 12 |
+| Iron Arrow (6) | workbench: 2 sticks, 1 iron ingot, 1 plant fibre | | 18 |
+| Iron Bolt (6) | workbench: 2 sticks, 1 iron ingot | | 28 |
+
+- A hit in the head (the top fifth of a standing zombie) does double damage.
+- The bow and crossbow shoot the first arrows (or bolts) in your inventory, the hotbar first.
+- The crosshair shows a mark for each hit (red in the head or for a kill); the ammo left shows
+  under it, and a bar while you draw, hold a spear back or the crossbow reloads.
+- Arrows and spears drop with distance (an arrow at full draw leaves at 58 m/s, a bolt at 62 m/s
+  and drops less, a spear at up to 24 m/s).
+
+### In the world
+- Projectiles fly on the server, like the Spitter's acid, and everyone sees them; your own shot
+  shows at once (your game flies its own copy).
+- A thrown spear always stays: stuck where it landed, or at the feet of what it hit. An arrow or
+  bolt that misses stays stuck in the block three times in five. **E** picks them up. Spears fall
+  apart after 20 minutes, arrows and bolts after 5; they are saved with the world.
+
+### Rounded 3D tools
+- Every tool and weapon is a smooth 3D model built in code (`scripts/tool_models.gd`): round
+  handles and shafts, curved pick heads, flared axe blades, dished spades, swords, a bow with a
+  string that draws back, a crossbow that shows its bolt. The tier shows in the material: wood
+  and stone use the game's photo textures (ambientCG), iron, steel and Blood Steel are metals.
+- In your hand (drawn in front of the world, so it never sinks into a wall), in other players'
+  hands, flying and lying in the world. Their icons are drawn from the models when the game starts.
+- (Free packs were looked at first: Kenney's CC0 tools are blocky low-poly, and no pack had a bow
+  or crossbow; models made in code match the textures and every tier.)
+
+### Tests
+- The autotest throws a spear at the ground, checks it lies there and that E picks it up, shoots a
+  zombie with the bow until it dies (hits marked on the crosshair, an arrow a shot) and hits one
+  with the crossbow, which loads itself.
+- The multiplayer test: the builder throws a spear, the watcher sees it lying there and picks it
+  up, and it is gone for the builder too.
+- The save test round-trips a spear lying in the world.
+- `--scenery --only=held` takes pictures of the weapons in hand, the new icons, and a spear and
+  arrows stuck in the ground with one in flight.
 
 ## M4.4 Character screen and map (0.16.0) — outline
 - **I opens the character screen**, with tabs along the top (mouse, or LB/RB on the controller):

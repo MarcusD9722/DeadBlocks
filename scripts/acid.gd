@@ -61,6 +61,10 @@ static func _near_body(p: Vector3, feet: Vector3) -> bool:
 	return p.distance_to(Vector3(feet.x, y, feet.z)) < 0.55
 
 
+func shootable() -> bool:
+	return false
+
+
 func net_kind() -> int:
 	return Proto.MOB_ACID
 

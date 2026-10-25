@@ -40,6 +40,25 @@ const STONE_HAMMER := 133
 const IRON_HAMMER := 134
 const STEEL_HAMMER := 135
 const BLOOD_HAMMER := 136
+## M4.3: spears (stab, or hold right-click to throw), the bow and the crossbow, and their ammo.
+const WOOD_SPEAR := 137
+const STONE_SPEAR := 138
+const IRON_SPEAR := 139
+const BOW := 140
+const CROSSBOW := 141
+const STONE_ARROW := 142
+const IRON_ARROW := 143
+const IRON_BOLT := 144
+## What can fly (thrown or shot): its index here is the projectile's type on the network.
+const PROJECTILES := [STONE_ARROW, IRON_ARROW, IRON_BOLT, WOOD_SPEAR, STONE_SPEAR, IRON_SPEAR]
+## Seconds to draw the bow fully; the crossbow's reload; holding a spear back to throw it hard.
+const BOW_DRAW_S := 0.9
+const CROSSBOW_RELOAD_S := 1.6
+const SPEAR_CHARGE_S := 0.8
+## Reach for hitting a mob: a spear reaches further than other things in hand.
+const REACH := 3.2
+const SPEAR_REACH := 4.2
+
 ## How fast each hammer tier works (seconds = HAMMER_S / speed).
 const HAMMER_SPEED := [1.0, 1.0, 1.5, 2.0, 2.6, 3.2]
 const HAMMER_S := 1.5
@@ -85,6 +104,16 @@ const DATA := {
 	134: {"name": "Iron Hammer", "tool": "hammer", "tier": 3, "dmg": 9.0},
 	135: {"name": "Steel Hammer", "tool": "hammer", "tier": 4, "dmg": 11.0},
 	136: {"name": "Blood Steel Hammer", "tool": "hammer", "tier": 5, "dmg": 13.0},
+	# "throw": damage of a thrown spear at full strength; "ammo": what a bow or crossbow shoots;
+	# "ammo_of": what an arrow or bolt is shot from, and "dmg" its damage at full draw.
+	137: {"name": "Wooden Spear", "tool": "spear", "tier": 1, "dmg": 7.0, "throw": 15.0},
+	138: {"name": "Stone Spear", "tool": "spear", "tier": 2, "dmg": 10.0, "throw": 22.0},
+	139: {"name": "Iron Spear", "tool": "spear", "tier": 3, "dmg": 14.0, "throw": 30.0},
+	140: {"name": "Bow", "tool": "bow", "tier": 1, "dmg": 3.0, "ammo": "arrow"},
+	141: {"name": "Crossbow", "tool": "crossbow", "tier": 3, "dmg": 4.0, "ammo": "bolt"},
+	142: {"name": "Stone Arrow", "ammo_of": "arrow", "dmg": 12.0},
+	143: {"name": "Iron Arrow", "ammo_of": "arrow", "dmg": 18.0},
+	144: {"name": "Iron Bolt", "ammo_of": "bolt", "dmg": 28.0},
 }
 
 
@@ -136,3 +165,31 @@ static func hammer_time(id: int) -> float:
 
 static func is_consumable(id: int) -> bool:
 	return info(id).has("food")
+
+
+## Reach for hitting a mob with this in hand.
+static func reach(id: int) -> float:
+	return SPEAR_REACH if tool_type(id) == "spear" else REACH
+
+
+## The bow or crossbow's ammo ("arrow", "bolt"), or "".
+static func ammo_kind(id: int) -> String:
+	return str(info(id).get("ammo", ""))
+
+
+## The inventory slot whose ammo a bow or crossbow shoots next: the first slot holding arrows
+## (or bolts), the hotbar first. -1 if there is none. The client and the server pick alike.
+static func ammo_slot(inv, tool: int) -> int:
+	var kind := ammo_kind(tool)
+	if kind == "":
+		return -1
+	for i in Inventory.SIZE:
+		var id: int = inv.id_at(i)
+		if id > 0 and str(info(id).get("ammo_of", "")) == kind:
+			return i
+	return -1
+
+
+## Can it be thrown or shot (an arrow, a bolt, a spear)?
+static func projectile_type(id: int) -> int:
+	return PROJECTILES.find(id)

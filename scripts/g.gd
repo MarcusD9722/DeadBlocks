@@ -2,8 +2,8 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.14.0"
-const BUILD_NAME := "Building"
+const VERSION := "0.15.0"
+const BUILD_NAME := "Ranged weapons"
 
 var game: Node = null
 var world: Node3D = null
@@ -211,8 +211,9 @@ const SOLO_NAME := "Player"
 const SOLO_PIN := "0000"
 
 
-func host_game(pname: String, pin: String, password: String, port: int, new_world := false) -> String:
-	var err: String = await _launch_server(pname, pin, password, port, HOST_WORLD, new_world, [])
+## (`world`: the multiplayer test hosts one of its own, so it never plays in the player's.)
+func host_game(pname: String, pin: String, password: String, port: int, new_world := false, world := HOST_WORLD) -> String:
+	var err: String = await _launch_server(pname, pin, password, port, world, new_world, [])
 	if err == "The server stopped right away.":
 		err += " Is something else using UDP port %d, or another game hosting? (Details: %s)" % [
 			port, ProjectSettings.globalize_path("user://logs/host_server.log")]

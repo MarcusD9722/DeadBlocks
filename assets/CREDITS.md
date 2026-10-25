@@ -24,6 +24,9 @@ Combined into the files in `assets/textures/` by `tools/make_textures.py` (1K-JP
 | Wooden Box | Planks023A |
 | Leaves (single leaves, arranged into a tile) | LeafSet024 |
 
+The tools and weapons (0.15.0) are models made in code (`scripts/tool_models.gd`); their wood and
+stone take the Planks037A and Rock030 pictures above.
+
 The ore spots, log rings, fabric (bed, backpack), forge glow, frame struts, iron bands, rivets,
 plate seams, handles and locks are painted by the script.
 
