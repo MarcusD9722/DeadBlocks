@@ -7,6 +7,7 @@ extends RefCounted
 ## Prints SAVETEST PASS/FAIL lines and ends with `SAVETEST DONE fails=N`.
 
 const SaveScript := preload("res://scripts/server/save.gd")
+const SocialScript := preload("res://scripts/server/social.gd")
 
 static var fails := 0
 
@@ -53,7 +54,15 @@ static func run() -> void:
 	var packs := [{"pos": [5, 20, -7], "owner": "Bob", "left": 412.5, "inv": [[7, 5], null, [110, 1]]}]
 	var boxes := [{"pos": [1, 30, 2], "inv": [null, [Items.IRON_INGOT, 4]]}]
 	var ground := [{"item": Items.IRON_SPEAR, "pos": [3.5, 31.2, -1.25], "dir": [0.0, -0.6, -0.8], "left": 900.0}]
-	check(s.save_now(3, 19.5, chunks, {"bob": bob, "ann": reset}, {"backpacks": packs, "boxes": boxes, "ground": ground}), "save_now wrote the world")
+	# M4.4: allies and a tribe (as NetServer's social keeps them).
+	var social := SocialScript.new(null)
+	social.load_json([["Bob", "ann"], ["ann", "ann"]], [{"id": 3, "name": "The Survivors", "leader": "bob", "members": ["bob", "Ann", "bob"]},
+		{"id": 4, "name": "Empty", "leader": "x", "members": []}])
+	check(social.is_ally("bob", "ann") and social.is_ally("ann", "bob") and not social.is_ally("ann", "ann") and social.same_tribe("ann", "bob")
+		and social.tribes.size() == 1 and social.tribes[3]["members"] == ["bob", "ann"] and social._next_tribe == 4,
+		"allies and tribes load (both ways, no doubles, no empty tribe)")
+	var extra := {"backpacks": packs, "boxes": boxes, "ground": ground, "allies": social.allies_json(), "tribes": social.tribes_json()}
+	check(s.save_now(3, 19.5, chunks, {"bob": bob, "ann": reset}, extra), "save_now wrote the world")
 	s.release_lock()
 	s.free()
 
@@ -73,8 +82,12 @@ static func run() -> void:
 		"the storage boxes came back (%s)" % str(s.boxes))
 	check(s.ground.size() == 1 and int(s.ground[0]["item"]) == Items.IRON_SPEAR and is_equal_approx(float(s.ground[0]["left"]), 900.0),
 		"a spear lying in the world came back (%s)" % str(s.ground))
+	var social2 := SocialScript.new(null)
+	social2.load_json(s.allies, s.tribes)
+	check(social2.is_ally("ann", "bob") and social2.tribes.has(3) and social2.tribes[3]["name"] == "The Survivors" and social2.tribes[3]["leader"] == "bob"
+		and social2.tribe_of.get("ann") == 3, "allies and the tribe came back (%s, %s)" % [str(s.allies), str(s.tribes)])
 	var players := s.load_players()
-	check(players.has("bob") and _same_account(players["bob"], bob), "Bob came back identical")
+	check(players.has("bob") and _same_account(players["bob"], bob), "Bob came back identical (with his explored map and pins)")
 	check(players.has("ann") and players["ann"]["pin_key"].is_empty(), "a reset PIN stays reset")
 	var bp: Dictionary = s.backpacks[0] if s.backpacks.size() == 1 else {}
 	var bp_inv: Array = bp.get("inv", [])
@@ -241,7 +254,16 @@ static func _account(name: String, rng: RandomNumberGenerator) -> Dictionary:
 	inv.slots[35] = {"id": Blocks.TORCH, "n": 5}
 	return {"name": name, "pin_key": pin, "fails": 0, "locked_until": 0.0,
 		"pos": Vector3(-120.25, 33.0, 4096.5), "yaw": 1.25, "health": 61.5, "food": 12.25, "kills": 9,
-		"bed": Vector3i(3, 31, -2), "play_s": 5400.0, "inv": inv}
+		"bed": Vector3i(3, 31, -2), "play_s": 5400.0, "inv": inv, "map": _map(rng), "pins": [["Base", 10, -20], ["Cave by the lake", -300, 77]]}
+
+
+## An explored map (M4.4): a few thousand chunks around the world, negative ones too.
+static func _map(rng: RandomNumberGenerator) -> Dictionary:
+	var seen := {}
+	for i in 3000:
+		seen[Vector2i(rng.randi_range(-200, 200), rng.randi_range(-200, 200))] = true
+	seen[Vector2i(-2147483647, 2147483647)] = true
+	return seen
 
 
 static func _same_account(a: Dictionary, b: Dictionary) -> bool:
@@ -250,6 +272,9 @@ static func _same_account(a: Dictionary, b: Dictionary) -> bool:
 			print("SAVETEST   %s differs: %s vs %s" % [key, a[key], b[key]])
 			return false
 	if not (a["pos"] as Vector3).is_equal_approx(b["pos"]) or a["bed"] != b["bed"]:
+		return false
+	if a.get("map", {}) != b.get("map", {}) or a.get("pins", []) != b.get("pins", []):
+		print("SAVETEST   the map (%d / %d chunks) or the pins differ: %s vs %s" % [a.get("map", {}).size(), b.get("map", {}).size(), a.get("pins"), b.get("pins")])
 		return false
 	return a["inv"].slots == b["inv"].slots
 

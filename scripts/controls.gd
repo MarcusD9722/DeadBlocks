@@ -21,6 +21,7 @@ const ACTIONS := [
 	["use", "Place / eat / use", MOUSE_RIGHT],
 	["interact", "Interact (stations, bags)", KEY_E],
 	["inventory", "Inventory and crafting", KEY_I],
+	["map", "World map", KEY_M],
 	["flashlight", "Flashlight", KEY_F],
 	["chat", "Chat", KEY_T],
 ]
@@ -37,7 +38,7 @@ const PAD := {
 	"look_up": [[JOY_AXIS_RIGHT_Y, -1.0]], "look_down": [[JOY_AXIS_RIGHT_Y, 1.0]],
 	"jump": [JOY_BUTTON_A], "sprint": [JOY_BUTTON_LEFT_STICK],
 	"attack": [[JOY_AXIS_TRIGGER_RIGHT, 1.0]], "use": [[JOY_AXIS_TRIGGER_LEFT, 1.0]],
-	"interact": [JOY_BUTTON_X], "inventory": [JOY_BUTTON_Y], "flashlight": [JOY_BUTTON_DPAD_UP],
+	"interact": [JOY_BUTTON_X], "inventory": [JOY_BUTTON_Y], "map": [JOY_BUTTON_BACK], "flashlight": [JOY_BUTTON_DPAD_UP],
 	"hotbar_prev": [JOY_BUTTON_LEFT_SHOULDER], "hotbar_next": [JOY_BUTTON_RIGHT_SHOULDER],
 	"pause": [JOY_BUTTON_START],
 	# Menus: A presses, B goes back (the D-pad and the left stick already move between buttons).
@@ -45,8 +46,8 @@ const PAD := {
 }
 ## What the controller does, for the Settings screen.
 const PAD_HELP := "Controller: left stick move, right stick look, A jump, click the left stick to sprint, " \
-	+ "right trigger mine / hit, left trigger place / use, X interact, Y inventory, LB / RB hotbar, " \
-	+ "D-pad up flashlight, Start pause. In menus: D-pad or stick to move, A to press, B to go back."
+	+ "right trigger mine / hit, left trigger place / use, X interact, Y inventory, Back map, LB / RB hotbar, " \
+	+ "D-pad up flashlight, Start pause. In menus: D-pad or stick to move, A to press, B to go back, LB / RB switch tabs."
 
 static var _keys := {}
 ## The last input came from a controller (prompts show its buttons).

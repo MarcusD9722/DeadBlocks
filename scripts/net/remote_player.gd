@@ -156,7 +156,15 @@ func _process(delta: float) -> void:
 	visible = true
 	var away: bool = (int(s["flags"]) & Proto.F_AWAY) != 0
 	label.text = o["name"] + (" (away)" if away else "")
-	label.modulate = Color(1, 1, 1, 0.55) if away else Color(1, 1, 1)
+	# M4.4: allies' names are blue and tribe members' green, and both show through walls;
+	# other players' names only where they can be seen.
+	var rel: int = G.net.relation(o["name"])
+	var col := Color(0.45, 1, 0.55) if rel & Proto.R_TRIBE else (Color(0.55, 0.8, 1) if rel & Proto.R_ALLY else Color(1, 1, 1))
+	col.a = 0.55 if away else 1.0
+	label.modulate = col
+	var through := rel & Proto.R_ALLY != 0
+	if label.no_depth_test != through:
+		label.no_depth_test = through
 	show_state(s["pos"], s["yaw"], s["pitch"], s["flags"], o.get("held", 0), delta)
 
 

@@ -318,6 +318,9 @@ var mesh_count := 0
 var sched_dirty := true
 ## Server: every block change is also appended here as [pos, id]; NetServer sends them out.
 var record_edits := false
+## M4.4 (client): chunks whose blocks arrived or changed, for the map (MapData repaints them).
+var track_map := false
+var map_dirty := {}
 var edits_out: Array = []
 ## Server: edited chunks not saved since their last change (see server/save.gd).
 var save_dirty := {}
@@ -604,6 +607,8 @@ func _gen_done(k: Vector2i, d: PackedByteArray) -> void:
 	c.has_data = true
 	gen_count += 1
 	_apply_pending(c)
+	if track_map:
+		map_dirty[k] = true
 
 
 func _task_mesh(k: Vector2i, ver: int, nb: Array) -> void:
@@ -1043,6 +1048,8 @@ func set_block(p: Vector3i, id: int, meta := 0) -> bool:
 	if record_edits:
 		edits_out.append([p, id, meta])
 		save_dirty[k] = true
+	if track_map:
+		map_dirty[k] = true
 	_clear_damage(p)
 	_dirty(k)
 	# The smooth ground near a chunk border is shaped by blocks up to SmoothMesher.P away.
@@ -1200,6 +1207,8 @@ func net_chunk(seq: int, k: Vector2i, data: PackedByteArray, meta := {}) -> void
 	sub_state[k] = SUB_FRESH
 	sub_seq[k] = seq
 	_apply_pending(c)
+	if track_map:
+		map_dirty[k] = true
 	for dz in range(-1, 2):
 		for dx in range(-1, 2):
 			_dirty(k + Vector2i(dx, dz))  # the smooth ground of all eight neighbours reads this chunk

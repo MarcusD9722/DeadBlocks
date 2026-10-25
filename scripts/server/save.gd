@@ -1,9 +1,11 @@
 extends Node
 ## The server's save files (M1.5). Layout, under the data folder (--data=DIR, default user://server):
 ##   worlds/<world>/world.json          format, versions, seed, day, time, backpacks (M2),
-##                                      storage boxes (M4.2)
+##                                      storage boxes (M4.2), things lying in the world (M4.3),
+##                                      allies and tribes (M4.4)
 ##   worlds/<world>/players/<name>.json name, PIN hash, position, look, health, food, kills,
-##                                      inventory, bed (M2), play time
+##                                      inventory, bed (M2), play time, the explored map and
+##                                      map pins (M4.4)
 ##   worlds/<world>/chunks/<x>_<z>.bin  edited chunks: header + SHA-256 + zstd(16 KB of blocks)
 ##                                      + block states (M4.2, "DBC2"; "DBC1" files have none)
 ##   worlds/<world>/world.lock          refuses a second server on the same world
@@ -17,7 +19,8 @@ extends Node
 
 ## 2 (M2): backpacks in world.json, and block ids older servers don't know.
 ## 3 (M4.2): block states in the chunk files (DBC2), storage boxes in world.json.
-const FORMAT := 3
+## 4 (M4.4): allies and tribes in world.json, each player's explored map and pins.
+const FORMAT := 4
 const CHUNK_MAGIC := "DBC2"
 const CHUNK_MAGIC_V1 := "DBC1"
 const LOCK_STALE_S := 90
@@ -37,6 +40,9 @@ var backpacks: Array = []
 var boxes: Array = []
 ## world.json's "ground" (M4.3): spears and arrows lying in the world.
 var ground: Array = []
+## world.json's "allies" ([[name, name], ...]) and "tribes" (M4.4, NetServer's social reads them).
+var allies: Array = []
+var tribes: Array = []
 var is_new := false
 var error := ""
 var warnings: Array = []
@@ -117,6 +123,8 @@ func _open_world(new_seed: int, new_world: bool) -> bool:
 	backpacks = meta.get("backpacks", []) if meta.get("backpacks") is Array else []
 	boxes = meta.get("boxes", []) if meta.get("boxes") is Array else []
 	ground = meta.get("ground", []) if meta.get("ground") is Array else []
+	allies = meta.get("allies", []) if meta.get("allies") is Array else []
+	tribes = meta.get("tribes", []) if meta.get("tribes") is Array else []
 	return true
 
 
@@ -160,6 +168,7 @@ func load_players() -> Dictionary:
 			"health": float(p.get("health", 100.0)), "food": float(p.get("food", 100.0)),
 			"kills": int(p.get("kills", 0)), "bed": _bpos(p.get("bed")),
 			"play_s": float(p.get("play_s", 0.0)), "inv": Inventory.new(),
+			"map": map_from_b64(str(p.get("map", "")), int(p.get("map_n", 0))), "pins": _pins(p.get("pins")),
 		}
 		var slots: Array = p.get("inv", [])
 		for i in mini(slots.size(), Inventory.SIZE):
@@ -182,6 +191,44 @@ static func _bpos(v) -> Vector3i:
 	return Vector3i.MIN
 
 
+## Map pins as saved: [[name, x, z], ...].
+static func _pins(v) -> Array:
+	var out := []
+	if v is Array:
+		for e in v:
+			if e is Array and e.size() == 3 and out.size() < Proto.MAX_PINS:
+				out.append([str(e[0]).left(24), int(e[1]), int(e[2])])
+	return out
+
+
+## The explored map as saved (M4.4): the chunk keys, sorted, as pairs of s32 packed with zstd,
+## in base64 ("map_n" says how many).
+static func map_b64(seen: Dictionary) -> String:
+	if seen.is_empty():
+		return ""
+	var keys := seen.keys()
+	keys.sort()
+	var a := PackedInt32Array()
+	a.resize(keys.size() * 2)
+	for i in keys.size():
+		a[i * 2] = keys[i].x
+		a[i * 2 + 1] = keys[i].y
+	return Marshalls.raw_to_base64(a.to_byte_array().compress(FileAccess.COMPRESSION_ZSTD))
+
+
+static func map_from_b64(s: String, n: int) -> Dictionary:
+	var out := {}
+	if s == "" or n <= 0 or n > 4000000:
+		return out
+	var raw := Marshalls.base64_to_raw(s).decompress(n * 8, FileAccess.COMPRESSION_ZSTD)
+	if raw.size() != n * 8:
+		return out
+	var a := raw.to_int32_array()
+	for i in n:
+		out[Vector2i(a[i * 2], a[i * 2 + 1])] = true
+	return out
+
+
 static func player_json(acc: Dictionary) -> Dictionary:
 	var inv := []
 	for sl in acc["inv"].slots:
@@ -189,9 +236,14 @@ static func player_json(acc: Dictionary) -> Dictionary:
 	var pos: Vector3 = acc["pos"]
 	var bed: Vector3i = acc["bed"]
 	var pin: PackedByteArray = acc["pin_key"]  # empty after a PIN reset
+	var seen: Dictionary = acc.get("map", {})
+	# The map is encoded again only after it grew (NetServer clears "map_b64" then).
+	if acc.get("map_b64") == null:
+		acc["map_b64"] = map_b64(seen)
 	return {"format": FORMAT, "name": acc["name"], "pin": Marshalls.raw_to_base64(pin) if not pin.is_empty() else "",
 		"pos": [pos.x, pos.y, pos.z], "yaw": acc["yaw"], "health": acc["health"], "food": acc["food"],
-		"kills": acc["kills"], "bed": null if bed == Vector3i.MIN else [bed.x, bed.y, bed.z], "play_s": acc.get("play_s", 0.0), "inv": inv}
+		"kills": acc["kills"], "bed": null if bed == Vector3i.MIN else [bed.x, bed.y, bed.z], "play_s": acc.get("play_s", 0.0), "inv": inv,
+		"map": acc["map_b64"], "map_n": seen.size(), "pins": (acc.get("pins", []) as Array).duplicate(true)}
 
 
 func player_file(key: String) -> String:

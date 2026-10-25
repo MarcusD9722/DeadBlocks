@@ -157,6 +157,8 @@ func _play() -> void:
 	await get_tree().process_frame
 	check(Input.is_action_pressed("attack"), "the right trigger mines / hits")
 	_pad_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
+	await get_tree().process_frame
+	await _character()
 
 	# A bed (M2): placing it makes it where we wake up after dying.
 	G.net.send_chat("/give plant_fiber 3")
@@ -507,6 +509,8 @@ func _continue_later() -> void:
 	check(await _until(func(): return _count(Items.STONE_SWORD) == 1 and _count(Items.WOOD_PICK) == picks + 1, 5.0),
 		"picked it up: the sword and the pickaxe are back")
 	check(G.net.bed != Vector3i.MIN and G.world.get_blockv(G.net.bed) == Blocks.BED, "our bed is still our respawn point")
+	check(G.net.pins.any(func(e): return e["name"] == "Autotest pin") and G.net.explored.size() >= 90,
+		"the map pin and the explored map are still there (%d chunks)" % G.net.explored.size())
 
 	# Without a bed we wake up somewhere random, on open ground (and not in the void).
 	var bed: Vector3i = G.net.bed
@@ -531,6 +535,59 @@ func _continue_later() -> void:
 	await _wait(3.0)
 	check(not p.dead and p.global_position.y > 1.0, "and still fine 3 s later")
 	await _wait(1.0)
+
+
+## The character screen (M4.4): M opens the map (the land around us painted, explored as the
+## server says), pins go on it with the mouse's code path and the controller's A and X, LB / RB
+## move between the tabs, a tribe is founded from the Tribe tab and left again, and I goes back
+## to the Inventory tab and closes the screen.
+func _character() -> void:
+	var g = G.game
+	var p = G.player
+	var hud = G.hud
+	await _press(KEY_M)
+	check(g.state == "menu" and hud.tab == "map" and hud.pages["map"].is_visible_in_tree(), "M opens the map")
+	var here := Vector2i(floori(p.global_position.x / 16.0), floori(p.global_position.z / 16.0))
+	check(G.net.explored.size() >= 90 and G.net.explored.has(here), "the server says we explored %d chunks, this one too" % G.net.explored.size())
+	check(await _until(func(): return g.map_data.painted.get(here, 0) == 2, 10.0), "the map has the chunk we are in, painted from its blocks")
+	var rk := Vector2i(floori(here.x / float(MapData.REGION)), floori(here.y / float(MapData.REGION)))
+	var img: Image = g.map_data.regions[rk]["img"] if g.map_data.regions.has(rk) else null
+	var px := Vector2i(floori(p.global_position.x) - rk.x * MapData.REGION_PX, floori(p.global_position.z) - rk.y * MapData.REGION_PX)
+	check(img != null and img.get_pixelv(px).a > 0.99, "with a coloured pixel where we stand (%s)" % (img.get_pixelv(px) if img != null else "no image"))
+	var dark := Vector2i(here.x + 40, here.y)
+	check(not G.net.explored.has(dark) and not g.map_data.painted.has(dark), "land 640 m away is still dark")
+	await _wait(0.5)
+	check(g.map_data.region_tex(rk) != null, "the map draws it")
+	await _shot("03_map")
+	var pins: int = G.net.pins.size()
+	G.net.request_pin_add(floori(p.global_position.x) + 40, floori(p.global_position.z), "Autotest pin")
+	check(await _until(func(): return G.net.pins.size() == pins + 1 and G.net.pins.back()["name"] == "Autotest pin", 5.0), "a named pin on the map")
+	check(await _until(func(): return hud.map_panel.has_focus(), 2.0), "the map has the focus (for the controller)")
+	await _pad_press(JOY_BUTTON_A)
+	check(await _until(func(): return G.net.pins.size() == pins + 2, 5.0), "the controller's A adds a pin in the middle (%s)" % G.net.pins.back().get("name", ""))
+	await _pad_press(JOY_BUTTON_X)
+	check(await _until(func(): return G.net.pins.size() == pins + 1, 5.0) and g.state == "menu", "X removes it again (and doesn't close the map)")
+	await _pad_press(JOY_BUTTON_RIGHT_SHOULDER)
+	check(hud.tab == "players" and hud.players_list.get_child_count() >= 1, "RB goes to the Players tab (us in the list)")
+	await _pad_press(JOY_BUTTON_RIGHT_SHOULDER)
+	check(hud.tab == "tribe" and hud.tribe_name_btn.visible, "RB again: the Tribe tab, offering to found one")
+	hud.tribe_name_edit.text = "Autotest Tribe"
+	hud._tribe_name_pressed()
+	check(await _until(func(): return G.net.tribe.get("name", "") == "Autotest Tribe" and G.net.tribe.get("leader", "") == G.net.player_name, 5.0),
+		"founded a tribe from the Tribe tab")
+	check(await _until(func(): return hud.tribe_leave_btn.visible and hud.tribe_name_btn.text.strip_edges() == "Rename", 2.0), "its leader can rename it or leave")
+	await _wait(0.3)
+	await _shot("04_tribe")
+	G.net.send_chat("/t NT hello tribe")
+	check(await _until(func(): return hud.chat_log.any(func(m): return "[Tribe] <%s> NT hello tribe" % G.net.player_name in str(m["text"])), 5.0), "tribe chat (/t)")
+	hud.tribe_leave_btn.pressed.emit()
+	check(await _until(func(): return G.net.tribe.is_empty(), 5.0), "left it again (the last one out ends it)")
+	await _pad_press(JOY_BUTTON_LEFT_SHOULDER)
+	check(hud.tab == "players", "LB goes back a tab")
+	await _press(KEY_I)
+	check(hud.tab == "inventory" and g.state == "menu", "I goes to the Inventory tab")
+	await _press(KEY_I)
+	check(g.state == "playing", "and I again closes the screen")
 
 
 ## Building (M4.2): a door both halves of which open and close with E, a storage box things go

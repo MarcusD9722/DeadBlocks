@@ -19,6 +19,7 @@ extends Node
 ##     0 = at the world spawn, as the older tests expect)
 
 const ServerPlayer := preload("res://scripts/server/server_player.gd")
+const Social := preload("res://scripts/server/social.gd")
 const SNAP_EVERY := 2       # physics ticks per snapshot: 30 / 2 = 15 Hz
 const TIME_EVERY := 5.0     # seconds between clock messages
 const PIN_TRIES := 5        # wrong PINs before a name is locked
@@ -58,8 +59,11 @@ var players := {}           # peer id -> ServerPlayer
 var lingering := {}
 var linger_s := LINGER_S
 ## Accounts by lower-case name: {name, pin_key, fails, locked_until, pos, yaw, health, food,
-## kills, spawn, inv, play_s}. Loaded from and saved to players/<name>.json by `saver`.
+## kills, spawn, inv, play_s, map (explored chunk keys -> true), pins ([[name, x, z], ...])}.
+## Loaded from and saved to players/<name>.json by `saver`.
 var accounts := {}
+## Allies and tribes (M4.4, server/social.gd).
+var social = Social.new(self)
 ## The save files (server/save.gd); null in tests that build a NetServer without saving.
 var saver: Node = null
 ## Backpacks dropped by dying, by block position: {"owner": lower-case name, "name", "slots": 36 x
@@ -287,7 +291,7 @@ func _on_auth(id: int, data: PackedByteArray) -> void:
 		inv.add(Items.BERRIES, 3)
 		inv.add(Blocks.TORCH, 2)
 		acc = {"name": pname, "pin_key": pk, "fails": 0, "locked_until": 0.0, "pos": G.game.spawn_pos, "yaw": 0.0, "inv": inv,
-			"health": 100.0, "food": 100.0, "kills": 0, "bed": Vector3i.MIN, "play_s": 0.0}
+			"health": 100.0, "food": 100.0, "kills": 0, "bed": Vector3i.MIN, "play_s": 0.0, "map": {}, "pins": []}
 		accounts[key] = acc
 		print("SERVER new player %s" % pname)
 	if replacing != 0:
@@ -405,11 +409,14 @@ func _on_connected(id: int) -> void:
 	_send_backpacks(sp)
 	_send_bed(sp)
 	_send_ground(sp.peer_id, ground.keys())
+	_send_map(sp, (acc["map"] as Dictionary).keys())
+	_send_pins(sp)
 	var j := Proto.writer(Proto.S_JOIN)
 	j.put_u16(sp.net_id)
 	j.put_utf8_string(sp.player_name)
 	_broadcast(j.data_array, id)
 	_broadcast(_notice_bytes("%s joined the game." % sp.player_name, Color(0.8, 1, 0.8)), id)
+	social.send_all()
 	print("SERVER %s joined from %s (%d connected)" % [sp.player_name, _ip_of(id), players.size()])
 
 
@@ -430,6 +437,7 @@ func _remove_player(id: int) -> void:
 	players.erase(id)
 	_store_account(sp)
 	acc_play_time(sp)
+	social.player_left(sp.player_name.to_lower())
 	# Players send movement 15 times a second, so a long silence means the connection died (a
 	# crash, Wi-Fi). Only then does the character stay behind: leaving through the menu or
 	# closing the game takes it out at once.
@@ -454,6 +462,7 @@ func _remove_player(id: int) -> void:
 		sp.linger_left = linger_s
 		lingering[sp.player_name.to_lower()] = sp
 		print("SERVER %s's character stays in the world for %d s" % [sp.player_name, int(linger_s)])
+		social.send_all()
 		if not _stopping:
 			save_world(false)  # their file now, not at the next autosave
 		return
@@ -473,6 +482,8 @@ func _take_out(sp, settle := true) -> void:
 	var l := Proto.writer(Proto.S_LEAVE)
 	l.put_u16(sp.net_id)
 	_broadcast(l.data_array)
+	if not _stopping:
+		social.send_all()
 	if not settle:
 		return
 	_update_world_paused(sp.player_name)
@@ -530,13 +541,21 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 			if solo:
 				_update_world_paused(sp.player_name)
 		Proto.C_RESPAWN:
-			var at_bed := b.get_u8() == 0
+			var where_to := b.get_u8()
+			var whose := b.get_utf8_string().to_lower() if where_to == 2 else ""
 			if sp.dead:
 				sp.dead = false
 				sp.health = 100.0
 				sp.food = maxf(sp.food, 60.0)
-				var spot := _bed_spot(accounts[sp.player_name.to_lower()]["bed"]) if at_bed else Vector3.INF
+				var key: String = sp.player_name.to_lower()
+				var spot := Vector3.INF
 				var where := "at their bed"
+				if where_to == 0:
+					spot = _bed_spot(accounts[key]["bed"])
+				elif where_to == 2 and social.same_tribe(key, whose):
+					# M4.4: at a tribe member's bed.
+					spot = _bed_spot(accounts[whose]["bed"])
+					where = "at %s's bed" % accounts[whose]["name"]
 				if spot == Vector3.INF:
 					spot = _random_spot()
 					where = "somewhere random" if respawn_radius > 0.0 else "at the world spawn"
@@ -551,6 +570,12 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 			_on_request(sp, data[0], b)
 		Proto.C_CLOSE:
 			sp.open_box = Vector3i.MIN
+		Proto.C_SOCIAL:
+			var action := b.get_u8()
+			var who := b.get_utf8_string()
+			social.on_request(sp, action, who, b.get_utf8_string())
+		Proto.C_PIN:
+			_req_pin(sp, b)
 
 
 # ------------------------------------------------------------ building, crafting, eating
@@ -1309,6 +1334,7 @@ func _set_bed(sp, p: Vector3i) -> void:
 	print("SERVER %s set their bed at %s" % [sp.player_name, p])
 	_msg(sp, "This bed is your respawn point now.", Color(0.7, 1, 0.7))
 	_send_bed(sp)
+	social.send_all()  # (tribe members can wake up at it)
 
 
 ## A bed was broken (by anyone, or a zombie): its owner has no respawn point any more.
@@ -1325,6 +1351,7 @@ func _lose_bed(p: Vector3i) -> void:
 	if id != 0:
 		_msg(players[id], "Your bed was destroyed! Place a new one to respawn there.", Color(1, 0.6, 0.5))
 		_send_bed(players[id])
+	social.send_all()
 
 
 func _send_bed(sp) -> void:
@@ -1518,6 +1545,7 @@ func _update_subs(sp) -> void:
 	if c == sp.sub_center:
 		return
 	sp.sub_center = c
+	_reveal(sp, c)
 	var gone := []
 	for k in sp.subs.keys():
 		if maxi(absi(k.x - c.x), absi(k.y - c.y)) > Proto.UNSUB_RADIUS:
@@ -1609,6 +1637,75 @@ func _send_edits(sp, groups: Dictionary) -> void:
 	_send_to(sp.peer_id, m.data_array)
 
 
+# ------------------------------------------------------------ the map (M4.4)
+
+## The chunks around a player count as explored: their map shows them. New ones go to the
+## player's game at once (and into their account).
+func _reveal(sp, c: Vector2i) -> void:
+	var key: String = sp.player_name.to_lower()
+	var acc = accounts.get(key)
+	if acc == null:
+		return
+	var seen: Dictionary = acc["map"]
+	var fresh := []
+	var r := ceili(Proto.REVEAL_RADIUS)
+	var r2 := Proto.REVEAL_RADIUS * Proto.REVEAL_RADIUS
+	for dz in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			if dx * dx + dz * dz <= r2:
+				var k := c + Vector2i(dx, dz)
+				if not seen.has(k):
+					seen[k] = true
+					fresh.append(k)
+	if fresh.is_empty():
+		return
+	acc["map_b64"] = null  # (encoded again at the next save)
+	_acc_dirty[key] = true
+	_send_map(sp, fresh)
+
+
+## S_MAP: explored chunks, in messages of up to 4000 (all of them on joining).
+func _send_map(sp, keys: Array) -> void:
+	var i := 0
+	while i < keys.size():
+		var part := keys.slice(i, i + 4000)
+		var m := Proto.writer(Proto.S_MAP)
+		Proto.put_keys(m, part)
+		_send_to(sp.peer_id, m.data_array, MultiplayerPeer.TRANSFER_MODE_RELIABLE, Proto.CH_BULK if keys.size() > 200 else Proto.CH_CONTROL)
+		i += part.size()
+
+
+func _send_pins(sp) -> void:
+	var pins: Array = accounts[sp.player_name.to_lower()]["pins"]
+	var m := Proto.writer(Proto.S_PINS)
+	m.put_u8(pins.size())
+	for e in pins:
+		m.put_32(e[1])
+		m.put_32(e[2])
+		m.put_utf8_string(e[0])
+	_send_to(sp.peer_id, m.data_array)
+
+
+## C_PIN: add a named pin to your map, or remove one.
+func _req_pin(sp, b: StreamPeerBuffer) -> void:
+	var key: String = sp.player_name.to_lower()
+	var pins: Array = accounts[key]["pins"]
+	if b.get_u8() == 0:
+		var x := b.get_32()
+		var z := b.get_32()
+		var nm := Proto.clean_pin_name(b.get_utf8_string())
+		if pins.size() >= Proto.MAX_PINS:
+			_msg(sp, "You have %d pins already. Remove one first." % Proto.MAX_PINS, Color(1, 0.65, 0.5))
+		else:
+			pins.append([nm if nm != "" else "Pin %d" % (pins.size() + 1), x, z])
+	else:
+		var i := b.get_u8()
+		if i < pins.size():
+			pins.remove_at(i)
+	_acc_dirty[key] = true
+	_send_pins(sp)
+
+
 func _on_move(sp, b: StreamPeerBuffer) -> void:
 	var mid := b.get_u8()
 	b.get_u16()  # seq (unused for now)
@@ -1677,6 +1774,12 @@ func _command(sp, text: String) -> void:
 		for p in lingering.values():
 			names.append(p.player_name + " (away)")
 		_send_to(sp.peer_id, _notice_bytes("Online: " + ", ".join(names), Color(0.8, 0.9, 1)))
+		return
+	if cmd == "/t" or cmd == "/tribe":
+		# M4.4: tribe chat.
+		var said := text.substr(text.find(" ") + 1).strip_edges() if text.contains(" ") else ""
+		if said != "":
+			social.tribe_chat(sp, said)
 		return
 	if cmd == "/kill":
 		# Anyone: stuck in a hole or under the world, die and respawn at your spawn point
@@ -1753,7 +1856,7 @@ func _command(sp, text: String) -> void:
 			_send_to(sp.peer_id, _notice_bytes("Gave you %d %s." % [n - left, Items.name_of(id)], Color(0.8, 0.9, 1)))
 			return
 		_:
-			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|night|horde|runner|brute|crawler|screamer|spitter|boar> [count] /clear /damage <x y z amount> /save", Color(0.8, 0.9, 1)))
+			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /t <tribe chat> /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|night|horde|runner|brute|crawler|screamer|spitter|boar> [count] /clear /damage <x y z amount> /save", Color(0.8, 0.9, 1)))
 			return
 	print("SERVER %s used %s" % [sp.player_name, text])
 	_broadcast(_time_bytes())
@@ -1984,7 +2087,8 @@ func save_world(now: bool) -> bool:
 		return false  # the next autosave picks these up
 	_acc_dirty.clear()
 	var chunks: Array = G.world.take_unsaved()
-	var meta := {"backpacks": backpacks_json(), "boxes": boxes_json(), "ground": ground_json()}
+	var meta := {"backpacks": backpacks_json(), "boxes": boxes_json(), "ground": ground_json(),
+		"allies": social.allies_json(), "tribes": social.tribes_json()}
 	if now:
 		return saver.save_now(G.game.day, G.game.time, chunks, accs, meta)
 	_last_job_chunks = chunks

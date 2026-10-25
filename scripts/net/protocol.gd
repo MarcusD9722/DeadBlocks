@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 10
+const PROTOCOL := 11
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -49,6 +49,12 @@ const S_BOX := 44        # block pos, open u8 (0: closed, it's gone or out of re
 const S_GROUND := 50     # count u16, count x ground record (see put_ground): new ones (all of them on joining)
 const S_GROUND_GONE := 51  # count u16, count x id u16: picked up or fallen apart
 const S_HIT := 52        # kind u8 (HIT_*): your arrow, bolt or spear hit something
+# M4.4: your map, your pins, allies and tribes.
+const S_MAP := 55        # count u16 + keys: chunks you have explored (all of them on joining, then new ones)
+const S_PINS := 56       # count u8, count x (x s32, z s32, name): your map pins
+const S_SOCIAL := 58     # players u8 x (name, net id u16 (0 offline), ping u16, rel u8 (R_*)),
+                         # tribe u8 (0 none, 1: id u32, name, leader name),
+                         # invites u8 x (tribe id u32, tribe name, from name)
 # Client -> server
 const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8, hotbar slot u8
 const C_READY := 31      # my chunks are loaded, count me as online
@@ -61,7 +67,7 @@ const C_CRAFT := 36      # seq, recipe index u8, times u8
 const C_EAT := 37        # seq, slot u8
 const C_ATTACK := 38     # seq, mob id u16, slot u8 (the weapon)
 const C_FALL := 39       # damage u8 from a fall (movement is the client's)
-const C_RESPAWN := 40    # where u8 (0 = at your bed, 1 = somewhere random), after dying
+const C_RESPAWN := 40    # where u8 (0 = at your bed, 1 = somewhere random, 2 = at a tribe member's bed), name (2: whose), after dying
 const C_PAUSE := 41      # paused u8: the pause menu is open (a solo game's server stops its world)
 # M4.2 (requests with a seq, like the ones above)
 const C_USE := 45        # seq, block pos: open or close a door or hatch (E)
@@ -72,9 +78,42 @@ const C_CLOSE := 49      # the box screen was closed
 # M4.3
 const C_SHOOT := 53      # seq, slot u8 (bow, crossbow or spear), power u8 (0-255), aim 3xf32
 const C_PICKUP := 54     # seq, ground id u16 (E on a spear or arrow lying in the world)
+# M4.4
+const C_PIN := 57        # action u8 (0 add: x s32, z s32, name; 1 remove: index u8)
+const C_SOCIAL := 59     # action u8 (SOC_*), name (a player), text (a tribe name, or a tribe id)
 const HIT_MOB := 1
 const HIT_HEAD := 2
 const HIT_KILL := 3
+## C_SOCIAL actions (M4.4). Allies: ask, accept, decline, remove. Tribes: found (text = name),
+## invite, join or refuse an invitation (text = tribe id), leave, kick, hand over the lead,
+## rename (text); refresh asks for an S_SOCIAL (pings).
+const SOC_ASK := 1
+const SOC_ACCEPT := 2
+const SOC_DECLINE := 3
+const SOC_REMOVE := 4
+const SOC_FOUND := 5
+const SOC_INVITE := 6
+const SOC_JOIN := 7
+const SOC_REFUSE := 8
+const SOC_LEAVE := 9
+const SOC_KICK := 10
+const SOC_LEAD := 11
+const SOC_RENAME := 12
+const SOC_REFRESH := 13
+## S_SOCIAL relations (bits): an ally, in your tribe, you asked them, they asked you, online,
+## away (their character stayed after they left), in a tribe (any), has a bed (a tribe member's
+## bed you can respawn at).
+const R_ALLY := 1
+const R_TRIBE := 2
+const R_ASKED := 4
+const R_ASKS_YOU := 8
+const R_ONLINE := 16
+const R_AWAY := 32
+const R_IN_TRIBE := 64
+const R_BED := 128
+const MAX_PINS := 50
+## Map (M4.4): chunks within this many of a player's chunk count as explored.
+const REVEAL_RADIUS := 5.5
 
 # Player record flags
 const F_SPRINT := 1
@@ -178,6 +217,20 @@ static func valid_pin(p: String) -> bool:
 	var re := RegEx.create_from_string("^[0-9]{4,8}$")
 	return re.search(p) != null
 
+
+## A tribe's name (M4.4): 3-24 letters, digits, spaces, _ - ' (not starting or ending with a space).
+static func valid_tribe_name(n: String) -> bool:
+	var re := RegEx.create_from_string("^[A-Za-z0-9_'-][A-Za-z0-9 _'-]{1,22}[A-Za-z0-9_'-]$")
+	return re.search(n) != null and not n.contains("  ")
+
+
+## A map pin's name: printable, at most 24 characters.
+static func clean_pin_name(n: String) -> String:
+	var out := ""
+	for ch in n.strip_edges():
+		if ch.unicode_at(0) >= 32:
+			out += ch
+	return out.left(24).strip_edges()
 
 static func writer(type: int) -> StreamPeerBuffer:
 	var b := StreamPeerBuffer.new()

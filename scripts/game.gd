@@ -39,6 +39,8 @@ var remote_players := {}
 var mob_views := {}
 ## Pictures of the spears and arrows lying in the world (M4.3): ground id -> node.
 var ground_views := {}
+## The world map's picture (M4.4, client only).
+var map_data: MapData = null
 ## Mob ids clients know mobs by (1-65535, wrapping).
 var _next_mob_id := 1
 
@@ -143,6 +145,10 @@ func _ready() -> void:
 		G.net.attach(world)
 		G.net.ground_changed.connect(_sync_ground)
 		_sync_ground()
+		world.track_map = true
+		map_data = MapData.new()
+		map_data.name = "MapData"
+		add_child(map_data)
 
 	if G.has_arg("--bench"):
 		var b := preload("res://scripts/bench.gd").new()
@@ -209,6 +215,7 @@ func _ready_server() -> void:
 	ns.load_boxes(saver.boxes)
 	ns.load_ground(saver.ground)
 	ns.load_beds()
+	ns.social.load_json(saver.allies, saver.tribes)
 	state = "server"
 	print("SERVER world \"%s\" in %s: %s, seed %d, day %d %02d:%02d, %d edited chunks, %d players" % [
 		saver.world_name, saver.world_dir, "new" if saver.is_new else "loaded", seed_v, day, int(time),
@@ -463,8 +470,22 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("inventory"):
 		if state == "playing":
 			open_inventory()
+		elif state == "menu" and hud.has_tabs() and hud.tab != "inventory":
+			hud.show_tab("inventory")
 		elif state == "menu":
 			close_inventory()
+	elif event.is_action_pressed("map"):
+		# M4.4: the world map is a tab of the character screen.
+		if state == "playing" and G.mode == "client":
+			open_inventory()
+			hud.show_tab("map")
+		elif state == "menu" and hud.has_tabs() and hud.tab != "map":
+			hud.show_tab("map")
+		elif state == "menu":
+			close_inventory()
+	elif state == "menu" and event is InputEventJoypadButton and hud.has_tabs() and \
+			(event.is_action_pressed("hotbar_prev") or event.is_action_pressed("hotbar_next")):
+		hud.next_tab(-1 if event.is_action_pressed("hotbar_prev") else 1)  # LB / RB
 	elif event.is_action_pressed("interact"):
 		if state == "playing":
 			player.interact()
@@ -622,10 +643,12 @@ func on_player_died() -> void:
 	hud.show_death(true)
 
 
-## at_bed: wake up at our bed (if we have one; otherwise the server picks a random spot).
-func respawn(at_bed := true) -> void:
+## at_bed: wake up at our bed (if we have one; otherwise the server picks a random spot);
+## whose: at that tribe member's bed instead (M4.4).
+func respawn(at_bed := true, whose := "") -> void:
 	if G.mode == "client":
-		G.net.request_respawn(at_bed)  # the server answers with S_CORRECT (where) and S_STATS (alive)
+		# The server answers with S_CORRECT (where) and S_STATS (alive).
+		G.net.request_respawn(2 if whose != "" else (0 if at_bed else 1), whose)
 		return
 	player.respawn()
 	on_respawned()

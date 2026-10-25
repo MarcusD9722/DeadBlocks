@@ -239,23 +239,78 @@ The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays a
 - `--scenery --only=held` takes pictures of the weapons in hand, the new icons, and a spear and
   arrows stuck in the ground with one in flight.
 
-## M4.4 Character screen and map (0.16.0) — outline
-- **I opens the character screen**, with tabs along the top (mouse, or LB/RB on the controller):
-  **Inventory** (today's screen with hand crafting), **Players**, **Tribe**; **Armor** and
-  **Skills** join in M4.5. E on a station still opens the inventory with that station's recipes.
-- **World map (M)**: a top-down picture of the land, uncovered around you as you travel (the rest
-  stays dark). Each player's map is their own, kept by the server and saved with their account, so
-  it follows them to another PC. Zoom and drag; markers for you, your bed, your bags, your allies
-  and tribe; your own pins with a name. Towns, villages and traders appear on it once found.
-- **Players tab**: who is on the server (name, ping, ally or tribe), **send an ally request**;
-  the other player gets a prompt to accept or decline; remove an ally.
-- **Allies** see each other on the map and as a **waypoint with the distance** on screen (like a
-  dropped bag's marker), and their name tags show through walls.
-- **Tribe tab** (like ARK): found a tribe with a name, invite players, leave, and the founder can
-  remove members or hand over leadership. Tribe members are allies, plus: a tribe chat channel,
-  respawning at any tribe bed, and (once locks come) tribe-only doors and boxes.
-- Allies and tribes are kept by the server (world.json), and work the same in Play solo, Host
-  game and on the Pi.
+## M4.4 Character screen and map (0.16.0) — built
+
+### The character screen
+- **I** opens it on the **Inventory** tab (your things and hand crafting, as before); **M** (the
+  controller's Back) opens it on the **Map** tab. The tabs along the top: **Inventory, Map,
+  Players, Tribe** (Armor and Skills join in M4.5). Click a tab, or LB / RB on the controller;
+  I or M again (or Esc, B) closes it. E on a station or a box still opens just that screen.
+
+### The world map
+- A top-down picture of the land: each block column in its top block's colour (grass, sand,
+  stone, trees, your buildings), shaded by the slope and the height. Only what you have
+  **explored** shows: everything within about 90 m of where you have been (5.5 chunks); the rest
+  stays dark.
+- Your map is **your own**: the server keeps it with your account (saved in your player file),
+  so it follows you to another PC and survives dying.
+- Land you are near is drawn from the real blocks, so your base and anything built shows; land
+  further away is drawn from the seed (as it was generated).
+- **Zoom** with the wheel (from about 2 km across to single blocks) and **drag** to move;
+  "Center on me" goes back. The coordinates and the distance from you show under the pointer.
+- Markers: **you** (an arrow pointing where you look), **your bed**, **your bags**, your
+  **allies** (blue) and **tribe** (green) with their names, and your **pins**.
+- **Pins**: right-click to add one (type a name) or to remove the one under the pointer; up to 50.
+  Pins also show on screen while you play, with their name and distance, like a bag's marker.
+- Controller: the left stick moves the map, the triggers zoom, A adds a pin in the middle, X
+  removes the one there, clicking the right stick centers on you.
+- Towns, villages and traders will appear on it once they exist (M4.8, M4.9).
+
+### Players and allies
+- The **Players** tab lists everyone on the server (with their ping), plus your allies and tribe
+  members who are offline, and what they are to you.
+- **Ask to be allies**: the other player gets a message and an Accept / Decline in their Players
+  tab. If they had asked you too, it's a yes from both. **Remove ally** ends it for both.
+- Allies see each other **on the map**, **on screen as a waypoint with the distance** (blue; more
+  than 8 m away), and their **name tags show through walls** (blue). Other players' name tags
+  now only show where you can see them.
+
+### Tribes (like ARK)
+- **Found a tribe** in the Tribe tab with a name (3-24 letters, digits or spaces; each name once
+  per server). The founder leads it.
+- Anyone in the tribe can **invite** a player who isn't in one (Players tab: "Invite to tribe");
+  the invitation shows in their Tribe tab with **Join** / **No thanks**.
+- Tribe members are allies (green on the map, on screen and on name tags), plus:
+  - **Tribe chat**: `/t message` (or `/tribe message`) goes to the members only.
+  - **Respawn at any member's bed**: the death screen offers "Respawn at <name>'s bed" for each
+    member who has one (up to four), besides your own bed and somewhere random.
+  - Later, with locks: tribe-only doors and boxes.
+- The leader can **remove** members, **hand over** the lead ("Make leader") and **rename** the
+  tribe. Anyone can **leave**; a leaving leader passes the lead to the longest member, and the
+  last one out ends the tribe.
+- Allies and tribes are kept by the server in `world.json` (save format 4); requests and
+  invitations last while the server runs. Everything works the same in Play solo (a tribe of
+  one), Host game and on the Pi.
+
+### Network and saving
+- Protocol 11: S_MAP (explored chunks: all of them on joining, then the new ones), S_PINS,
+  C_PIN, S_SOCIAL (the Players tab's list, your tribe, invitations), C_SOCIAL (ask, accept,
+  decline, remove; found, invite, join, refuse, leave, kick, lead, rename; refresh), and
+  C_RESPAWN can name a tribe member's bed.
+- Save format 4 (an older server refuses the world): each player file has the explored map
+  (zstd-packed chunk keys) and the pins; world.json has "allies" and "tribes".
+
+### Tests
+- The autotest opens the map with M (the chunk we stand in painted from its blocks, land far
+  away still dark), adds a pin and adds and removes one with the controller's A and X, moves
+  between the tabs with LB / RB, founds a tribe in the Tribe tab, talks in the tribe chat, leaves
+  it, and after Save and Quit and Continue the pin and the explored map are still there.
+- The multiplayer test: "a" asks "b" to be allies and "b" accepts (and "a"'s name tag then shows
+  through walls for "b"); "a" founds a tribe (a one-letter name is refused) and invites "b", who
+  joins and gets the tribe chat; "a" places a bed, "b" dies and wakes up beside it; "a" leaves
+  and "b" leads the tribe. Both get their explored map from the server.
+- The save test round-trips an explored map of 3000 chunks, pins, allies and a tribe.
+- `--scenery --only=screens` takes pictures of the Map, Players and Tribe tabs.
 
 ## M4.5 Progress: experience, skills, armor (0.17.0) — outline
 - **Experience** from zombie kills (more for Runners, Brutes, Screamers and Spitters, more again

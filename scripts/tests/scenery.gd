@@ -358,6 +358,43 @@ func _settings() -> void:
 	G.hud.settings.close()
 
 
+## The character screen's Map, Players and Tribe tabs (M4.4). No server runs here, so what it
+## would send is set by hand: an explored patch of land around us, two pins, an ally standing
+## nearby, a few other players, and a tribe we lead.
+func _character_tabs(p) -> void:
+	var n = G.net
+	var c := Vector2i(floori(p.global_position.x / 16.0), floori(p.global_position.z / 16.0))
+	for dz in range(-14, 15):
+		for dx in range(-20, 21):
+			if Vector2(dx, dz * 1.4).length() < 15.0 + sin(dx * 0.6) * 2.5 + cos(dz * 0.9) * 2.0:
+				n.explored[c + Vector2i(dx, dz)] = true
+	n.player_name = "Marcus"
+	n.host = "pi-server"
+	n.pins = [{"name": "Base", "x": floori(p.global_position.x) + 30, "z": floori(p.global_position.z) - 20},
+		{"name": "Iron cave", "x": floori(p.global_position.x) - 140, "z": floori(p.global_position.z) + 60}]
+	var now := Time.get_ticks_msec() / 1000.0
+	n.others[901] = {"name": "Anna", "samples": [[now + 1000.0, p.global_position + Vector3(60, 0, 35), 0.0, 0.0, 0]]}
+	n.social = [{"name": "Anna", "id": 901, "ping": 38, "rel": Proto.R_ALLY | Proto.R_TRIBE | Proto.R_ONLINE | Proto.R_BED | Proto.R_IN_TRIBE},
+		{"name": "Ben", "id": 0, "ping": 64, "rel": Proto.R_ONLINE | Proto.R_ASKS_YOU},
+		{"name": "Chris", "id": 0, "ping": 0, "rel": Proto.R_ALLY},
+		{"name": "Dana", "id": 0, "ping": 91, "rel": Proto.R_ONLINE}]
+	n.tribe = {"id": 1, "name": "The Survivors", "leader": "Marcus"}
+	var md := MapData.new()
+	G.game.add_child(md)
+	G.game.map_data = md
+	var t0 := Time.get_ticks_msec()
+	while md.painted.size() < n.explored.size() and Time.get_ticks_msec() - t0 < 60000:
+		await _wait(0.25)
+	print("SCENERY map: %d of %d chunks painted" % [md.painted.size(), n.explored.size()])
+	G.game.open_inventory()
+	for t in ["map", "players", "tribe"]:
+		G.hud.show_tab(t)
+		await _shot("screens_6_%s" % t, 0.6)
+	G.hud.map_panel.zoom = 0.6
+	await _shot("screens_6_map_far", 0.6)
+	G.game.close_inventory()
+
+
 ## `--only=screens`: the inventory (hand crafting), a workbench's and a Blood Forge's screens
 ## with the new tools in the bag, a storage box, the mallet's line under the crosshair, the
 ## Settings screen at its controls, and the E prompt.
@@ -403,6 +440,7 @@ func _screens(p, w, best: Vector3i) -> void:
 	await _shot("screens_4_box", 0.5)
 	G.hud.show_inventory(false)
 	G.game.state = "playing"
+	await _character_tabs(p)
 	# The mallet on a wood frame: the line under the crosshair says what an upgrade costs.
 	var fr := at + Vector3i(0, 0, -4)
 	w.set_block(fr, Blocks.WOOD_FRAME)

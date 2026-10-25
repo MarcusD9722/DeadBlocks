@@ -20,6 +20,9 @@ var death_root: Control
 var death_lbl: Label
 var death_bed: Button
 var death_random: Button
+## M4.4: "Respawn at <tribe member>'s bed" buttons, and whose they are now.
+var death_tribe: HBoxContainer
+var _death_tribe_names := []
 var title_menu: VBoxContainer
 var solo_btn: Button
 var join_panel: VBoxContainer
@@ -65,6 +68,25 @@ var box_btns: Array[Button] = []
 var box_lbls: Array[Label] = []
 ## The box or bag shown (Vector3i.MIN: the screen shows crafting).
 var box_at := Vector3i.MIN
+## M4.4: the character screen's tabs (I: Inventory, M: Map; LB / RB on the controller).
+const TABS := [["inventory", "Inventory"], ["map", "Map"], ["players", "Players"], ["tribe", "Tribe"]]
+const PAGE_SIZE := Vector2(1080, 560)
+var tab := "inventory"
+var tab_bar: HBoxContainer
+var tab_btns := {}
+var tab_hint: Label
+var pages := {}
+var map_panel: Control
+var map_pins_lbl: Label
+var players_list: VBoxContainer
+var players_head: Label
+var tribe_box: VBoxContainer
+## Below the tribe's list: the name field with "Found a tribe" or (the leader) "Rename", and
+## "Leave the tribe".
+var tribe_name_edit: LineEdit
+var tribe_name_btn: Button
+var tribe_leave_btn: Button
+var _social_t := 0.0
 
 
 func _ready() -> void:
@@ -91,6 +113,8 @@ func _ready() -> void:
 	G.net.chat.connect(_on_chat)
 	G.net.notice.connect(_on_notice)
 	G.net.box_changed.connect(_on_box_changed)
+	G.net.social_changed.connect(_on_social_changed)
+	G.net.pins_changed.connect(_on_pins_changed)
 
 
 func _style(bg: Color, border: Color, w: int) -> StyleBoxFlat:
@@ -128,8 +152,8 @@ static func controls_text() -> String:
 	return ("%s%s%s%s move   ·   %s jump   ·   %s sprint   ·   Mouse look\n" % [k.call("move_forward"), k.call("move_left"),
 		k.call("move_back"), k.call("move_right"), k.call("jump"), k.call("sprint")]) + \
 		("%s: mine / hit (hold to mine)   ·   %s: place, eat, use   ·   1-9 / wheel: hotbar\n" % [k.call("attack"), k.call("use")]) + \
-		("%s: open workbench, forge, campfire, bag   ·   %s: inventory and crafting   ·   %s: flashlight\n" % [k.call("interact"),
-		k.call("inventory"), k.call("flashlight")]) + \
+		("%s: open workbench, forge, campfire, bag   ·   %s: inventory, players, tribe   ·   %s: map   ·   %s: flashlight\n" % [k.call("interact"),
+		k.call("inventory"), k.call("map"), k.call("flashlight")]) + \
 		"Esc: pause   ·   F11: fullscreen   ·   F6: skip to night/dawn (testing)   ·   F7: jump to Blood Moon (testing)\n" + \
 		"Controller works too (see Settings → Controls)."
 
@@ -474,7 +498,7 @@ func hide_title() -> void:
 func _build_chat() -> void:
 	chat_edit = LineEdit.new()
 	chat_edit.visible = false
-	chat_edit.placeholder_text = "Say something (Enter to send, Esc to cancel). Admins: /give planks 20, /dusk, /bloodmoon, /time 12, /kick name"
+	chat_edit.placeholder_text = "Say something (Enter to send, Esc to cancel). /t message: your tribe only. Admins: /give planks 20, /dusk, /time 12"
 	chat_edit.max_length = Proto.MAX_CHAT
 	chat_edit.add_theme_font_size_override("font_size", 18)
 	chat_edit.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
@@ -602,6 +626,10 @@ func _build_death() -> void:
 	row.add_child(death_bed)
 	death_random = _button("Respawn somewhere random", func(): G.game.respawn(false))
 	row.add_child(death_random)
+	death_tribe = HBoxContainer.new()
+	death_tribe.alignment = BoxContainer.ALIGNMENT_CENTER
+	death_tribe.add_theme_constant_override("separation", 16)
+	vb.add_child(death_tribe)
 
 
 func show_death(on: bool) -> void:
@@ -627,6 +655,18 @@ func _death_text() -> void:
 	if G.mode == "client" and not has_bed:
 		t += "\n\nNo bed: you wake up somewhere random. Craft a Bed at a Workbench and place it to respawn there."
 	death_lbl.text = t
+	# Tribe members' beds (M4.4).
+	var names := []
+	if G.mode == "client":
+		for e in G.net.social:
+			if e["rel"] & Proto.R_TRIBE and e["rel"] & Proto.R_BED and names.size() < 4:
+				names.append(e["name"])
+	if names != _death_tribe_names:
+		_death_tribe_names = names
+		for c in death_tribe.get_children():
+			c.queue_free()
+		for nm in names:
+			death_tribe.add_child(_button("Respawn at %s's bed" % nm, func(): G.game.respawn(true, nm)))
 
 
 # ------------------------------------------------------------ inventory & crafting
@@ -641,9 +681,39 @@ func _build_inventory() -> void:
 	sb.set_content_margin_all(18)
 	panel.add_theme_stylebox_override("panel", sb)
 	cc.add_child(panel)
+	var main := VBoxContainer.new()
+	main.add_theme_constant_override("separation", 12)
+	panel.add_child(main)
+	tab_bar = HBoxContainer.new()
+	tab_bar.add_theme_constant_override("separation", 6)
+	main.add_child(tab_bar)
+	var group := ButtonGroup.new()
+	for t in TABS:
+		var tb := Button.new()
+		tb.text = t[1]
+		tb.toggle_mode = true
+		tb.button_group = group
+		tb.focus_mode = Control.FOCUS_ALL
+		tb.custom_minimum_size = Vector2(150, 40)
+		tb.add_theme_font_size_override("font_size", 18)
+		tb.pressed.connect(show_tab.bind(t[0]))
+		tab_bar.add_child(tb)
+		tab_btns[t[0]] = tb
+	tab_hint = _label("", 14, Color(0.7, 0.7, 0.7))
+	tab_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tab_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	tab_bar.add_child(tab_hint)
 	var hb := HBoxContainer.new()
 	hb.add_theme_constant_override("separation", 28)
-	panel.add_child(hb)
+	hb.custom_minimum_size = PAGE_SIZE
+	main.add_child(hb)
+	pages["inventory"] = hb
+	pages["map"] = _build_map_page()
+	pages["players"] = _build_players_page()
+	pages["tribe"] = _build_tribe_page()
+	for k in ["map", "players", "tribe"]:
+		pages[k].visible = false
+		main.add_child(pages[k])
 
 	var left := VBoxContainer.new()
 	left.add_theme_constant_override("separation", 8)
@@ -765,6 +835,8 @@ func show_box(on: bool, p := Vector3i.MIN) -> void:
 	craft_panel.visible = not on
 	box_panel.visible = on
 	inv_root.visible = on
+	tab_bar.visible = false
+	_show_page("inventory")
 	if on:
 		box_title_lbl.text = "Opening..."
 		for b in box_btns:
@@ -795,12 +867,15 @@ func _on_box_changed() -> void:
 	refresh_inventory()
 
 
-## station: "" for your own inventory (hand crafting), or the station opened with E.
+## station: "" for your own inventory (hand crafting) with the character screen's tabs, or the
+## station opened with E (no tabs).
 func show_inventory(on: bool, station := "") -> void:
 	inv_root.visible = on
 	box_at = Vector3i.MIN
 	craft_panel.visible = true
 	box_panel.visible = false
+	tab_bar.visible = station == ""
+	_show_page("inventory")
 	if on:
 		inv_station = station
 		inv_title.text = "HAND CRAFTING" if station == "" else Crafting.STATION_NAMES[station].to_upper()
@@ -909,6 +984,286 @@ func _on_craft(r: Dictionary) -> void:
 	G.net.request_craft(Crafting.RECIPES.find(r), times)
 
 
+# ------------------------------------------------------------ the character screen's tabs (M4.4)
+
+## The tabs show (I or M); not for a station's or a box's screen.
+func has_tabs() -> bool:
+	return inv_root.visible and tab_bar.visible
+
+
+func show_tab(t: String) -> void:
+	if not has_tabs():
+		return
+	_show_page(t)
+	match t:
+		"inventory":
+			refresh_inventory()
+			slot_btns[G.player.selected].grab_focus.call_deferred()
+		"map":
+			map_panel.opened()
+			_on_pins_changed()
+		"players", "tribe":
+			G.net.request_social(Proto.SOC_REFRESH)
+			_on_social_changed()
+			focus_first(pages[t])
+
+
+## LB / RB: the tab before or after this one.
+func next_tab(d: int) -> void:
+	var i := 0
+	for j in TABS.size():
+		if TABS[j][0] == tab:
+			i = j
+	show_tab(TABS[(i + d + TABS.size()) % TABS.size()][0])
+
+
+func _show_page(t: String) -> void:
+	tab = t
+	for k in pages:
+		pages[k].visible = k == t
+	(tab_btns[t] as Button).set_pressed_no_signal(true)
+	tab_hint.text = ("LB / RB: switch tabs" if Controls.pad_in_use else "%s inventory   ·   %s map   ·   Esc closes" % [
+		Controls.key_name(Controls.key_of("inventory")), Controls.key_name(Controls.key_of("map"))])
+
+
+func _page(heading: String) -> VBoxContainer:
+	var vb := VBoxContainer.new()
+	vb.custom_minimum_size = PAGE_SIZE
+	vb.add_theme_constant_override("separation", 8)
+	if heading != "":
+		vb.add_child(_label(heading, 22, Color(0.85, 0.95, 0.7)))
+	return vb
+
+
+func _small_button(text: String, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_ALL
+	b.custom_minimum_size = Vector2(0, 34)
+	b.add_theme_font_size_override("font_size", 15)
+	b.pressed.connect(cb)
+	return b
+
+
+func _build_map_page() -> Control:
+	var vb := _page("")
+	map_panel = preload("res://scripts/map_panel.gd").new()
+	map_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	map_panel.custom_minimum_size = Vector2(PAGE_SIZE.x, 480)
+	vb.add_child(map_panel)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 14)
+	vb.add_child(row)
+	row.add_child(_small_button("  Center on me  ", func(): map_panel.center_on_me()))
+	var help := _label("Drag to move   ·   Wheel to zoom   ·   Right-click: add a pin, or remove the one under it\n" +
+		"Controller: left stick moves, triggers zoom, A adds a pin in the middle, X removes it, right stick centers", 13, Color(0.7, 0.7, 0.7))
+	help.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(help)
+	map_pins_lbl = _label("", 14, Color(1, 0.7, 0.6))
+	row.add_child(map_pins_lbl)
+	return vb
+
+
+func _on_pins_changed() -> void:
+	if map_pins_lbl != null:
+		map_pins_lbl.text = "Pins: %d / %d" % [G.net.pins.size(), Proto.MAX_PINS]
+
+
+func _build_players_page() -> Control:
+	var vb := _page("PLAYERS")
+	players_head = _label("", 14, Color(0.75, 0.8, 0.85))
+	players_head.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vb.add_child(players_head)
+	var sc := ScrollContainer.new()
+	sc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(sc)
+	players_list = VBoxContainer.new()
+	players_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	players_list.add_theme_constant_override("separation", 6)
+	sc.add_child(players_list)
+	return vb
+
+
+func _build_tribe_page() -> Control:
+	var vb := _page("TRIBE")
+	var sc := ScrollContainer.new()
+	sc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(sc)
+	tribe_box = VBoxContainer.new()
+	tribe_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tribe_box.add_theme_constant_override("separation", 8)
+	sc.add_child(tribe_box)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	vb.add_child(row)
+	tribe_name_edit = LineEdit.new()
+	tribe_name_edit.custom_minimum_size = Vector2(300, 36)
+	tribe_name_edit.max_length = 24
+	tribe_name_edit.add_theme_font_size_override("font_size", 17)
+	tribe_name_edit.text_submitted.connect(func(_t): _tribe_name_pressed())
+	row.add_child(tribe_name_edit)
+	tribe_name_btn = _small_button("", _tribe_name_pressed)
+	row.add_child(tribe_name_btn)
+	tribe_leave_btn = _small_button("  Leave the tribe  ", func(): G.net.request_social(Proto.SOC_LEAVE))
+	row.add_child(tribe_leave_btn)
+	return vb
+
+
+## The name field's button: found a tribe with that name, or (its leader) rename it.
+func _tribe_name_pressed() -> void:
+	var nm := tribe_name_edit.text.strip_edges()
+	if nm == "":
+		return
+	G.net.request_social(Proto.SOC_FOUND if G.net.tribe.is_empty() else Proto.SOC_RENAME, "", nm)
+	tribe_name_edit.text = ""
+
+
+func _on_social_changed() -> void:
+	if not has_tabs():
+		return
+	if tab == "players":
+		_refresh_players()
+	elif tab == "tribe":
+		_refresh_tribe()
+
+
+## What a relation looks like in the lists.
+static func _status_text(e: Dictionary) -> String:
+	var rel: int = e["rel"]
+	if rel & Proto.R_ONLINE:
+		return "Online   ·   %d ms" % int(e["ping"])
+	if rel & Proto.R_AWAY:
+		return "Away (their character is still here)"
+	return "Offline"
+
+
+## Empty a list before it is rebuilt, remembering which of its buttons had the focus so
+## _refocus can give it back.
+func _clear(box: Container) -> void:
+	var fo := get_viewport().gui_get_focus_owner()
+	var key := ""
+	if fo != null and box.is_ancestor_of(fo):
+		key = str(fo.get_meta("key", ""))
+	box.set_meta("refocus", key)
+	for c in box.get_children():
+		box.remove_child(c)
+		c.queue_free()
+
+
+func _refocus(box: Container) -> void:
+	var key: String = box.get_meta("refocus", "")
+	box.set_meta("refocus", "")
+	if key == "":
+		return
+	for b in box.find_children("*", "BaseButton", true, false):
+		if b.get_meta("key", "") == key:
+			(b as Control).grab_focus.call_deferred()
+			return
+	focus_first(box)
+
+
+func _row(box: Container, cells: Array, buttons: Array) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	for c in cells:
+		var l := _label(c[0], c[2] if c.size() > 2 else 17, c[1])
+		l.custom_minimum_size = Vector2(c[3] if c.size() > 3 else 230, 0)
+		l.clip_text = true
+		row.add_child(l)
+	for b in buttons:
+		var btn := _small_button("  %s  " % b[0], b[1])
+		btn.set_meta("key", b[2])
+		row.add_child(btn)
+	box.add_child(row)
+
+
+func _refresh_players() -> void:
+	_clear(players_list)
+	var n := 1
+	for e in G.net.social:
+		if e["rel"] & (Proto.R_ONLINE | Proto.R_AWAY):
+			n += 1
+	players_head.text = ("%d playing on %s:%d.   " % [n, G.net.host, G.net.port] if not G.solo else "Play solo: nobody else is here.   ") + \
+		"Allies see each other on the map and on screen (with the distance), and their names show through walls. Tribe members are allies too."
+	_row(players_list, [[G.net.player_name + " (you)", Color(1, 1, 0.85)], ["Online   ·   %d ms" % G.net.ping_ms(), Color(0.75, 0.8, 0.75), 15, 260],
+		[("Tribe: " + G.net.tribe["name"]) if not G.net.tribe.is_empty() else "", Color(0.6, 1, 0.65), 15, 300]], [])
+	for e in G.net.social:
+		var rel: int = e["rel"]
+		var nm: String = e["name"]
+		var what := ""
+		var col := Color(1, 1, 1)
+		var btns := []
+		if rel & Proto.R_TRIBE:
+			what = "Tribe member"
+			col = Color(0.6, 1, 0.65)
+		elif rel & Proto.R_ALLY:
+			what = "Ally"
+			col = Color(0.6, 0.85, 1)
+			btns.append(["Remove ally", func(): G.net.request_social(Proto.SOC_REMOVE, nm), "rm:" + nm])
+		elif rel & Proto.R_ASKS_YOU:
+			what = "Wants to be your ally"
+			col = Color(1, 0.95, 0.6)
+			btns.append(["Accept", func(): G.net.request_social(Proto.SOC_ACCEPT, nm), "ok:" + nm])
+			btns.append(["Decline", func(): G.net.request_social(Proto.SOC_DECLINE, nm), "no:" + nm])
+		elif rel & Proto.R_ASKED:
+			what = "Ally request sent"
+			col = Color(0.8, 0.8, 0.8)
+		elif rel & Proto.R_ONLINE:
+			btns.append(["Ask to be allies", func(): G.net.request_social(Proto.SOC_ASK, nm), "ask:" + nm])
+		if not G.net.tribe.is_empty() and rel & Proto.R_ONLINE and not rel & Proto.R_IN_TRIBE:
+			btns.append(["Invite to tribe", func(): G.net.request_social(Proto.SOC_INVITE, nm), "inv:" + nm])
+		_row(players_list, [[nm, col], [_status_text(e), Color(0.75, 0.8, 0.75), 15, 260], [what, col, 15, 200]], btns)
+	_refocus(players_list)
+
+
+func _refresh_tribe() -> void:
+	_clear(tribe_box)
+	var t: Dictionary = G.net.tribe
+	if t.is_empty():
+		var intro := _label("You are not in a tribe. Found one and invite your friends from the Players tab:\n" +
+			"tribe members are allies, have their own chat (type /t and a message) and can respawn at each other's beds.", 16, Color(0.85, 0.88, 0.85))
+		tribe_box.add_child(intro)
+		tribe_name_edit.visible = true
+		tribe_name_edit.placeholder_text = "Tribe name (3-24 letters)"
+		tribe_name_btn.visible = true
+		tribe_name_btn.text = "  Found a tribe  "
+		tribe_leave_btn.visible = false
+		if not G.net.invites.is_empty():
+			tribe_box.add_child(_label("INVITATIONS", 18, Color(0.85, 0.95, 0.7)))
+		for inv in G.net.invites:
+			var tid := str(inv["id"])
+			_row(tribe_box, [["%s invites you to %s" % [inv["from"], inv["name"]], Color(0.6, 1, 0.65), 17, 520]],
+				[["Join", func(): G.net.request_social(Proto.SOC_JOIN, "", tid), "join:" + tid],
+				["No thanks", func(): G.net.request_social(Proto.SOC_REFUSE, "", tid), "refuse:" + tid]])
+		_refocus(tribe_box)
+		return
+	var lead: bool = t["leader"] == G.net.player_name
+	tribe_box.add_child(_label(str(t["name"]).to_upper(), 26, Color(0.6, 1, 0.65)))
+	tribe_box.add_child(_label("Leader: %s   ·   Tribe chat: type /t and a message   ·   Invite players from the Players tab" % t["leader"], 15, Color(0.8, 0.85, 0.8)))
+	tribe_box.add_child(_label("MEMBERS", 18, Color(0.85, 0.95, 0.7)))
+	_row(tribe_box, [[G.net.player_name + " (you)", Color(1, 1, 0.85)], ["Leader" if lead else "", Color(0.75, 0.8, 0.75), 15, 260],
+		["Has a bed" if G.net.bed != Vector3i.MIN else "No bed", Color(0.75, 0.8, 0.75), 15, 200]], [])
+	for e in G.net.social:
+		var rel: int = e["rel"]
+		if not rel & Proto.R_TRIBE:
+			continue
+		var nm: String = e["name"]
+		var btns := []
+		if lead:
+			btns.append(["Make leader", func(): G.net.request_social(Proto.SOC_LEAD, nm), "lead:" + nm])
+			btns.append(["Remove", func(): G.net.request_social(Proto.SOC_KICK, nm), "kick:" + nm])
+		_row(tribe_box, [[nm, Color(0.6, 1, 0.65)], [("Leader   ·   " if nm == t["leader"] else "") + _status_text(e), Color(0.75, 0.8, 0.75), 15, 260],
+			["Has a bed" if rel & Proto.R_BED else "No bed", Color(0.75, 0.8, 0.75), 15, 200]], btns)
+	tribe_name_edit.visible = lead
+	tribe_name_edit.placeholder_text = "A new name for the tribe"
+	tribe_name_btn.visible = lead
+	tribe_name_btn.text = "  Rename  "
+	tribe_leave_btn.visible = true
+	_refocus(tribe_box)
+
+
 # ------------------------------------------------------------ messages
 
 func msg(text: String, col := Color(1, 1, 1)) -> void:
@@ -938,6 +1293,12 @@ func _process(delta: float) -> void:
 		_refresh_pause_players()
 		if death_root.visible:
 			_death_text()
+	if has_tabs() and tab == "players":
+		# Pings: ask the server again every few seconds while the list shows.
+		_social_t -= delta
+		if _social_t <= 0.0:
+			_social_t = 3.0
+			G.net.request_social(Proto.SOC_REFRESH)
 	canvas.queue_redraw()
 
 
@@ -961,18 +1322,56 @@ func _draw_backpack_markers(vs: Vector2) -> void:
 	for e in G.net.my_backpacks:
 		var wp := Vector3(e[0]) + Vector3(0.5, 1.2, 0.5)
 		var dist: float = G.player.global_position.distance_to(wp)
-		var at: Vector2
-		if cam.is_position_behind(wp):
-			var local: Vector3 = cam.global_transform.affine_inverse() * wp
-			at = Vector2(40.0 if local.x < 0.0 else vs.x - 40.0, vs.y * 0.45)
-		else:
-			at = cam.unproject_position(wp).clamp(Vector2(40, 70), vs - Vector2(40, 130))
+		var at := _marker_at(cam, wp, vs)
 		var left := int(e[1])
 		var col := Color(1, 0.88, 0.45) if left > 60 else Color(1, 0.45, 0.35)
 		canvas.draw_texture_rect(G.tex.icon(Blocks.BACKPACK), Rect2(at - Vector2(14, 30), Vector2(28, 28)), false)
 		@warning_ignore("integer_division")
 		var mins := left / 60
 		_text(at + Vector2(-70, 14), "%d m  ·  %d:%02d" % [int(dist), mins, left % 60], 15, col, HORIZONTAL_ALIGNMENT_CENTER, 140)
+
+
+## Where a marker for a point in the world goes: over it, kept on the screen, or at the side
+## of the screen when it is behind us.
+func _marker_at(cam: Camera3D, wp: Vector3, vs: Vector2) -> Vector2:
+	if cam.is_position_behind(wp):
+		var local: Vector3 = cam.global_transform.affine_inverse() * wp
+		return Vector2(40.0 if local.x < 0.0 else vs.x - 40.0, vs.y * 0.45)
+	return cam.unproject_position(wp).clamp(Vector2(40, 70), vs - Vector2(40, 130))
+
+
+## M4.4: allies (blue) and tribe members (green) further than a few metres away, with the
+## distance, and our map pins (smaller, without a height).
+func _draw_waypoints(vs: Vector2) -> void:
+	var cam: Camera3D = G.player.cam
+	var me: Vector3 = G.player.global_position
+	for e in G.net.social:
+		var rel: int = e["rel"]
+		if rel & Proto.R_ALLY == 0 or e["id"] == 0:
+			continue
+		var smp: Dictionary = G.net.interpolated(e["id"])
+		if smp.is_empty():
+			continue
+		var pos: Vector3 = smp["pos"]
+		var dist := me.distance_to(pos)
+		if dist < 8.0:
+			continue  # (close by, the name tag is enough)
+		var col := Color(0.45, 1, 0.55) if rel & Proto.R_TRIBE else Color(0.5, 0.78, 1)
+		if rel & Proto.R_AWAY:
+			col.a = 0.55
+		var at := _marker_at(cam, pos + Vector3(0, 2.0, 0), vs)
+		canvas.draw_circle(at, 7.0, Color(0, 0, 0, 0.6 * col.a))
+		canvas.draw_circle(at, 5.0, col)
+		_text(at + Vector2(-90, -12), e["name"], 15, col, HORIZONTAL_ALIGNMENT_CENTER, 180)
+		_text(at + Vector2(-90, 24), "%d m" % int(dist), 14, col, HORIZONTAL_ALIGNMENT_CENTER, 180)
+	for p in G.net.pins:
+		var flat := Vector2(p["x"] + 0.5 - me.x, p["z"] + 0.5 - me.z).length()
+		if flat < 4.0 or flat > 2000.0:
+			continue
+		var at := _marker_at(cam, Vector3(p["x"] + 0.5, me.y + 1.6, p["z"] + 0.5), vs)
+		var col := Color(1, 0.55, 0.45, 0.85)
+		canvas.draw_colored_polygon(PackedVector2Array([at + Vector2(0, -6), at + Vector2(6, 0), at + Vector2(0, 6), at + Vector2(-6, 0)]), col)
+		_text(at + Vector2(-90, -10), "%s  ·  %d m" % [p["name"], int(flat)], 13, col, HORIZONTAL_ALIGNMENT_CENTER, 180)
 
 
 ## Ranged weapons (M4.3): a mark on the crosshair when a shot hits (red in the head or for a
@@ -1046,6 +1445,8 @@ func _draw_hud() -> void:
 
 	if G.net != null and not G.net.my_backpacks.is_empty() and not p.dead:
 		_draw_backpack_markers(vs)
+	if G.mode == "client" and st == "playing":
+		_draw_waypoints(vs)
 
 	# Hotbar
 	var sz := 58.0

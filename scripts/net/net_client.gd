@@ -17,6 +17,11 @@ signal box_changed
 ## M4.3: things lying in the world changed (`ground`), and one of your shots hit (Proto.HIT_*).
 signal ground_changed
 signal shot_hit(kind: int)
+## M4.4: your map grew (`explored`, the new keys), your pins changed, and allies and tribes
+## (`social`, `tribe`, `invites`).
+signal map_grew(keys: Array)
+signal pins_changed
+signal social_changed
 
 const SEND_EVERY := 4          # physics ticks per movement update: 60 / 4 = 15 Hz
 const INTERP_DELAY := 0.1      # seconds remote players are drawn in the past
@@ -75,6 +80,14 @@ var box_slots: Array = []
 var ground := {}
 ## Our bed (S_BED), Vector3i.MIN without one: the death screen offers to wake up there.
 var bed := Vector3i.MIN
+## M4.4: the chunks we have explored (S_MAP) -> true, and our map pins [{name, x, z}, ...].
+var explored := {}
+var pins: Array = []
+## Everyone in the Players tab (S_SOCIAL): [{name, id (net id, 0 offline), ping, rel (Proto.R_*)}],
+## our tribe ({} or {id, name, leader}), and tribe invitations [{id, name, from}].
+var social: Array = []
+var tribe := {}
+var invites: Array = []
 var _req_seq := 0
 var _guesses: Array = []
 var _deadline := 0.0
@@ -306,10 +319,45 @@ func report_fall(damage: float) -> void:
 	_send(m.data_array)
 
 
-func request_respawn(at_bed: bool) -> void:
+## where: 0 at our bed, 1 somewhere random, 2 at a tribe member's bed (whose).
+func request_respawn(where: int, whose := "") -> void:
 	var m := Proto.writer(Proto.C_RESPAWN)
-	m.put_u8(0 if at_bed else 1)
+	m.put_u8(where)
+	m.put_utf8_string(whose)
 	_send(m.data_array)
+
+
+## M4.4: allies and tribes (Proto.SOC_*): `who` a player's name, `text` a tribe's name or id.
+func request_social(action: int, who := "", text := "") -> void:
+	var m := Proto.writer(Proto.C_SOCIAL)
+	m.put_u8(action)
+	m.put_utf8_string(who)
+	m.put_utf8_string(text)
+	_send(m.data_array)
+
+
+func request_pin_add(x: int, z: int, pin_name: String) -> void:
+	var m := Proto.writer(Proto.C_PIN)
+	m.put_u8(0)
+	m.put_32(x)
+	m.put_32(z)
+	m.put_utf8_string(pin_name)
+	_send(m.data_array)
+
+
+func request_pin_remove(i: int) -> void:
+	var m := Proto.writer(Proto.C_PIN)
+	m.put_u8(1)
+	m.put_u8(i)
+	_send(m.data_array)
+
+
+## The relation (Proto.R_*) to another player by name, from the last S_SOCIAL (0 if unknown).
+func relation(pname: String) -> int:
+	for e in social:
+		if e["name"] == pname:
+			return e["rel"]
+	return 0
 
 
 ## Solo game: the pause menu opened or closed (the server stops or restarts the world).
@@ -644,6 +692,8 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			_inv_known = false
 			my_backpacks.clear()
 			bed = Vector3i.MIN
+			explored.clear()  # (the server sends the map, pins and players again)
+			pins.clear()
 			if reconnecting:
 				reconnecting = false
 				print("NET reconnected after %.1f s" % (_now() - _lost_at))
@@ -768,6 +818,36 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			ground_changed.emit()
 		Proto.S_HIT:
 			shot_hit.emit(b.get_u8())
+		Proto.S_MAP:
+			var keys := Proto.get_keys(b)
+			for k in keys:
+				explored[k] = true
+			map_grew.emit(keys)
+		Proto.S_PINS:
+			pins.clear()
+			for i in b.get_u8():
+				var x := b.get_32()
+				var z := b.get_32()
+				pins.append({"name": b.get_utf8_string(), "x": x, "z": z})
+			pins_changed.emit()
+		Proto.S_SOCIAL:
+			social.clear()
+			for i in b.get_u8():
+				var pname := b.get_utf8_string()
+				var id := b.get_u16()
+				var ping := b.get_u16()
+				social.append({"name": pname, "id": id, "ping": ping, "rel": b.get_u8()})
+			tribe = {}
+			if b.get_u8() == 1:
+				var tid := b.get_u32()
+				var tname := b.get_utf8_string()
+				tribe = {"id": tid, "name": tname, "leader": b.get_utf8_string()}
+			invites.clear()
+			for i in b.get_u8():
+				var tid := b.get_u32()
+				var tname := b.get_utf8_string()
+				invites.append({"id": tid, "name": tname, "from": b.get_utf8_string()})
+			social_changed.emit()
 		Proto.S_BED:
 			var has := b.get_u8() == 1
 			var bp := Proto.get_bpos(b)

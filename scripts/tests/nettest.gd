@@ -452,6 +452,8 @@ func _run_pair() -> void:
 		check(await _until(func(): return _count(Blocks.PLANKS) == 5 and _count(Blocks.TORCH) == torches + 2, 5.0),
 			"mined it and got %s's things" % other)
 
+	await _social(me, other, oid)
+
 	G.net.send_chat("NT checked")
 	check(await _until(func(): return _chat_from(other, "NT checked") != "", 100.0), "%s finished its checks" % other)
 	var fin: Vector3 = p.global_position
@@ -461,6 +463,74 @@ func _run_pair() -> void:
 		check(await _until(func(): return _has_notice("%s left the game." % other), 5.0), "got the leave notice")
 	else:
 		await _wait(0.5)
+
+
+## M4.4: "a" asks "b" to be allies and "b" accepts; "a" founds a tribe and invites "b", who
+## joins and gets the tribe chat; "b" dies and wakes up at "a"'s bed; "a" leaves and "b" leads
+## the tribe. Both have their explored map from the server.
+func _social(me: String, other: String, oid: int) -> void:
+	var p = G.player
+	var rel := func(): return G.net.relation(other)
+	if role == "a":
+		G.net.send_chat("NT social")
+		G.net.request_social(Proto.SOC_ASK, other)
+		check(await _until(func(): return rel.call() & Proto.R_ASKED != 0, 10.0), "asked %s to be allies" % other)
+		check(await _until(func(): return rel.call() & Proto.R_ALLY != 0, 30.0), "%s said yes: we are allies" % other)
+		G.net.request_social(Proto.SOC_FOUND, "", "x")
+		check(await _until(func(): return G.hud.msgs.any(func(m): return "A tribe's name is" in String(m["text"])), 10.0) and G.net.tribe.is_empty(),
+			"a one-letter tribe name is refused")
+		G.net.request_social(Proto.SOC_FOUND, "", "Nettest Tribe")
+		check(await _until(func(): return G.net.tribe.get("name", "") == "Nettest Tribe" and G.net.tribe.get("leader", "") == me, 10.0),
+			"founded the tribe Nettest Tribe")
+		G.net.request_social(Proto.SOC_INVITE, other)
+		check(await _until(func(): return rel.call() & Proto.R_TRIBE != 0, 30.0), "%s joined the tribe" % other)
+		G.net.send_chat("/t NT tribe hello")
+		G.net.send_chat("/give bed 1")
+		await _until(func(): return _count(Blocks.BED) == 1, 10.0)
+		_select(Blocks.BED)
+		var spot := _free_spot([])
+		check(spot != Vector3i.MIN and p.try_place(spot, Blocks.BED), "placed a bed (%s)" % spot)
+		check(await _until(func(): return G.net.bed == spot, 10.0), "it is my respawn point")
+		G.net.send_chat("NT bed %d %d %d" % [spot.x, spot.y, spot.z])
+		check(await _until(func(): return _chat_from(other, "NT tribebed") != "", 40.0), "%s woke up at my bed" % other)
+		G.net.request_social(Proto.SOC_LEAVE)
+		check(await _until(func(): return G.net.tribe.is_empty() and rel.call() & Proto.R_TRIBE == 0, 10.0), "left the tribe")
+		check(rel.call() & Proto.R_ALLY != 0, "%s is still my ally" % other)
+		G.net.send_chat("NT left")
+	else:
+		await _until(func(): return _chat_from(other, "NT social") != "", 150.0)  # (after its backpack checks)
+		check(await _until(func(): return rel.call() & Proto.R_ASKS_YOU != 0, 30.0), "%s asked to be allies" % other)
+		check(await _until(func(): return _has_notice("wants to be your ally"), 5.0), "with a notice")
+		var rp = G.game.remote_players.get(oid)
+		check(rp != null and not rp.label.no_depth_test, "before that, %s's name tag doesn't show through walls" % other)
+		G.net.request_social(Proto.SOC_ACCEPT, other)
+		check(await _until(func(): return rel.call() & Proto.R_ALLY != 0, 10.0), "allies with %s" % other)
+		check(await _until(func(): return rp != null and rp.label.no_depth_test, 3.0), "now it does")
+		check(await _until(func(): return G.net.invites.any(func(i): return i["name"] == "Nettest Tribe"), 30.0), "invited to Nettest Tribe")
+		G.net.request_social(Proto.SOC_JOIN, "", str(G.net.invites[0]["id"]))
+		check(await _until(func(): return G.net.tribe.get("name", "") == "Nettest Tribe" and G.net.invites.is_empty(), 10.0), "joined the tribe")
+		check(await _until(func(): return _has_notice("[Tribe] <%s> NT tribe hello" % other), 20.0), "the tribe chat arrived")
+		check(await _until(func(): return _chat_from(other, "NT bed ") != "", 40.0), "%s placed a bed" % other)
+		var bv := _vec(_chat_from(other, "NT bed "))
+		check(await _until(func(): return rel.call() & Proto.R_BED != 0, 10.0), "it shows as a tribe bed")
+		G.net.send_chat("/kill")
+		check(await _until(func(): return p.dead, 10.0), "/kill: dead")
+		await _wait(1.5)
+		check(G.hud._death_tribe_names == [other], "the death screen offers %s's bed (%s)" % [other, G.hud._death_tribe_names])
+		G.game.respawn(true, other)
+		check(await _until(func(): return not p.dead, 10.0), "respawned")
+		await _wait(1.0)
+		var pos: Vector3 = p.global_position
+		var bed_d := Vector2(pos.x - bv.x - 0.5, pos.z - bv.z - 0.5).length()
+		var on_cell := absf(fposmod(pos.x, 1.0) - 0.5) < 0.05 and absf(fposmod(pos.z, 1.0) - 0.5) < 0.05
+		check(bed_d < 1.6 and on_cell, "woke up beside %s's bed (%.2f m, %s)" % [other, bed_d, pos])
+		G.net.send_chat("NT tribebed")
+		check(await _until(func(): return _chat_from(other, "NT left") != "", 30.0), "%s left the tribe" % other)
+		check(await _until(func(): return G.net.tribe.get("leader", "") == me and rel.call() & Proto.R_TRIBE == 0, 10.0),
+			"leads the tribe now")
+	var here := Vector2i(floori(p.global_position.x / 16.0), floori(p.global_position.z / 16.0))
+	check(G.net.explored.size() >= 90 and G.net.explored.has(here), "the server sent my map (%d chunks explored)" % G.net.explored.size())
+	check(await _until(func(): return G.game.map_data.painted.get(here, 0) == 2, 10.0), "and the map has the chunk I am in, from its blocks")
 
 
 func _run_screens() -> void:
