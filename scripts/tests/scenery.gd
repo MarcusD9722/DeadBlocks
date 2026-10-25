@@ -58,7 +58,7 @@ func _run() -> void:
 	_place(p, Vector3(best) + Vector3(0.5, 1.02, 0.5), 0.6, -0.18)
 	await _wait(3.0)
 	_clock(12.0)
-	if G.arg_value("--only=") == "screens":
+	if G.arg_value("--only=").begins_with("screens"):
 		await _screens(p, w, best)  # (only the menus: quick)
 		get_tree().quit()
 		return
