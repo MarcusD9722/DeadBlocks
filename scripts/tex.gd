@@ -4,7 +4,7 @@ extends RefCounted
 
 const TS := 16
 const COLS := 8
-const NUM_TILES := 27
+const NUM_TILES := 30
 
 var atlas_img: Image
 var atlas: ImageTexture
@@ -23,7 +23,7 @@ var block_normal: TextureLayered
 var leaves_albedo: Texture2D
 var leaves_normal: Texture2D
 ## Atlas tile -> block array layer (the order of tools/make_textures.py's blocks list).
-const BLOCK_LAYERS := {4: 0, 5: 1, 6: 2, 8: 3, 13: 4, 14: 5, 15: 6, 16: 7, 20: 8, 22: 9, 25: 10, 26: 11, 23: 12, 24: 13}
+const BLOCK_LAYERS := {4: 0, 5: 1, 6: 2, 8: 3, 13: 4, 14: 5, 15: 6, 16: 7, 20: 8, 22: 9, 25: 10, 26: 11, 23: 12, 24: 13, 27: 14, 28: 15, 29: 16}
 static var layer_of_tile := PackedInt32Array()
 
 
@@ -339,6 +339,28 @@ func _paint(t: int) -> void:
 					_px(t, x, y, _var(r, c, 0.025))
 
 
+		27:
+			# Blood Forge, top: dark stone with a grate over red embers.
+			_fill(t, r, _c(58, 44, 46), 0.05, _c(40, 30, 32), 0.2)
+			for y in range(3, 13):
+				for x in range(3, 13):
+					if x % 3 == 0 or y % 3 == 0:
+						_px(t, x, y, _c(30, 22, 24))
+					else:
+						_px(t, x, y, _var(r, _c(200, 30, 40), 0.1))
+		28:
+			# Blood Forge, sides: dark red bricks round a glowing red mouth.
+			_bricks(t, r, _c(96, 44, 44), _c(48, 26, 28))
+			for y in range(6, 14):
+				for x in range(4, 12):
+					var c := _c(24, 14, 16)
+					if y >= 10:
+						c = _c(255, 90, 80) if r.randf() < 0.45 else _c(190, 24, 34)
+					_px(t, x, y, c)
+		29:
+			_bricks(t, r, _c(112, 30, 36), _c(42, 20, 22))
+
+
 func _cobble(t: int, r: RandomNumberGenerator, lo: float, hi: float) -> void:
 	var pts: Array[Vector2] = []
 	var shades: Array[float] = []
@@ -399,7 +421,7 @@ func _item_icon(id: int) -> Image:
 	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0, 0, 0, 0))
 	var handle := _c(104, 76, 44)
-	var tiers := {1: _c(164, 124, 74), 2: _c(132, 132, 138), 3: _c(218, 222, 230)}
+	var tiers := {1: _c(164, 124, 74), 2: _c(132, 132, 138), 3: _c(218, 222, 230), 4: _c(150, 170, 192), 5: _c(196, 36, 48)}
 	match id:
 		Items.STICK:
 			_line(img, 3, 13, 12, 3, _c(96, 70, 42), 2)
@@ -418,6 +440,27 @@ func _item_icon(id: int) -> Image:
 					elif y == 11 or x == 3 or x == 13:
 						c = _c(150, 152, 160)
 					img.set_pixel(x, y, c)
+		Items.STEEL_INGOT, Items.BLOOD_INGOT:
+			var base := _c(140, 158, 178) if id == Items.STEEL_INGOT else _c(170, 30, 42)
+			for y in range(6, 12):
+				for x in range(3, 14):
+					var c := base
+					if y == 6:
+						c = base.lightened(0.3)
+					elif y == 11 or x == 3 or x == 13:
+						c = base.darkened(0.3)
+					img.set_pixel(x, y, c)
+		Items.BLOOD_SHARD:
+			# A jagged red crystal.
+			for y in range(2, 15):
+				var w := 3.5 - absf(y - 8.0) * 0.45
+				for x in range(16):
+					var dx := x + 0.5 - (8.0 + (y - 8) * 0.2)
+					if absf(dx) < w:
+						var c := _c(214, 40, 54) if dx < 0.0 else _c(150, 18, 32)
+						if absf(dx) < 0.8 and y < 9:
+							c = _c(255, 150, 150)
+						img.set_pixel(x, y, c)
 		Items.RAW_MEAT:
 			_disc(img, 8, 8.5, 5.8, _c(200, 70, 80))
 			_disc(img, 7, 7.5, 2.5, _c(236, 150, 150))
@@ -457,6 +500,12 @@ func _item_icon(id: int) -> Image:
 				_disc(img, 11.5, 4.8, 3.4, col)
 				_disc(img, 12.3, 4.0, 1.4, col.lightened(0.2))
 				_line(img, 3, 13, 10, 6, handle, 2)
+			elif tool == "shovel":
+				# A long handle and a rounded blade at the top right.
+				_line(img, 2, 14, 9, 7, handle, 2)
+				_disc(img, 11.2, 4.8, 3.0, col)
+				_line(img, 9.6, 6.4, 13.4, 2.6, col.lightened(0.25), 1)
+				_disc(img, 9.2, 7.2, 1.2, col.darkened(0.25))
 			elif id == Items.WOOD_CLUB:
 				_line(img, 3, 13, 11, 5, _c(130, 96, 56), 3)
 				_disc(img, 11.5, 4.5, 2.7, _c(152, 114, 68))

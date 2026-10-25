@@ -20,9 +20,9 @@ const P := 4
 const W := CH + 2 * P   # columns across, neighbours included
 const NC := W - 1       # vertex cells across
 const NC2 := NC * NC
-const FILL_MAX := 0.2
-const CUT_MAX := 0.45
-const RELAX := 2
+const FILL_MAX := 0.26
+const CUT_MAX := 0.55
+const RELAX := 3
 const LAMBDA := 0.5
 ## How deep under cover (blocks) the sky's light fades out.
 const SKY_DEPTH := 9.0

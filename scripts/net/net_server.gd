@@ -608,8 +608,9 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 	var tool: int = sp.inv.id_at(slot)
 	var bt := Rules.break_time(id, tool)
 	var now := Time.get_ticks_msec()
-	# Mining takes time; allow plenty of slack for lag, but not instant mining.
-	if why == "" and (bt < 0.0 or now - sp.last_break_ms < bt * 350.0):
+	# Mining takes time; allow plenty of slack for lag, but not instant mining. (A bag is picked
+	# up at once with E.)
+	if why == "" and (bt < 0.0 or (id != Blocks.BACKPACK and now - sp.last_break_ms < bt * 350.0)):
 		why = "too fast"
 	if why != "":
 		_refuse(sp, p, why)
@@ -679,7 +680,7 @@ func _req_craft(sp, idx: int, times: int) -> void:
 	if idx >= Crafting.RECIPES.size():
 		return
 	var r: Dictionary = Crafting.RECIPES[idx]
-	var stations: Array = G.world.stations_near(sp.global_position + Vector3(0, 1, 0), 4)
+	var stations: Array = G.world.stations_near(sp.global_position + Vector3(0, 1, 0), Crafting.STATION_RADIUS)
 	var st: String = r["st"]
 	if st != "" and not stations.has(st):
 		_msg(sp, "You need to be near a %s for that." % Crafting.STATION_NAMES[st], Color(1, 0.8, 0.5))

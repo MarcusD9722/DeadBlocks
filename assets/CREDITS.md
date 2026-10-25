@@ -12,12 +12,12 @@ Combined into the files in `assets/textures/` by `tools/make_textures.py` (1K-JP
 | Dirt | Ground067 |
 | Stone (and the rock under the coal and iron ore spots) | Rock030 |
 | Sand | Ground054 |
-| Bedrock, forge top | Rock035 |
+| Bedrock, forge top, Blood Forge top | Rock035 |
 | Tree bark (log sides) | Bark014 |
 | Planks, log ends (colour), workbench and bed sides | Planks037A |
 | Workbench top | Planks023A |
 | Cobblestone | PavingStones070 |
-| Stone bricks, forge front | Bricks076A |
+| Stone bricks, forge front; Blood Brick and the Blood Forge (tinted red) | Bricks076A |
 | Reinforced wall | CorrugatedSteel009 |
 | Leaves (single leaves, arranged into a tile) | LeafSet024 |
 

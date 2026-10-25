@@ -57,6 +57,10 @@ func _run() -> void:
 	_place(p, Vector3(best) + Vector3(0.5, 1.02, 0.5), 0.6, -0.18)
 	await _wait(3.0)
 	_clock(12.0)
+	if G.arg_value("--only=") == "screens":
+		await _screens(p, w, best)  # (only the menus: quick)
+		get_tree().quit()
+		return
 	await _shot("01_noon")
 	_place(p, Vector3(best) + Vector3(0.5, 1.02, 0.5), 2.4, -0.3)
 	await _shot("02_noon_other_way")
@@ -238,4 +242,36 @@ func _slope_and_death(p, w, best: Vector3i) -> void:
 func _settings() -> void:
 	G.hud.settings.open()
 	await _shot("15_settings")
+	G.hud.settings.close()
+
+
+## `--only=screens`: the inventory (hand crafting), a workbench's and a Blood Forge's screens
+## with the new tools in the bag, the Settings screen at its controls, and the E prompt.
+func _screens(p, w, best: Vector3i) -> void:
+	for id in [Items.WOOD_SHOVEL, Items.STONE_SHOVEL, Items.IRON_SHOVEL, Items.STEEL_SHOVEL, Items.BLOOD_SHOVEL,
+			Items.STEEL_PICK, Items.STEEL_AXE, Items.STEEL_SWORD, Items.BLOOD_PICK, Items.BLOOD_AXE, Items.BLOOD_SWORD,
+			Items.STEEL_INGOT, Items.BLOOD_INGOT, Blocks.BLOOD_FORGE, Blocks.BLOOD_BRICK]:
+		p.inv.add(id, 1)
+	p.inv.add(Items.BLOOD_SHARD, 12)
+	p.inv.add(Blocks.PLANKS, 20)
+	p.inv.add(Items.STICK, 8)
+	var at := best + Vector3i(2, 1, 0)
+	w.set_block(at, Blocks.WORKBENCH)
+	w.set_block(at + Vector3i(0, 0, 2), Blocks.BLOOD_FORGE)
+	w.set_block(at + Vector3i(0, 0, -2), Blocks.BLOOD_BRICK)
+	await _wait(2.0)
+	var eye: Vector3 = p.cam.global_position
+	var d := Vector3(at) + Vector3(0.5, 0.5, 0.5) - eye
+	p.set_look(atan2(-d.x, -d.z), atan2(d.y, Vector2(d.x, d.z).length()))
+	await _wait(1.0)
+	await _shot("screens_1_prompt", 0.5)
+	for st in ["", "workbench", "bloodforge"]:
+		G.game.open_inventory(st)
+		await _shot("screens_2_%s" % ("inventory" if st == "" else st), 0.5)
+		G.game.close_inventory()
+	G.hud.settings.open()
+	var sc: ScrollContainer = G.hud.settings.find_children("*", "ScrollContainer", true, false)[0]
+	await _wait(0.3)
+	sc.scroll_vertical = 100000
+	await _shot("screens_3_settings_controls", 0.5)
 	G.hud.settings.close()

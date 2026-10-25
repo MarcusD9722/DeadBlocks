@@ -66,8 +66,42 @@ func _run() -> void:
 	check(b_walk == 6, "a walker needs %d blows (6 expected)" % b_walk)
 	await _screamer()
 	await _spitter()
+	_blood_loot()
 	print("TYPETEST DONE fails=%d" % fails)
 	get_tree().quit(0 if fails == 0 else 1)
+
+
+## Stands in for the player who lands the last hit: counts what the kill gives.
+class Looter extends Node:
+	var got := {}
+
+	func give(id: int, n: int) -> void:
+		got[id] = int(got.get(id, 0)) + n
+
+
+## Blood Moon loot (M4.1): Blood Moon zombies drop Blood Shards to their killer (a Brute 3, a
+## Screamer or Spitter 2, half the others 1); the same zombies on a normal night drop none.
+func _blood_loot() -> void:
+	_clear()
+	var at := Vector3(_arena()) + Vector3(0.5, 1.0, 0.5)
+	var expect := {"brute": 3, "screamer": 2, "spitter": 2}
+	for mood in ["horde", "night"]:
+		for type in ["brute", "screamer", "spitter"]:
+			var looter := Looter.new()
+			var z = G.game.spawn_zombie(mood, at, Vector3.INF, type)
+			z.hurt(9999.0, at + Vector3(1, 0, 0), looter)
+			var n: int = looter.got.get(Items.BLOOD_SHARD, 0)
+			var want: int = expect[type] if mood == "horde" else 0
+			check(n == want, "a %s %s drops %d Blood Shards (%d expected)" % [mood, type, n, want])
+			looter.free()
+	var shards := 0
+	for i in 40:
+		var looter := Looter.new()
+		var z = G.game.spawn_zombie("horde", at, Vector3.INF, "walker")
+		z.hurt(9999.0, at + Vector3(1, 0, 0), looter)
+		shards += int(looter.got.get(Items.BLOOD_SHARD, 0))
+		looter.free()
+	check(shards > 8 and shards < 32, "about half of 40 horde walkers drop a shard (%d)" % shards)
 
 
 ## A fresh arena along +x, 8 blocks to the side of the last one: returns its floor's first cell.

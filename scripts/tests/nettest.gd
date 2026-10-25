@@ -611,6 +611,42 @@ func _hash_check(what: String, c: Vector2i, r := 1) -> void:
 	check(ok and mine == server, "%s (ours %s, server %s)" % [what, mine, server])
 
 
+## Press and let go of a key, as a player would (the game reads it through its input actions).
+func _press(key: Key) -> void:
+	for down in [true, false]:
+		var e := InputEventKey.new()
+		e.physical_keycode = key
+		e.keycode = key
+		e.pressed = down
+		Input.parse_input_event(e)
+		await get_tree().process_frame
+	await get_tree().process_frame
+
+
+## Controller: press and let go of a button.
+func _pad_press(button: JoyButton) -> void:
+	for down in [true, false]:
+		var e := InputEventJoypadButton.new()
+		e.button_index = button
+		e.pressed = down
+		Input.parse_input_event(e)
+		await get_tree().process_frame
+	await get_tree().process_frame
+
+
+## Controller: hold a stick or a trigger at value (0 lets go).
+func _pad_axis(axis: JoyAxis, value: float) -> void:
+	var e := InputEventJoypadMotion.new()
+	e.axis = axis
+	e.axis_value = value
+	Input.parse_input_event(e)
+
+
+## The recipes the inventory screen lists now.
+func _recipes_shown() -> Array:
+	return Crafting.recipes_for(G.hud.inv_station)
+
+
 func _look_at(target: Vector3) -> void:
 	var p = G.player
 	var d: Vector3 = target - p.cam.global_position
@@ -674,17 +710,20 @@ func _run_builder() -> void:
 	G.net.send_chat("NT built %d %d %d %d %d" % [chunk.x, chunk.y, pillar.x, pillar.y, pillar.z])
 	check(await _until(func(): return _chat_from(G.net.others[_other_id()]["name"], "NT seen") != "", 30.0), "the watcher checked")
 
-	# Crafting: nothing without a workbench, then planks, sticks, a workbench, a pickaxe at it.
+	# Crafting (M4.1): planks, sticks, a wooden pickaxe and a workbench by hand; the server
+	# refuses a workbench recipe (spikes) until one is near, then makes it.
 	G.net.send_chat("/give logs 4")
 	check(await _until(func(): return _count(Blocks.LOG) >= 4, 10.0), "admin /give logs 4 (plural name)")
-	G.net.request_craft(_recipe(Items.WOOD_PICK), 1)
-	await _wait(1.0)
-	check(_count(Items.WOOD_PICK) == 0, "no pickaxe without a workbench")
 	G.net.request_craft(_recipe(Blocks.PLANKS), 3)
 	check(await _until(func(): return _count(Blocks.PLANKS) == 12, 5.0), "crafted 12 planks")
 	G.net.request_craft(_recipe(Items.STICK), 1)
+	check(await _until(func(): return _count(Items.STICK) == 4, 5.0), "crafted sticks")
+	G.net.request_craft(_recipe(Blocks.SPIKES), 1)
+	check(await _until(func(): return G.hud.msgs.any(func(m): return "near a Workbench" in String(m["text"])), 5.0) and _count(Blocks.SPIKES) == 0,
+		"no spikes without a workbench (the server says why)")
+	G.net.request_craft(_recipe(Items.WOOD_PICK), 1)
 	G.net.request_craft(_recipe(Blocks.WORKBENCH), 1)
-	check(await _until(func(): return _count(Items.STICK) == 4 and _count(Blocks.WORKBENCH) == 1, 5.0), "crafted sticks and a workbench")
+	check(await _until(func(): return _count(Items.WOOD_PICK) == 1 and _count(Blocks.WORKBENCH) == 1, 5.0), "a wooden pickaxe and a workbench by hand")
 	var bench := Vector3i(0, -1, 0)
 	for z in range(base.z - 2, base.z + 3):
 		var top: int = G.world.surface_y(base.x - 2, z)
@@ -695,10 +734,11 @@ func _run_builder() -> void:
 	check(bench.y >= 0 and p.try_place(bench, Blocks.WORKBENCH), "placed the workbench")
 	check(await _until(func(): return _server_count(Blocks.WORKBENCH) == 0, 5.0), "the server placed it")
 	await _wait(0.3)
-	G.net.request_craft(_recipe(Items.WOOD_PICK), 1)
-	check(await _until(func(): return _count(Items.WOOD_PICK) == 1, 5.0), "crafted a wooden pickaxe at the workbench")
+	G.net.request_craft(_recipe(Items.STICK), 1)
+	G.net.request_craft(_recipe(Blocks.SPIKES), 1)
+	check(await _until(func(): return _count(Blocks.SPIKES) == 2, 5.0), "spikes at the workbench")
 	if G.arg_value("--shots=") != "":
-		G.game.open_inventory()
+		G.game.open_inventory("workbench")
 		await _wait(0.5)
 		await _shot("inventory")
 		G.game.close_inventory()
@@ -859,12 +899,19 @@ func _mob_dist(id: int) -> float:
 
 
 ## Walk up to backpack `bp` and mine it (M2). Whoever mines it gets what's in it.
-func _mine_backpack(bp: Vector3i, secs := 30.0) -> void:
+## Walk to a backpack and take it: by mining it, or (with_e) by looking at it and pressing E.
+func _mine_backpack(bp: Vector3i, secs := 30.0, with_e := false) -> void:
 	var target := Vector3(bp) + Vector3(0.5, 0.0, 0.5)
 	await _walk_to(target, 2.0, secs)
 	await _until(func(): return G.player.is_on_floor(), 3.0)
 	_look_at(target + Vector3(0, 0.3, 0))
-	if G.world.get_blockv(bp) == Blocks.BACKPACK:
+	if G.world.get_blockv(bp) != Blocks.BACKPACK:
+		return
+	if with_e:
+		await _until(func(): return G.player.target.get("pos", Vector3i.MIN) == bp, 2.0)
+		check(G.player.interact_text() == "Pick up the bag", "looking at the bag offers E (%s)" % G.player.interact_text())
+		await _press(KEY_E)
+	else:
 		G.player.break_block(bp, Blocks.BACKPACK)
 
 

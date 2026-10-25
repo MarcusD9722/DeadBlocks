@@ -7,7 +7,7 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 
 uniform sampler2DArray albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2DArray normal_tex : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform float bevel = 0.06;   // metres of rounding at each block edge
+uniform float bevel = 0.11;   // metres of rounding at each block edge
 uniform float min_light = 0.12;  // ambient light left in caves (Settings: light in caves)
 
 varying vec3 wpos;

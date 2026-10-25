@@ -10,6 +10,9 @@ const COOKED_MEAT := 104
 const BERRIES := 105
 const BANDAGE := 106
 const FIBER := 107
+const STEEL_INGOT := 108
+## Dropped by Blood Moon zombies (M4.1, the old M3 plan's Blood Moon loot).
+const BLOOD_SHARD := 109
 const WOOD_PICK := 110
 const STONE_PICK := 111
 const IRON_PICK := 112
@@ -19,9 +22,22 @@ const IRON_AXE := 115
 const WOOD_CLUB := 116
 const STONE_SWORD := 117
 const IRON_SWORD := 118
+const BLOOD_INGOT := 120
+const STEEL_PICK := 121
+const STEEL_AXE := 122
+const STEEL_SWORD := 123
+const BLOOD_PICK := 124
+const BLOOD_AXE := 125
+const BLOOD_SWORD := 126
+const WOOD_SHOVEL := 127
+const STONE_SHOVEL := 128
+const IRON_SHOVEL := 129
+const STEEL_SHOVEL := 130
+const BLOOD_SHOVEL := 131
 
-# Mining speed multiplier per tool tier (0 = bare hands)
-const TIER_MULT := [1.0, 2.5, 4.0, 6.5]
+## Mining speed multiplier per tool tier (0 = bare hands): wood, stone, iron, steel, Blood Steel.
+const TIER_MULT := [1.0, 2.5, 4.0, 6.5, 9.0, 12.0]
+const TIER_NAMES := ["", "wooden", "stone", "iron", "steel", "Blood Steel"]
 
 const DATA := {
 	100: {"name": "Stick"},
@@ -32,6 +48,9 @@ const DATA := {
 	105: {"name": "Berries", "food": 10.0, "heal": 2.0},
 	106: {"name": "Bandage", "food": 0.0, "heal": 30.0},
 	107: {"name": "Plant Fiber"},
+	108: {"name": "Steel Ingot"},
+	109: {"name": "Blood Shard"},
+	120: {"name": "Blood Steel Ingot"},
 	110: {"name": "Wooden Pickaxe", "tool": "pick", "tier": 1, "dmg": 4.0},
 	111: {"name": "Stone Pickaxe", "tool": "pick", "tier": 2, "dmg": 5.0},
 	112: {"name": "Iron Pickaxe", "tool": "pick", "tier": 3, "dmg": 7.0},
@@ -41,6 +60,17 @@ const DATA := {
 	116: {"name": "Wooden Club", "tool": "weapon", "tier": 1, "dmg": 7.0},
 	117: {"name": "Stone Sword", "tool": "weapon", "tier": 2, "dmg": 11.0},
 	118: {"name": "Iron Sword", "tool": "weapon", "tier": 3, "dmg": 16.0},
+	121: {"name": "Steel Pickaxe", "tool": "pick", "tier": 4, "dmg": 8.0},
+	122: {"name": "Steel Axe", "tool": "axe", "tier": 4, "dmg": 11.0},
+	123: {"name": "Steel Sword", "tool": "weapon", "tier": 4, "dmg": 19.0},
+	124: {"name": "Blood Steel Pickaxe", "tool": "pick", "tier": 5, "dmg": 10.0},
+	125: {"name": "Blood Steel Axe", "tool": "axe", "tier": 5, "dmg": 13.0},
+	126: {"name": "Blood Steel Sword", "tool": "weapon", "tier": 5, "dmg": 24.0},
+	127: {"name": "Wooden Shovel", "tool": "shovel", "tier": 1, "dmg": 4.0},
+	128: {"name": "Stone Shovel", "tool": "shovel", "tier": 2, "dmg": 5.0},
+	129: {"name": "Iron Shovel", "tool": "shovel", "tier": 3, "dmg": 6.0},
+	130: {"name": "Steel Shovel", "tool": "shovel", "tier": 4, "dmg": 7.0},
+	131: {"name": "Blood Steel Shovel", "tool": "shovel", "tier": 5, "dmg": 8.0},
 }
 
 

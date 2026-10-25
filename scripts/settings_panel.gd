@@ -1,13 +1,16 @@
 extends Control
 ## The Settings screen (title screen and pause menu): the graphics quality and each of its parts,
-## brightness, light in caves, field of view, view distance, frame rate, window and mouse.
-## Every change applies at once and is saved (gfx.gd, user://settings.cfg). Esc or Back closes it.
+## brightness, light in caves, field of view, view distance, frame rate, window, mouse, controller
+## and keys. Every change applies at once and is saved (gfx.gd, user://settings.cfg; keys in
+## controls.gd, user://controls.cfg). Esc or Back closes it.
 
 const Gfx := preload("res://scripts/gfx.gd")
 
 var _rows := {}      # setting -> its control
 var _values := {}    # setting -> the label showing a slider's value
 var _busy := false   # filling the controls in; their signals are not the player's changes
+var _key_btns := {}  # action -> its key button
+var _waiting := ""   # the action waiting for a new key
 
 
 func _ready() -> void:
@@ -71,6 +74,28 @@ func _ready() -> void:
 	_check(grid, "show_fps", "Show FPS")
 	_heading(grid, "Controls")
 	_slider(grid, "sens", "Mouse sensitivity", 0.5, 6.0, 0.1, func(v): return "%.1f" % v)
+	_slider(grid, "stick_sens", "Controller look speed", 1.0, 8.0, 0.1, func(v): return "%.1f" % v)
+	_check(grid, "invert_y", "Controller: invert up / down")
+	_heading(grid, "Keys (click one, then press the new key)")
+	for a in Controls.ACTIONS:
+		grid.add_child(_label(a[1]))
+		var kb := Button.new()
+		kb.custom_minimum_size = Vector2(300, 34)
+		kb.add_theme_font_size_override("font_size", 18)
+		kb.pressed.connect(_wait_key.bind(a[0]))
+		grid.add_child(kb)
+		_key_btns[a[0]] = kb
+	grid.add_child(_label(""))
+	grid.add_child(_button("Reset keys", func():
+		Controls.reset()
+		_fill_keys()))
+	var pad := Label.new()
+	pad.text = Controls.PAD_HELP
+	pad.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	pad.custom_minimum_size = Vector2(700, 0)
+	pad.add_theme_font_size_override("font_size", 15)
+	pad.add_theme_color_override("font_color", Color(0.75, 0.78, 0.8))
+	vb.add_child(pad)
 	var note := Label.new()
 	note.text = "Render scale below 100% draws fewer pixels and sharpens them back up (faster)."
 	note.add_theme_font_size_override("font_size", 14)
@@ -90,17 +115,47 @@ func open() -> void:
 	if G.gfx == null:
 		return
 	_fill()
+	_fill_keys()
 	visible = true
+	if G.hud != null:
+		G.hud.focus_first(self)
 
 
 func close() -> void:
 	visible = false
+	_waiting = ""
+	if G.hud != null:
+		G.hud.refresh_controls_text()
+		# Back to the menu underneath, for a controller.
+		G.hud.focus_first(G.hud.pause_root if G.hud.pause_root.visible else G.hud.title_menu)
 
 
 func _input(event: InputEvent) -> void:
-	if visible and event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+	if not visible:
+		return
+	if _waiting != "":
+		# Rebinding: the next key or mouse button (Esc or the controller's B cancels).
+		var k := Controls.key_from_event(event)
+		if k != 0:
+			Controls.rebind(_waiting, k)
+		if k != 0 or event.is_action_pressed("ui_cancel"):
+			_waiting = ""
+			_fill_keys()
+			get_viewport().set_input_as_handled()
+		return
+	if event.is_action_pressed("ui_cancel"):
 		close()
 		get_viewport().set_input_as_handled()
+
+
+func _wait_key(action: String) -> void:
+	_waiting = action
+	_key_btns[action].text = "Press a key...  (Esc cancels)"
+
+
+func _fill_keys() -> void:
+	for a in _key_btns:
+		_key_btns[a].text = Controls.key_name(Controls.key_of(a))
 
 
 ## Show the current settings in the controls (a preset changes several at once).
@@ -147,7 +202,6 @@ func _heading(grid: GridContainer, text: String) -> void:
 func _choice(grid: GridContainer, key: String, text: String, names: Array) -> void:
 	grid.add_child(_label(text))
 	var ob := OptionButton.new()
-	ob.focus_mode = Control.FOCUS_NONE
 	ob.add_theme_font_size_override("font_size", 18)
 	ob.custom_minimum_size = Vector2(300, 34)
 	for n in names:
@@ -160,7 +214,6 @@ func _choice(grid: GridContainer, key: String, text: String, names: Array) -> vo
 func _check(grid: GridContainer, key: String, text: String) -> void:
 	grid.add_child(_label(text))
 	var cb := CheckButton.new()
-	cb.focus_mode = Control.FOCUS_NONE
 	cb.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	cb.toggled.connect(func(on): _change(key, on))
 	grid.add_child(cb)
@@ -175,7 +228,6 @@ func _slider(grid: GridContainer, key: String, text: String, lo: float, hi: floa
 	sl.min_value = lo
 	sl.max_value = hi
 	sl.step = step
-	sl.focus_mode = Control.FOCUS_NONE
 	sl.custom_minimum_size = Vector2(230, 30)
 	sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var val := Label.new()
@@ -205,6 +257,5 @@ func _button(text: String, cb: Callable) -> Button:
 	b.text = text
 	b.custom_minimum_size = Vector2(220, 42)
 	b.add_theme_font_size_override("font_size", 19)
-	b.focus_mode = Control.FOCUS_NONE
 	b.pressed.connect(cb)
 	return b

@@ -83,16 +83,25 @@ func _play() -> void:
 			check(await _until(func(): return _server_count(Blocks.LOG) == 1, 5.0), "a log in the server's copy of our inventory")
 			check(w.get_blockv(log_p) == Blocks.AIR, "the log is gone")
 
-	# Crafting: planks and sticks, nothing without a workbench, then a pickaxe at one.
+	# Crafting (M4.1): planks, sticks and the wooden tools by hand (I); station recipes only at
+	# their station, whose screen E opens.
 	G.net.send_chat("/give log 5")
 	check(await _until(func(): return _count(Blocks.LOG) >= 6, 10.0), "/give works in solo (we're the admin)")
-	G.net.request_craft(_recipe(Blocks.PLANKS), 3)
+	G.net.request_craft(_recipe(Blocks.PLANKS), 4)
 	G.net.request_craft(_recipe(Items.STICK), 1)
-	check(await _until(func(): return _count(Blocks.PLANKS) == 10 and _count(Items.STICK) == 4, 5.0),
+	check(await _until(func(): return _count(Blocks.PLANKS) == 14 and _count(Items.STICK) == 4, 5.0),
 		"crafted planks and sticks (%d planks, %d sticks)" % [_count(Blocks.PLANKS), _count(Items.STICK)])
-	G.net.request_craft(_recipe(Items.WOOD_PICK), 1)
+	G.net.request_craft(_recipe(Blocks.SPIKES), 1)
 	await _wait(1.0)
-	check(_count(Items.WOOD_PICK) == 0, "no pickaxe without a workbench")
+	check(_count(Blocks.SPIKES) == 0, "no spikes without a workbench")
+	G.net.request_craft(_recipe(Items.WOOD_PICK), 1)
+	check(await _until(func(): return _count(Items.WOOD_PICK) == 1, 5.0), "a wooden pickaxe by hand")
+	await _press(KEY_I)
+	check(g.state == "menu" and G.hud.inv_station == "", "I opens the inventory")
+	check(_recipes_shown().all(func(r): return r["st"] == "") and _recipes_shown().any(func(r): return int(r["out"]) == Items.WOOD_SHOVEL),
+		"it lists the hand recipes only (the wooden shovel among them)")
+	await _press(KEY_I)
+	check(g.state == "playing", "I closes it")
 	G.net.request_craft(_recipe(Blocks.WORKBENCH), 1)
 	check(await _until(func(): return _count(Blocks.WORKBENCH) == 1, 5.0), "crafted a workbench")
 	await _hold(Blocks.WORKBENCH)
@@ -106,8 +115,45 @@ func _play() -> void:
 	check(p.place(Blocks.WORKBENCH), "placed the workbench")
 	check(await _until(func(): return _server_count(Blocks.WORKBENCH) == 0 and w.get_blockv(bench_at) == Blocks.WORKBENCH, 5.0), "the server placed it")
 	check(g.nearby_stations().has("workbench"), "the workbench counts as nearby")
-	G.net.request_craft(_recipe(Items.WOOD_PICK), 1)
-	check(await _until(func(): return _count(Items.WOOD_PICK) == 1, 5.0), "crafted a wooden pickaxe at the workbench")
+	_look_at(Vector3(bench_at) + Vector3(0.5, 0.5, 0.5))
+	check(await _until(func(): return p.interact_text() == "Open Workbench", 2.0), "looking at it offers E (%s)" % p.interact_text())
+	await _press(KEY_E)
+	check(g.state == "menu" and G.hud.inv_station == "workbench", "E opens the workbench")
+	check(_recipes_shown().size() > 10 and _recipes_shown().all(func(r): return r["st"] == "workbench"), "it lists the workbench's recipes")
+	await _wait(0.3)
+	await _shot("02_workbench")
+	await _press(KEY_E)
+	check(g.state == "playing", "E closes it")
+	G.net.request_craft(_recipe(Items.STICK), 1)  # (the pickaxe took 2 of the 4)
+	G.net.request_craft(_recipe(Blocks.SPIKES), 1)
+	check(await _until(func(): return _count(Blocks.SPIKES) == 2, 5.0), "spikes at the workbench")
+
+	# The controller (M4.1): the right stick looks, RB turns the hotbar, Y opens the inventory and
+	# B closes it, the left stick walks.
+	var yaw0: float = p.head.rotation.y
+	_pad_axis(JOY_AXIS_RIGHT_X, 1.0)
+	await _wait(0.5)
+	_pad_axis(JOY_AXIS_RIGHT_X, 0.0)
+	check(absf(p.head.rotation.y - yaw0) > 0.3, "the right stick turns us (%.2f rad)" % absf(p.head.rotation.y - yaw0))
+	var sel0: int = p.selected
+	await _pad_press(JOY_BUTTON_RIGHT_SHOULDER)
+	check(p.selected == (sel0 + 1) % 9, "RB moves along the hotbar")
+	await _pad_press(JOY_BUTTON_Y)
+	check(g.state == "menu" and G.hud.inv_station == "", "Y opens the inventory")
+	await _pad_press(JOY_BUTTON_B)
+	check(g.state == "playing", "B closes it")
+	var at0: Vector3 = p.global_position
+	_pad_axis(JOY_AXIS_LEFT_Y, -1.0)
+	await _wait(0.6)
+	var walked: float = Vector2(p.global_position.x - at0.x, p.global_position.z - at0.z).length()
+	_pad_axis(JOY_AXIS_LEFT_Y, 1.0)  # and back
+	await _wait(0.6)
+	_pad_axis(JOY_AXIS_LEFT_Y, 0.0)
+	check(walked > 0.8 and Controls.pad_in_use, "the left stick walks us (%.2f m; the game knows a controller is in use)" % walked)
+	_pad_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)
+	await get_tree().process_frame
+	check(Input.is_action_pressed("attack"), "the right trigger mines / hits")
+	_pad_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
 
 	# A bed (M2): placing it makes it where we wake up after dying.
 	G.net.send_chat("/give plant_fiber 3")
@@ -318,9 +364,9 @@ func _play() -> void:
 	g.respawn()
 	check(await _until(func(): return not p.dead and g.state == "playing", 10.0), "and respawn")
 	await _until(func(): return p.is_on_floor(), 5.0)
-	await _mine_backpack(bp)
+	await _mine_backpack(bp, 30.0, true)
 	check(await _until(func(): return _count(Blocks.PLANKS) == 7 and G.net.my_backpacks.size() == 1 and w.get_blockv(bp) == Blocks.AIR, 5.0),
-		"mining the backpack gives everything back (%d planks)" % _count(Blocks.PLANKS))
+		"E on the backpack gives everything back (%d planks)" % _count(Blocks.PLANKS))
 	G.net.send_chat("/give dirt 3")
 	await _until(func(): return _count(Blocks.DIRT) == 3, 10.0)
 	await _until(func(): return p.is_on_floor(), 5.0)

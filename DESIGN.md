@@ -91,6 +91,13 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - **Rarity tiers** with random bonus stats on weapons and tools.
 - Possible later: treasure maps, a trader at a safe outpost.
 
+## Crafting & tools (decided 0.13.0, Marcus)
+- **E** opens what you look at (stations; later doors, boxes); **I** opens your own inventory, where only the basics are made by hand (planks, sticks, torches, bandages, campfire, workbench, the wooden tools).
+- Stone, iron and steel tools and weapons, building blocks and the other stations at the **Workbench**; smelting at the **Forge**; cooking at the **Campfire**; Blood Steel tools and weapons and Blood Brick at the **Blood Forge**.
+- Tool tiers: wood, stone, iron, steel, Blood Steel. Every tier has a pickaxe, an axe and a shovel.
+- Blood Moon zombies drop Blood Shards to their killer (Brutes 3, Screamers and Spitters 2, half the others 1).
+- Controller support (Xbox layout), and every key can be changed in Settings.
+
 ## Bases & ownership
 - Chests and doors are **open to everyone by default**.
 - A player can add a **lock / PIN code** to a door or chest to restrict it.
@@ -181,7 +188,9 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
   - M1.8 (the friends evening and its stats) waits until Marcus has his home-lab parts and the router forward.
 - **M3 — Zombie rework** (plan: `docs/M3-plan.md`): proximity-only aggression on normal days (a first version is in 0.7.1), Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot.
   - M3.1 (0.9.0): the five new types (Runner, Brute, Crawler, Screamer, Spitter), mixed into nights and Blood Moons by day. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
-  - Paused after M3.1 for the graphics overhaul (below); M3.2–M3.4 come after it.
+  - Paused after M3.1 for the graphics overhaul (below). Since Marcus's wish list after 0.12.0 (M4 below): M3.3 (Blood Moon loot) is part of M4.1, M3.2 (the fair Blood Moon) goes with M4.4, M3.4 (the Pi benchmark) after M4.5.
 - **V — Graphics overhaul** (plan: `docs/V-plan.md`): V1 renderer and lighting, V2 smooth terrain and rounded models (0.10.0), V3 CC0 textures (0.11.0), V4 CC0 animated models (0.12.0).
-- **M4 — Exploration & loot**: distance-based danger scaling, ruins/POIs, chests, loot tables with rarity, 3-day refill, doors with locks/PIN.
+- **M4 — Survival depth** (plan: `docs/M4-plan.md`; Marcus's list after 0.12.0, which takes in the old "exploration & loot" milestone):
+  - M4.1 (0.13.0, built): controls (E interacts, I inventory, keys in Settings, controller), crafting by station, tools in five tiers with shovels, Steel and Blood Steel, the Blood Forge, Blood Shards, Blood Brick, rounder ground and blocks.
+  - M4.2 building tiers, hammer, doors, storage boxes; M4.3 thrown spears, bow, crossbow; M4.4 the deep world (taller, caves, cave zombies, clouds); M4.5 roads, towns, loot containers; M4.6 villages, farming, traders.
 - **M5 — Smarter zombies**: pathfinding toward the weakest part of a base.

@@ -43,4 +43,4 @@ static func collect(id: int, tool: int, rng: RandomNumberGenerator) -> Dictionar
 
 
 static func too_hard_text(tier: int) -> String:
-	return "Too hard to collect. You need a %s pickaxe." % ("wooden" if tier == 1 else "stone")
+	return "Too hard to collect. You need a %s pickaxe." % Items.TIER_NAMES[clampi(tier, 1, 5)]

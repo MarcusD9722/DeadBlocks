@@ -153,19 +153,7 @@ func _ready() -> void:
 
 
 func _setup_input() -> void:
-	var binds := {
-		"move_forward": [KEY_W, KEY_UP], "move_back": [KEY_S, KEY_DOWN],
-		"move_left": [KEY_A, KEY_LEFT], "move_right": [KEY_D, KEY_RIGHT],
-		"jump": [KEY_SPACE], "sprint": [KEY_SHIFT],
-	}
-	for action in binds:
-		if InputMap.has_action(action):
-			continue  # already set up before a scene reload
-		InputMap.add_action(action)
-		for k in binds[action]:
-			var e := InputEventKey.new()
-			e.physical_keycode = k
-			InputMap.action_add_event(action, e)
+	Controls.setup()
 
 
 ## Dedicated server: the world, the Sim and networking, but no window, player, HUD or sky.
@@ -411,28 +399,39 @@ func _elapsed() -> float:
 	return (Time.get_ticks_msec() - _t0) / 1000.0
 
 
+func _input(event: InputEvent) -> void:
+	Controls.note(event)
+
+
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
-		if state == "chat":
-			return
+	if state == "chat":
+		return
+	# Esc is both "pause" and "ui_cancel"; the controller's Start pauses and B goes back.
+	if event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel"):
+		if state == "reconnecting":
+			G.end_client_session("You left the server.")
+		elif state == "playing":
+			if event.is_action_pressed("pause"):
+				pause()
+		elif state == "menu":
+			close_inventory()
+		elif state == "paused":
+			resume()
+	elif event.is_action_pressed("chat"):
+		if state == "playing" and G.mode == "client":
+			open_chat()
+	elif event.is_action_pressed("inventory"):
+		if state == "playing":
+			open_inventory()
+		elif state == "menu":
+			close_inventory()
+	elif event.is_action_pressed("interact"):
+		if state == "playing":
+			player.interact()
+		elif state == "menu":
+			close_inventory()
+	elif event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
-			KEY_T, KEY_ENTER:
-				if state == "playing" and G.mode == "client":
-					open_chat()
-			KEY_ESCAPE:
-				if state == "reconnecting":
-					G.end_client_session("You left the server.")
-				elif state == "playing":
-					pause()
-				elif state == "menu":
-					close_inventory()
-				elif state == "paused":
-					resume()
-			KEY_E, KEY_TAB:
-				if state == "playing":
-					open_inventory()
-				elif state == "menu":
-					close_inventory()
 			KEY_F11:
 				if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN:
 					DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED)
@@ -543,12 +542,14 @@ func close_chat() -> void:
 		state = "playing"
 
 
-func open_inventory() -> void:
+## The inventory screen: with the hand recipes (I), or with a station's own recipes (E on it;
+## station is its name in crafting.gd).
+func open_inventory(station := "") -> void:
 	if state != "playing":
 		return
 	state = "menu"
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	hud.show_inventory(true)
+	hud.show_inventory(true, station)
 
 
 func close_inventory() -> void:
@@ -604,13 +605,13 @@ func _new_mob_id() -> int:
 
 
 func nearby_stations() -> Array:
-	return world.stations_near(player.global_position + Vector3(0, 1, 0), 4)
+	return world.stations_near(player.global_position + Vector3(0, 1, 0), Crafting.STATION_RADIUS)
 
 
 func on_crafted(id: int) -> void:
 	if id == Blocks.WORKBENCH and not warned.has("bench_made"):
 		warned["bench_made"] = true
-		hud.msg("Select the Workbench in your hotbar and right-click to place it.", Color(0.7, 1, 0.7))
+		hud.msg("Select the Workbench in your hotbar and place it (%s)." % Controls.key_name(Controls.key_of("use")), Color(0.7, 1, 0.7))
 
 
 # ------------------------------------------------------------ time

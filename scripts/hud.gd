@@ -1,10 +1,6 @@
 extends CanvasLayer
 ## Heads-up display, inventory + crafting screen, title, pause and death screens.
 
-const CONTROLS := "WASD move   ·   Space jump   ·   Shift sprint   ·   Mouse look\n" + \
-	"Left click: mine / attack (hold to mine)   ·   Right click: place, eat, use station\n" + \
-	"1-9 / wheel: hotbar   ·   E: inventory & crafting   ·   F: flashlight\n" + \
-	"Esc: pause   ·   F11: fullscreen   ·   F6: skip to night/dawn (testing)   ·   F7: jump to Blood Moon (testing)"
 
 var canvas: Control
 var font: Font
@@ -55,6 +51,12 @@ var style_slot: StyleBoxFlat
 var style_sel: StyleBoxFlat
 ## The Settings screen (settings_panel.gd), opened from the title screen and the pause menu.
 var settings: Control
+## The labels showing the keys (title and pause screens), refreshed after a key changes.
+var ctl_labels: Array[Label] = []
+## The station whose recipes the inventory screen shows ("" = hand crafting).
+var inv_station := ""
+var inv_help: Label
+var inv_title: Label
 
 
 func _ready() -> void:
@@ -106,9 +108,35 @@ func _button(text: String, cb: Callable) -> Button:
 	b.text = text
 	b.custom_minimum_size = Vector2(260, 44)
 	b.add_theme_font_size_override("font_size", 20)
-	b.focus_mode = Control.FOCUS_NONE
+	b.focus_mode = Control.FOCUS_ALL  # (a controller moves between buttons)
 	b.pressed.connect(cb)
 	return b
+
+
+## The keys, as the title and pause screens show them (they can be changed in Settings).
+static func controls_text() -> String:
+	var k := func(a: String) -> String: return Controls.key_name(Controls.key_of(a))
+	return ("%s%s%s%s move   ·   %s jump   ·   %s sprint   ·   Mouse look\n" % [k.call("move_forward"), k.call("move_left"),
+		k.call("move_back"), k.call("move_right"), k.call("jump"), k.call("sprint")]) + \
+		("%s: mine / hit (hold to mine)   ·   %s: place, eat, use   ·   1-9 / wheel: hotbar\n" % [k.call("attack"), k.call("use")]) + \
+		("%s: open workbench, forge, campfire, bag   ·   %s: inventory and crafting   ·   %s: flashlight\n" % [k.call("interact"),
+		k.call("inventory"), k.call("flashlight")]) + \
+		"Esc: pause   ·   F11: fullscreen   ·   F6: skip to night/dawn (testing)   ·   F7: jump to Blood Moon (testing)\n" + \
+		"Controller works too (see Settings → Controls)."
+
+
+func refresh_controls_text() -> void:
+	for l in ctl_labels:
+		l.text = controls_text()
+
+
+## Give the first visible button (or field) under root the focus, so a controller can start there.
+func focus_first(root: Node) -> void:
+	for c in root.find_children("*", "BaseButton", true, false) + root.find_children("*", "LineEdit", true, false):
+		var ctl := c as Control
+		if ctl.is_visible_in_tree() and ctl.focus_mode != Control.FOCUS_NONE and not (ctl is BaseButton and ctl.disabled):
+			ctl.grab_focus.call_deferred()
+			return
 
 
 func _overlay(alpha: float) -> Control:
@@ -170,7 +198,6 @@ func _build_title() -> void:
 	solo_panel.add_child(s_world)
 	s_new = CheckBox.new()
 	s_new.text = "Start a new world (the old one is kept in backups)"
-	s_new.focus_mode = Control.FOCUS_NONE
 	solo_panel.add_child(s_new)
 	var snote := _label("Your world is saved on this PC. Esc pauses the game.", 15, Color(0.75, 0.78, 0.8))
 	snote.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -185,7 +212,6 @@ func _build_title() -> void:
 	f_remember = CheckBox.new()
 	f_remember.text = "Remember me on this PC"
 	f_remember.button_pressed = true
-	f_remember.focus_mode = Control.FOCUS_NONE
 	join_panel.add_child(f_remember)
 	_panel_buttons(join_panel, "Join", _on_join_pressed)
 
@@ -199,7 +225,6 @@ func _build_title() -> void:
 	host_panel.add_child(h_world)
 	h_new = CheckBox.new()
 	h_new.text = "Start a new world (the old one is kept in backups)"
-	h_new.focus_mode = Control.FOCUS_NONE
 	host_panel.add_child(h_new)
 	var lan := _lan_addresses()
 	var note := _label("Friends on your home network join with %s.\nFor internet play, forward UDP port %d on your router to this PC.\nThe world is saved on this PC and continues next time you host." % [
@@ -211,15 +236,17 @@ func _build_title() -> void:
 	var how := _label("Gather. Craft. Build walls. Every night they come — every 7th night the horde comes.", 18, Color(0.8, 0.8, 0.8))
 	how.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(how)
-	var ctl := _label(CONTROLS, 16, Color(0.7, 0.72, 0.7))
+	var ctl := _label(controls_text(), 16, Color(0.7, 0.72, 0.7))
 	ctl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(ctl)
+	ctl_labels.append(ctl)
 	title_info = [how, ctl]
 	_load_client_cfg()
 	if G.title_notice != "":
 		_set_status(G.title_notice, true)
 		G.title_notice = ""
 	title_root.visible = true
+	focus_first(title_menu)
 
 
 ## This PC's addresses on the home network (what friends in the same house type to join).
@@ -282,6 +309,7 @@ func _show_panel(p: Control) -> void:
 	join_panel.visible = p == join_panel
 	host_panel.visible = p == host_panel
 	solo_panel.visible = p == solo_panel
+	focus_first(title_menu if p == null else p)
 
 
 ## "Your world continues: day 3, 14:20 (saved Oct 18, 21:05)", or that a new one will be made.
@@ -507,9 +535,10 @@ func _build_pause() -> void:
 	pause_players = _label("", 18, Color(0.85, 0.95, 0.85))
 	pause_players.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(pause_players)
-	var ctl := _label(CONTROLS, 16, Color(0.8, 0.82, 0.8))
+	var ctl := _label(controls_text(), 16, Color(0.8, 0.82, 0.8))
 	ctl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(ctl)
+	ctl_labels.append(ctl)
 	seed_lbl = _label("", 14, Color(0.6, 0.6, 0.6))
 	seed_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(seed_lbl)
@@ -528,6 +557,9 @@ func show_pause(on: bool) -> void:
 	elif G.solo:
 		seed_lbl.text += "   ·   Your world is saved on this PC."
 	_refresh_pause_players()
+	if on:
+		refresh_controls_text()
+		focus_first(pause_root)
 
 
 ## Online: who is playing, refreshed while the pause menu is open.
@@ -567,6 +599,7 @@ func show_death(on: bool) -> void:
 	death_root.visible = on
 	if on:
 		_death_text()
+		focus_first(death_root)
 
 
 ## The S_BACKPACKS for this death can arrive a moment after the death itself, so this is
@@ -618,14 +651,17 @@ func _build_inventory() -> void:
 	left.add_child(hgrid)
 	for i in range(0, 9):
 		hgrid.add_child(_make_slot(i))
-	var help := _label("Click a hotbar slot to select it. Click a backpack item\nto swap it into the selected hotbar slot.", 14, Color(0.7, 0.7, 0.7))
+	var help := _label("Click a hotbar slot to select it. Click a backpack item\nto swap it into the selected hotbar slot (controller: A).", 14, Color(0.7, 0.7, 0.7))
 	left.add_child(help)
 
 	var right := VBoxContainer.new()
 	right.add_theme_constant_override("separation", 8)
 	hb.add_child(right)
-	right.add_child(_label("CRAFTING", 22, Color(0.85, 0.95, 0.7)))
+	inv_title = _label("CRAFTING", 22, Color(0.85, 0.95, 0.7))
+	right.add_child(inv_title)
 	station_lbl = _label("", 14, Color(0.75, 0.8, 0.85))
+	station_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	station_lbl.custom_minimum_size = Vector2(500, 0)
 	right.add_child(station_lbl)
 	var sc := ScrollContainer.new()
 	sc.custom_minimum_size = Vector2(500, 440)
@@ -635,7 +671,8 @@ func _build_inventory() -> void:
 	recipe_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	recipe_box.add_theme_constant_override("separation", 6)
 	sc.add_child(recipe_box)
-	right.add_child(_label("Shift + Craft makes up to 5.   E or Esc to close.", 14, Color(0.7, 0.7, 0.7)))
+	inv_help = _label("", 14, Color(0.7, 0.7, 0.7))
+	right.add_child(inv_help)
 
 
 func _make_slot(i: int) -> Button:
@@ -643,7 +680,7 @@ func _make_slot(i: int) -> Button:
 	b.custom_minimum_size = Vector2(56, 56)
 	b.expand_icon = true
 	b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	b.focus_mode = Control.FOCUS_NONE
+	b.focus_mode = Control.FOCUS_ALL
 	b.add_theme_constant_override("icon_max_width", 38)
 	b.add_theme_stylebox_override("normal", style_slot)
 	b.add_theme_stylebox_override("hover", style_sel)
@@ -678,10 +715,16 @@ func _on_slot(i: int) -> void:
 	refresh_inventory()
 
 
-func show_inventory(on: bool) -> void:
+## station: "" for your own inventory (hand crafting), or the station opened with E.
+func show_inventory(on: bool, station := "") -> void:
 	inv_root.visible = on
 	if on:
+		inv_station = station
+		inv_title.text = "HAND CRAFTING" if station == "" else Crafting.STATION_NAMES[station].to_upper()
+		var close_key := Controls.key_of("inventory" if station == "" else "interact")
+		inv_help.text = "Shift + Craft makes up to 5.   %s or Esc to close." % Controls.key_name(close_key)
 		refresh_inventory()
+		slot_btns[G.player.selected].grab_focus.call_deferred()
 
 
 func refresh_inventory() -> void:
@@ -702,24 +745,35 @@ func refresh_inventory() -> void:
 			b.tooltip_text = Items.name_of(int(s["id"]))
 		b.add_theme_stylebox_override("normal", style_sel if i == p.selected else style_slot)
 	var stations: Array = G.game.nearby_stations()
-	if stations.is_empty():
-		station_lbl.text = "Hand crafting only. Place a Workbench to unlock tools."
+	if inv_station == "":
+		station_lbl.text = "Look at a Workbench, Forge, Campfire or Blood Forge and press %s for what it makes." % Controls.key_name(Controls.key_of("interact"))
+	elif stations.has(inv_station):
+		station_lbl.text = {"workbench": "Stone, iron and steel tools and weapons, building blocks and the other stations.",
+			"forge": "Smelting: ore and coal into ingots.", "campfire": "Cooking.",
+			"bloodforge": "Blood Steel tools and weapons, and Blood Brick."}[inv_station]
 	else:
-		var names := []
-		for s in stations:
-			names.append(Crafting.STATION_NAMES[s])
-		station_lbl.text = "Nearby: " + ", ".join(names)
+		station_lbl.text = "The %s is gone." % Crafting.STATION_NAMES[inv_station]
+	# The focused Craft button is rebuilt below: give the focus back to the same recipe's.
+	var focus_recipe := -1
+	var fo := get_viewport().gui_get_focus_owner()
+	if fo != null and fo.has_meta("recipe"):
+		focus_recipe = int(fo.get_meta("recipe"))
 	for c in recipe_box.get_children():
+		recipe_box.remove_child(c)
 		c.queue_free()
 	var ready_list := []
 	var rest := []
-	for r in Crafting.RECIPES:
+	for r in Crafting.recipes_for(inv_station):
 		if Crafting.can_craft(p.inv, r, stations):
 			ready_list.append(r)
 		else:
 			rest.append(r)
 	for r in ready_list + rest:
-		recipe_box.add_child(_recipe_row(r, stations))
+		var row := _recipe_row(r, stations)
+		recipe_box.add_child(row)
+		var btn: Button = row.get_child(row.get_child_count() - 1)
+		if int(btn.get_meta("recipe")) == focus_recipe:
+			btn.grab_focus.call_deferred()
 
 
 func _recipe_row(r: Dictionary, stations: Array) -> Control:
@@ -745,9 +799,6 @@ func _recipe_row(r: Dictionary, stations: Array) -> Control:
 	for id in needs:
 		parts.append("%d %s (have %d)" % [int(needs[id]), Items.name_of(int(id)), p.inv.count(int(id))])
 	var req := ", ".join(parts)
-	var st: String = r["st"]
-	if st != "":
-		req += "   ·   at " + Crafting.STATION_NAMES[st]
 	var rl := _label(req, 13, Color(0.75, 0.78, 0.75) if ok else Color(1.0, 0.6, 0.55))
 	rl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rl.custom_minimum_size = Vector2(320, 0)
@@ -755,8 +806,9 @@ func _recipe_row(r: Dictionary, stations: Array) -> Control:
 	var btn := Button.new()
 	btn.text = "Craft"
 	btn.disabled = not ok
-	btn.focus_mode = Control.FOCUS_NONE
+	btn.focus_mode = Control.FOCUS_ALL
 	btn.custom_minimum_size = Vector2(84, 38)
+	btn.set_meta("recipe", Crafting.RECIPES.find(r))
 	btn.pressed.connect(_on_craft.bind(r))
 	row.add_child(btn)
 	return row
@@ -862,6 +914,10 @@ func _draw_hud() -> void:
 	if st == "playing":
 		canvas.draw_rect(Rect2(c - Vector2(1, 9), Vector2(2, 18)), Color(1, 1, 1, 0.85))
 		canvas.draw_rect(Rect2(c - Vector2(9, 1), Vector2(18, 2)), Color(1, 1, 1, 0.85))
+		var it: String = p.interact_text()
+		if it != "":
+			var key := "X" if Controls.pad_in_use else Controls.key_name(Controls.key_of("interact"))
+			_text(Vector2(0, c.y + 50), "[%s]  %s" % [key, it], 18, Color(1, 1, 0.85, 0.95), HORIZONTAL_ALIGNMENT_CENTER, vs.x)
 		if p.mine_progress > 0.0:
 			canvas.draw_rect(Rect2(c + Vector2(-32, 18), Vector2(64, 6)), Color(0, 0, 0, 0.6))
 			canvas.draw_rect(Rect2(c + Vector2(-31, 19), Vector2(62 * clampf(p.mine_progress, 0, 1), 4)), Color(1, 1, 1, 0.9))

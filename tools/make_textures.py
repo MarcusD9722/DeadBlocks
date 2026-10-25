@@ -210,8 +210,16 @@ def main():
     bed_side = (planks[0] * 0.8, planks[1])
     pack_top = fabric(B, (0.36, 0.38, 0.22), rng)
     pack_side = fabric(B, (0.33, 0.35, 0.2), rng, stripes=True)
+    # Blood Forge (M4.1): dark red stone over a red glow; Blood Brick: the bricks in dark blood red.
+    blood_tint = np.array([0.62, 0.2, 0.22])
+    blum = bricks[0].mean(axis=2, keepdims=True)
+    blood_bricks = (np.clip(blum * blood_tint * 1.6, 0, 1), bricks[1])
+    bf_top = frame(np.clip(rock_dark[0].mean(axis=2, keepdims=True) * np.array([0.55, 0.3, 0.32]), 0, 1), rock_dark[1], 30, 0.5)
+    bfs_alb = blood_bricks[0].copy()
+    bfs_alb[mouth] = np.stack([np.ones_like(glow), 0.16 * glow, 0.12 * glow], axis=2)[mouth]
+    bf_side = (bfs_alb, bricks[1])
     blocks = [cobble, bark, ltop, planks, bench_top, bench_side, forge_top, forge_side, bricks, steel,
-        bed_top, bed_side, pack_top, pack_side]
+        bed_top, bed_side, pack_top, pack_side, bf_top, bf_side, blood_bricks]
     save_strip([b[0] for b in blocks], "blocks_albedo.jpg", 90)
     save_strip([b[1] for b in blocks], "blocks_normal.jpg", 95)
     # Leaves.

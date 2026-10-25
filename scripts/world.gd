@@ -1207,10 +1207,6 @@ func stations_near(pos: Vector3, radius: int) -> Array:
 		for z in range(-radius, radius + 1):
 			for x in range(-radius, radius + 1):
 				var b := get_block(c.x + x, c.y + y, c.z + z)
-				if b == Blocks.WORKBENCH and not found.has("workbench"):
-					found.append("workbench")
-				elif b == Blocks.FORGE and not found.has("forge"):
-					found.append("forge")
-				elif b == Blocks.CAMPFIRE and not found.has("campfire"):
-					found.append("campfire")
+				if Blocks.STATIONS.has(b) and not found.has(Blocks.STATIONS[b]):
+					found.append(Blocks.STATIONS[b])
 	return found

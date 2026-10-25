@@ -66,7 +66,10 @@ Each type has its own look and sounds (a scream, a spit, a splash), all made in 
   - 1, 2 and 3 players (two of them together): the right number of zombies around each group.
   - A leaving player's share moves to the others.
 
-### M3.3 Blood Moon loot (0.9.2)
+### M3.3 Blood Moon loot (0.9.2) — moved into M4.1 (0.13.0, built)
+- As planned, except that the Blood Steel tools are made at a new **Blood Forge** station (Marcus),
+  Blood Steel Ingot is a Steel Ingot + 3 Blood Shards, and Steel (tier 4) comes in between.
+
 - Blood Shards, Blood Steel Ingot, the tier-4 tools, the sword and Blood Brick: items, icons,
   recipes and drops.
 - **Tests:** kills drop shards to the killer; the recipes work at their stations.

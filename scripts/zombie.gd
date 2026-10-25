@@ -525,6 +525,12 @@ func _on_death(attacker: Node) -> void:
 			attacker.kills += 1
 		if rng.randf() < 0.6:
 			attacker.give(Items.FIBER, rng.randi_range(1, 2))
+		# Blood Moon loot: half the ordinary ones drop a Blood Shard, Screamers and Spitters 2,
+		# Brutes 3.
+		if blood:
+			var shards: int = {"brute": 3, "screamer": 2, "spitter": 2}.get(type, 1 if rng.randf() < 0.5 else 0)
+			if shards > 0:
+				attacker.give(Items.BLOOD_SHARD, shards)
 
 
 func net_kind() -> int:

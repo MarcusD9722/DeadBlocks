@@ -23,7 +23,7 @@ const VIEW_MAX := 8
 const DEFAULTS := {
 	"quality": 2, "shadows": 3, "ssao": true, "ssil": true, "fog": true, "aa": 4, "view": 7,
 	"brightness": 50, "cave_light": 35, "fov": 75, "render_scale": 100, "vsync": true,
-	"max_fps": 0, "window": 0, "show_fps": false, "sens": 2.5,
+	"max_fps": 0, "window": 0, "show_fps": false, "sens": 2.5, "stick_sens": 3.0, "invert_y": false,
 }
 
 ## Every setting (DEFAULTS has them all), saved in user://settings.cfg.
@@ -50,8 +50,10 @@ func _init() -> void:
 	var cf := ConfigFile.new()
 	if cf.load(SETTINGS) == OK:
 		for k in DEFAULTS:
-			var v = cf.get_value("settings", k, null)
-			if v != null and typeof(v) == typeof(DEFAULTS[k]):
+			if not cf.has_section_key("settings", k):
+				continue  # (a setting newer than the file)
+			var v = cf.get_value("settings", k)
+			if typeof(v) == typeof(DEFAULTS[k]):
 				opt[k] = v
 		# 0.10.0 kept only these two.
 		if not cf.has_section("settings"):
@@ -79,6 +81,7 @@ func _clamp_all() -> void:
 	opt["render_scale"] = clampi(opt["render_scale"], 50, 100)
 	opt["window"] = clampi(opt["window"], 0, WINDOW_NAMES.size() - 1)
 	opt["sens"] = clampf(opt["sens"], 0.5, 6.0)
+	opt["stick_sens"] = clampf(opt["stick_sens"], 1.0, 8.0)
 	if not FPS_CAPS.has(opt["max_fps"]):
 		opt["max_fps"] = 0
 
@@ -214,6 +217,8 @@ func apply_all(window := false) -> void:
 		G.player.flashlight.shadow_enabled = sh >= 1
 		G.player.cam.fov = opt["fov"]
 		G.player.sens = opt["sens"] * 0.001
+		G.player.stick_sens = opt["stick_sens"]
+		G.player.invert_y = opt["invert_y"]
 	if G.world != null and is_instance_valid(G.world) and G.world.render:
 		G.world.set_render_radius(view_radius())
 		G.world.set_min_light(min_light())

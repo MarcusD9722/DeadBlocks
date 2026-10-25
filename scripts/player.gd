@@ -16,6 +16,13 @@ var held_mat: StandardMaterial3D
 var outline: MeshInstance3D
 var mine_crack: MeshInstance3D
 var sens := 0.0025
+## Controller: look speed (radians a second at full tilt) and inverted up/down (Settings).
+var stick_sens := 3.0
+var invert_y := false
+## Controller: clicking the left stick sprints until we stop going forward.
+var sprint_latch := false
+var _use_was := false
+var _attack_was := false
 
 var max_health := 100.0
 var health := 100.0
@@ -150,27 +157,25 @@ func select(i: int) -> void:
 
 # ------------------------------------------------------------ input
 
+## Keys and buttons (controls.gd); placing and hitting are read in _process, so the controller's
+## triggers work like mouse buttons.
 func _unhandled_input(event: InputEvent) -> void:
 	if dead or G.game.state != "playing":
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		head.rotation.y -= event.relative.x * sens
 		cam.rotation.x = clampf(cam.rotation.x - event.relative.y * sens, -1.55, 1.55)
-	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode >= KEY_1 and event.keycode <= KEY_9:
-			select(event.keycode - KEY_1)
-		elif event.keycode == KEY_F:
-			flashlight.visible = not flashlight.visible
-			G.sfx.play("click", -6.0)
-	elif event is InputEventMouseButton and event.pressed and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			select((selected + 8) % 9)
-		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			select((selected + 1) % 9)
-		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			use_item()
-		elif event.button_index == MOUSE_BUTTON_LEFT:
-			swing = 1.0
+	elif event is InputEventKey and event.pressed and not event.echo and event.keycode >= KEY_1 and event.keycode <= KEY_9:
+		select(event.keycode - KEY_1)
+	elif event.is_action_pressed("flashlight"):
+		flashlight.visible = not flashlight.visible
+		G.sfx.play("click", -6.0)
+	elif event.is_action_pressed("hotbar_prev"):
+		select((selected + 8) % 9)
+	elif event.is_action_pressed("hotbar_next"):
+		select((selected + 1) % 9)
+	elif event is InputEventJoypadButton and event.is_action_pressed("sprint"):
+		sprint_latch = true
 
 
 # ------------------------------------------------------------ movement
@@ -193,7 +198,9 @@ func _physics_process(delta: float) -> void:
 	var dir := Basis(Vector3.UP, head.rotation.y) * Vector3(input.x, 0, input.y)
 	if dir.length() > 1.0:
 		dir = dir.normalized()
-	sprinting = can_move and Input.is_action_pressed("sprint") and input.y < -0.1 and stamina > 1.0
+	if input.y >= -0.1:
+		sprint_latch = false
+	sprinting = can_move and (Input.is_action_pressed("sprint") or sprint_latch) and input.y < -0.1 and stamina > 1.0
 	var spd := SPRINT if sprinting else WALK
 	var accel := 14.0 if is_on_floor() else 4.0
 	var w := clampf(accel * delta, 0.0, 1.0)
@@ -294,12 +301,40 @@ func _process(delta: float) -> void:
 		else:
 			stamina = minf(100.0, stamina + 20.0 * delta)
 	if st == "playing":
+		_stick_look(delta)
+		_buttons()
 		_handle_mining(delta)
 	else:
 		mine_progress = 0.0
 		outline.visible = false
+		_use_was = true  # (a button still held as a menu closes does nothing)
+		_attack_was = true
 	_update_crack()
 	_update_held()
+
+
+## Controller: the right stick looks around (gently near the middle, for aiming).
+func _stick_look(delta: float) -> void:
+	var look := Input.get_vector("look_left", "look_right", "look_up", "look_down")
+	if look == Vector2.ZERO:
+		return
+	look *= look.length()
+	var k := stick_sens * delta
+	head.rotation.y -= look.x * k
+	cam.rotation.x = clampf(cam.rotation.x - look.y * k * (-1.0 if invert_y else 1.0), -1.55, 1.55)
+
+
+## Place / use and hit, on the press of the button (a mouse button or a controller trigger).
+func _buttons() -> void:
+	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	var use_now := Input.is_action_pressed("use") and captured
+	if use_now and not _use_was:
+		use_item()
+	_use_was = use_now
+	var attack_now := Input.is_action_pressed("attack") and captured
+	if attack_now and not _attack_was:
+		swing = 1.0
+	_attack_was = attack_now
 
 
 func _update_target() -> void:
@@ -326,7 +361,7 @@ func _break_time(id: int) -> float:
 
 
 func _handle_mining(delta: float) -> void:
-	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED or not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED or not Input.is_action_pressed("attack"):
 		mine_progress = 0.0
 		return
 	if mob_target != null and is_instance_valid(mob_target):
@@ -370,13 +405,33 @@ func break_block(p: Vector3i, id: int) -> void:
 	G.net.request_break(p, id, selected)
 	if id == Blocks.LOG and not hints.has("log"):
 		hints["log"] = true
-		G.hud.msg("Press E to open crafting. Make Planks, then a Workbench.", Color(0.7, 1, 0.7))
+		G.hud.msg("Press %s for your inventory and crafting. Make Planks, then a Workbench." % Controls.key_name(Controls.key_of("inventory")), Color(0.7, 1, 0.7))
+
+
+## E (interact): open the station we look at, or pick up a bag.
+func interact() -> void:
+	if not target.get("hit", false):
+		return
+	var id: int = target["id"]
+	if Blocks.is_station(id):
+		G.game.open_inventory(Blocks.STATIONS[id])
+	elif id == Blocks.BACKPACK:
+		break_block(target["pos"], id)
+
+
+## What E would do on what we look at ("" for nothing), for the prompt by the crosshair.
+func interact_text() -> String:
+	if not target.get("hit", false):
+		return ""
+	var id: int = target["id"]
+	if Blocks.is_station(id):
+		return "Open " + Blocks.NAMES[id]
+	if id == Blocks.BACKPACK:
+		return "Pick up the bag"
+	return ""
 
 
 func use_item() -> void:
-	if target.get("hit", false) and Blocks.is_station(int(target["id"])):
-		G.game.open_inventory()
-		return
 	var cur := cur_id()
 	if cur <= 0:
 		return
@@ -435,7 +490,7 @@ func try_place(p: Vector3i, id: int) -> bool:
 	swing = 1.0
 	if id == Blocks.WORKBENCH and not hints.has("bench"):
 		hints["bench"] = true
-		G.hud.msg("Right-click the Workbench (or press E near it) to craft tools.", Color(0.7, 1, 0.7))
+		G.hud.msg("Look at the Workbench and press %s to craft tools." % Controls.key_name(Controls.key_of("interact")), Color(0.7, 1, 0.7))
 	return true
 
 
