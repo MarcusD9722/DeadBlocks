@@ -717,7 +717,10 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 	if why == "" and (id != expect or id <= 0):
 		why = "block changed"
 	var tool: int = sp.inv.id_at(slot)
-	var bt := Rules.break_time(id, tool, Skills.mine_speed(sp.perks))
+	var speed := Skills.mine_speed(sp.perks)
+	# Chopping a natural tree's trunk or leaves fells the whole tree (M4.6).
+	var tree := Trees.tree_of(Trees.gen_for(w.seed_v), p, w.get_blockv)
+	var bt := Trees.fell_time(tree, tool, speed) if not tree.is_empty() else Rules.break_time(id, tool, speed)
 	var now := Time.get_ticks_msec()
 	# Mining takes time; allow plenty of slack for lag, but not instant mining. (A bag is picked
 	# up at once with E.)
@@ -725,10 +728,22 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 		why = "too fast"
 	if why != "":
 		_refuse(sp, p, why)
+		if not tree.is_empty():
+			for c in Trees.cells(Trees.gen_for(w.seed_v), tree):
+				sp.fixes.append(c[0])  # (the client took the whole tree off its screen)
 		return
 	sp.last_break_ms = now
 	if id == Blocks.BACKPACK:
 		_take_backpack(sp, p)
+		return
+	if not tree.is_empty():
+		var away: Vector3 = Vector3(tree["root"]) + Vector3(0.5, 0.0, 0.5) - sp.global_position
+		fell_tree(tree, atan2(away.x, away.z), sp.peer_id)
+		sp.add_xp(Skills.TREE_XP)
+		for d in Trees.drops(tree, _rng):
+			if sp.inv.add(d[0], d[1]) > 0:
+				_msg(sp, "Inventory full!", Color(1, 0.5, 0.4))
+				break
 		return
 	w.clear_block(p)  # (a door's other half goes too; a box's things go into a bag, see _flush_world)
 	var got := Rules.collect(id, tool, _rng)
@@ -1113,6 +1128,32 @@ func _req_shoot(sp, slot: int, power: float, aim: Vector3) -> void:
 	var dir := aim.normalized()
 	var pr: Node = G.sim.shoot(item, clampf(power, 0.0, 1.0), _eye(sp) + dir * 0.35, dir, sp)
 	pr.dmg *= Skills.ranged_mult(sp.perks)
+
+
+## A natural tree comes down (M4.6): its logs and leaves go, and everyone sees it fall towards
+## `yaw` (S_TREE; except the player who felled it, whose game shows it already).
+func fell_tree(t: Dictionary, yaw: float, except := 0) -> void:
+	var w = G.world
+	for c in Trees.cells(Trees.gen_for(w.seed_v), t):
+		if w.get_blockv(c[0]) == (Blocks.LOG if c[1] else Blocks.LEAVES):
+			w.set_block(c[0], Blocks.AIR)
+	var m := Proto.writer(Proto.S_TREE)
+	Proto.put_bpos(m, t["root"])
+	m.put_u16(int(fposmod(yaw, TAU) / TAU * 65535.0))
+	_broadcast(m.data_array, except)
+
+
+## Zombies broke the log at p: if it was a standing tree's, the rest of the tree falls.
+func _trunk_broken(p: Vector3i) -> void:
+	var w = G.world
+	var gen := Trees.gen_for(w.seed_v)
+	var t := Trees.at(gen, p.x, p.z)
+	if t.is_empty() or p.y < t["root"].y or p.y >= int(t["top"]):
+		return
+	for y in range(t["root"].y, int(t["top"])):
+		if y != p.y and w.get_blockv(Vector3i(p.x, y, p.z)) != Blocks.LOG:
+			return
+	fell_tree(t, float(gen.hash2(p.x + 7, p.z - 3) % 628) / 100.0)
 
 
 ## A player's arrow, bolt or spear hit something: their crosshair shows it (Proto.HIT_*).
@@ -1584,6 +1625,10 @@ func _msg(sp, text: String, col: Color) -> void:
 func _flush_world() -> void:
 	var w = G.world
 	_edit_seq += 1
+	# A tree whose trunk zombies broke comes down (M4.6), its blocks with this tick's edits.
+	for e in w.destroyed:
+		if e[1] == Blocks.LOG:
+			_trunk_broken(e[0])
 	var groups := {}  # chunk key -> [[block index, id, state], ...] in the order they happened
 	var gone_boxes := []
 	for e in w.edits_out:

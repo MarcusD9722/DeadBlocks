@@ -30,6 +30,10 @@ func _ready() -> void:
 	streams["xbow"] = _twang(150.0, 0.2, 0.9)
 	streams["throw"] = _whoosh()
 	streams["arrow"] = _thump(0.09, 420.0, 150.0, 0.7)
+	# M4.6: an axe in a trunk, a tree creaking as it goes, and its crash.
+	streams["chop"] = _chop()
+	streams["creak"] = _creak()
+	streams["timber"] = _timber()
 	for i in 10:
 		var p := AudioStreamPlayer.new()
 		add_child(p)
@@ -277,4 +281,71 @@ func _siren() -> AudioStreamWAV:
 		var env := minf(1.0, t * 5.0) * minf(1.0, (1.0 - t) * 4.0)
 		var trem := 0.75 + 0.25 * sin(t * dur * TAU * 3.0)
 		s[i] = (sin(ph * TAU) * 0.5 + sin(ph2 * TAU) * 0.3) * env * trem * 0.8
+	return _wav(s)
+
+
+## An axe biting into wood: a hollow knock and a short crack of splinters.
+func _chop() -> AudioStreamWAV:
+	var n := int(0.16 * RATE)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var y := 0.0
+	var a := _lp(2600.0)
+	var ph := 0.0
+	var ph2 := 0.0
+	for i in n:
+		var t := float(i) / n
+		ph += lerpf(240.0, 180.0, t) / RATE
+		ph2 += 415.0 / RATE
+		y = (1.0 - a) * randf_range(-1, 1) + a * y
+		var knock := (sin(ph * TAU) * 0.7 + sin(ph2 * TAU) * 0.3) * exp(-t * 9.0)
+		s[i] = (knock + y * 1.4 * exp(-t * 28.0)) * 0.8
+	return _wav(s)
+
+
+## Wood giving way: a slow, uneven run of creaks (a stick-slip rasp through a wooden resonance).
+func _creak() -> AudioStreamWAV:
+	var dur := 1.5
+	var n := int(dur * RATE)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var ph := 0.0
+	var y1 := 0.0
+	var y2 := 0.0
+	var r := 0.995
+	var w := TAU * 310.0 / RATE
+	var c := 2.0 * r * cos(w)
+	for i in n:
+		var t := float(i) / n
+		ph += (34.0 - 22.0 * t + 6.0 * sin(t * 19.0)) / RATE
+		var x := 0.0
+		if ph >= 1.0:
+			ph -= 1.0
+			x = randf_range(0.6, 1.0)
+		var y := c * y1 - r * r * y2 + x
+		y2 = y1
+		y1 = y
+		s[i] = y * 0.05 * pow(sin(PI * t), 0.7)
+	return _wav(s)
+
+
+## A tree hitting the ground: a deep thud, the trunk's crack and the rush of its leaves.
+func _timber() -> AudioStreamWAV:
+	var dur := 1.3
+	var n := int(dur * RATE)
+	var s := PackedFloat32Array()
+	s.resize(n)
+	var ph := 0.0
+	var lo := 0.0
+	var hi := 0.0
+	var al := _lp(500.0)
+	var ah := _lp(3500.0)
+	for i in n:
+		var t := float(i) / n
+		ph += lerpf(70.0, 38.0, t) / RATE
+		lo = (1.0 - al) * randf_range(-1, 1) + al * lo
+		hi = (1.0 - ah) * randf_range(-1, 1) + ah * hi
+		var thud := (sin(ph * TAU) * 0.9 + lo * 1.6) * exp(-t * 6.0)
+		var rustle := hi * 0.55 * exp(-t * 2.2) * (0.6 + 0.4 * sin(t * 90.0))
+		s[i] = (thud + rustle) * 0.9
 	return _wav(s)

@@ -71,7 +71,8 @@ func _play() -> void:
 	await _wait(0.6)
 	await _shot("01_day_view")
 
-	# A log by hand: walk to the nearest tree first.
+	# A tree by hand (M4.6): walk to the nearest one first. Chopping it (any of its blocks)
+	# fells the whole tree, which falls away from us and gives all its logs.
 	var log_p := _find_block(Blocks.LOG, 24)
 	check(log_p.y > -900, "found a tree near spawn")
 	if log_p.y > -900:
@@ -81,17 +82,30 @@ func _play() -> void:
 		check(log_p.y > -900, "a log within reach")
 		if log_p.y > -900:
 			_look_at(Vector3(log_p) + Vector3(0.5, 0.5, 0.5))
-			p.break_block(log_p, Blocks.LOG)
-			check(await _until(func(): return _server_count(Blocks.LOG) == 1, 5.0), "a log in the server's copy of our inventory")
-			check(w.get_blockv(log_p) == Blocks.AIR, "the log is gone")
+			await get_tree().process_frame
+			p._update_target()
+			var tree: Dictionary = p.target_tree
+			var cells := Trees.cells(Trees.gen_for(w.seed_v), tree) if not tree.is_empty() else []
+			check(cells.any(func(c): return c[0] == p.target.get("pos")), "we look at a tree (%s)" % [tree])
+			if not tree.is_empty():
+				check(Trees.fell_time(tree, 0) > Rules.break_time(Blocks.LOG, 0) and int(tree["trunk"]) >= 4,
+					"felling it takes longer than one log (%.1f s for a trunk of %d)" % [Trees.fell_time(tree, 0), tree["trunk"]])
+				p.fell(tree, log_p, Blocks.LOG)
+				check(g._falling.has(tree["root"]) and w.get_children().any(func(n): return n is Trees.Falling), "it falls")
+				var logs := int(tree["trunk"]) + 1
+				check(await _until(func(): return _server_count(Blocks.LOG) == logs, 5.0), "its %d logs in the server's copy of our inventory" % logs)
+				await _wait(0.3)
+				check(cells.all(func(c): return w.get_blockv(c[0]) != (Blocks.LOG if c[1] else Blocks.LEAVES)), "the whole tree is gone, leaves too")
+				check(_server_count(Items.STICK) >= 1 and _server_count(Items.FIBER) >= 1, "and some sticks and plant fibre")
 
 	# Crafting (M4.1): planks, sticks and the wooden tools by hand (I); station recipes only at
 	# their station, whose screen E opens.
 	G.net.send_chat("/give log 5")
-	check(await _until(func(): return _count(Blocks.LOG) >= 6, 10.0), "/give works in solo (we're the admin)")
+	check(await _until(func(): return _count(Blocks.LOG) >= 10, 10.0), "/give works in solo (we're the admin)")
+	var sticks0 := _count(Items.STICK)
 	G.net.request_craft(_recipe(Blocks.PLANKS), 4)
 	G.net.request_craft(_recipe(Items.STICK), 1)
-	check(await _until(func(): return _count(Blocks.PLANKS) == 14 and _count(Items.STICK) == 4, 5.0),
+	check(await _until(func(): return _count(Blocks.PLANKS) == 14 and _count(Items.STICK) == sticks0 + 4, 5.0),
 		"crafted planks and sticks (%d planks, %d sticks)" % [_count(Blocks.PLANKS), _count(Items.STICK)])
 	G.net.request_craft(_recipe(Blocks.SPIKES), 1)
 	await _wait(1.0)

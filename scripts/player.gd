@@ -37,6 +37,13 @@ var target := {}
 var mob_target: Node = null
 var mine_pos := Vector3i(0, -999, 0)
 var mine_progress := 0.0
+## M4.6: the natural tree the block we look at belongs to ({} if none; Trees.tree_of), found
+## again when the target changes. Chopping it fells the whole tree; it shakes as we chop.
+var target_tree := {}
+var _tree_for := Vector3i(0, -999, 0)
+var _tree_id := -1
+var _shaking := Vector3i(0, -999, 0)
+var _shake := 0.0
 var dig_snd := 0.0
 var attack_cd := 0.0
 var swing := 0.0
@@ -445,14 +452,25 @@ func _update_target() -> void:
 		if not target.get("hit", false) or float(target["dist"]) > md:
 			mob_target = r["collider"]
 	if target.get("hit", false):
-		outline.visible = true
-		outline.global_position = Vector3(target["pos"]) + Vector3(0.5, 0.5, 0.5)
+		var tp: Vector3i = target["pos"]
+		if tp != _tree_for or int(target["id"]) != _tree_id:
+			_tree_for = tp
+			_tree_id = target["id"]
+			target_tree = Trees.tree_of(Trees.gen_for(G.world.seed_v), tp, G.world.get_blockv)
+		outline.visible = target_tree.is_empty()  # (a tree is a model, not blocks)
+		outline.global_position = Vector3(tp) + Vector3(0.5, 0.5, 0.5)
 	else:
+		target_tree = {}
+		_tree_for = Vector3i(0, -999, 0)
 		outline.visible = false
 
 
 func _break_time(id: int) -> float:
-	return Rules.break_time(id, cur_id(), Skills.mine_speed(G.net.perks if G.mode == "client" else {}))
+	return Rules.break_time(id, cur_id(), _mine_speed())
+
+
+func _mine_speed() -> float:
+	return Skills.mine_speed(G.net.perks if G.mode == "client" else {})
 
 
 ## Stamina when rested (the Endurance perk adds to it, M4.5).
@@ -474,24 +492,34 @@ func _handle_mining(delta: float) -> void:
 		mine_progress = 0.0
 		return
 	var p: Vector3i = target["pos"]
-	if p != mine_pos:
-		mine_pos = p
+	var tree := target_tree
+	var key: Vector3i = p if tree.is_empty() else tree["root"]  # (a tree: any of its blocks)
+	if key != mine_pos:
+		mine_pos = key
 		mine_progress = 0.0
 	var id: int = target["id"]
 	if Items.tool_type(cur_id()) == "hammer":
 		_hammer(p, delta)
 		return
-	var bt := _break_time(id)
+	var bt := _break_time(id) if tree.is_empty() else Trees.fell_time(tree, cur_id(), _mine_speed())
 	if bt < 0.0:
 		return
 	mine_progress += delta / bt
 	dig_snd -= delta
 	if dig_snd <= 0.0:
-		dig_snd = 0.24
-		G.sfx.play("dig", -8.0)
+		dig_snd = 0.24 if tree.is_empty() else 0.42
+		G.sfx.play("dig" if tree.is_empty() else "chop", -8.0 if tree.is_empty() else -5.0)
+		if not tree.is_empty():
+			_shake = 1.0
+			swing = 1.0
+	if not tree.is_empty():
+		_shake_tree(tree["root"], delta)
 	if mine_progress >= 1.0:
-		break_block(p, id)
 		mine_progress = 0.0
+		if tree.is_empty():
+			break_block(p, id)
+		else:
+			fell(tree, p, id)
 
 
 ## Holding the button with a hammer: work on the block (repair or upgrade, hammer_text), then
@@ -529,6 +557,39 @@ func break_block(p: Vector3i, id: int) -> void:
 	if id == Blocks.LOG and not hints.has("log"):
 		hints["log"] = true
 		G.hud.msg("Press %s for your inventory and crafting. Make Planks, then a Workbench." % Controls.key_name(Controls.key_of("inventory")), Color(0.7, 1, 0.7))
+
+
+## Chopping a natural tree is done (M4.6): the whole tree goes from our screen at once and falls
+## away from us; the server checks it, gives the wood and shows the others (or puts it back).
+func fell(tree: Dictionary, p: Vector3i, id: int) -> void:
+	_shake_tree(Vector3i(0, -999, 0), 0.0)
+	var w = G.world
+	for c in Trees.cells(Trees.gen_for(w.seed_v), tree):
+		if w.get_blockv(c[0]) == (Blocks.LOG if c[1] else Blocks.LEAVES):
+			w.set_block(c[0], Blocks.AIR)
+	var away: Vector3 = Vector3(tree["root"]) + Vector3(0.5, 0.0, 0.5) - global_position
+	G.game.tree_falls(tree["root"], atan2(away.x, away.z))
+	G.net.request_break(p, id, selected)
+	target_tree = {}
+	_tree_for = Vector3i(0, -999, 0)
+	if not hints.has("log"):
+		hints["log"] = true
+		G.hud.msg("Press %s for your inventory and crafting. Make Planks, then a Workbench." % Controls.key_name(Controls.key_of("inventory")), Color(0.7, 1, 0.7))
+
+
+## The tree we chop shakes a little with each blow (root: which tree; another root, or none,
+## puts the last one straight again).
+func _shake_tree(root: Vector3i, delta: float) -> void:
+	if _shaking != root and _shaking.y > -999:
+		G.world.lean_tree(_shaking, Vector3.ZERO, 0.0)
+	_shaking = root
+	if root.y <= -999:
+		return
+	_shake = maxf(0.0, _shake - delta * 3.0)
+	var side := (Vector3(root) + Vector3(0.5, 0.0, 0.5) - global_position)
+	side.y = 0.0
+	var axis := Vector3.UP.cross(side.normalized()) if side.length() > 0.01 else Vector3.RIGHT
+	G.world.lean_tree(root, axis, 0.035 * _shake * sin(_shake * 14.0))
 
 
 ## The block state for placing `id` where we look: doors, hatches and ramps face our way; a half
@@ -788,7 +849,9 @@ func respawn() -> void:
 
 
 func _update_crack() -> void:
-	if mine_progress > 0.02 and target.get("hit", false):
+	if _shaking.y > -999 and (mine_progress <= 0.0 or target_tree.is_empty() or target_tree["root"] != _shaking):
+		_shake_tree(Vector3i(0, -999, 0), 0.0)
+	if mine_progress > 0.02 and target.get("hit", false) and target_tree.is_empty():
 		mine_crack.visible = true
 		mine_crack.mesh = G.world.crack_mesh
 		mine_crack.material_override = G.world.crack_mats[clampi(int(mine_progress * 4.0), 0, 3)]

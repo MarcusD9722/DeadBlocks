@@ -42,3 +42,4 @@ and paints over palette cells of their textures for the zombie skins):
 | Spitter | Zombie Apocalypse Kit | `zombies/Zombie_Chubby.gltf` |
 | Other players | Zombie Apocalypse Kit | `survivors/Characters_{Matt,Lis,Sam,Shaun}_SingleWeapon.gltf` (their weapons are hidden) |
 | Boar (pig recoloured, tusks added) | Farm Animals | `animals/Pig.fbx` |
+| Trees (broadleaf and pines), and from 0.18.0 the grass, flowers, ferns, clover, mushrooms, bushes, pebbles and rocks scattered over the land | Stylized Nature MegaKit (Standard, https://quaternius.itch.io/stylized-nature-megakit) | `nature/*.gltf` and their textures (the textures resized to at most 1024 pixels) |

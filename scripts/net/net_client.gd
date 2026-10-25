@@ -862,6 +862,11 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			ground_changed.emit()
 		Proto.S_HIT:
 			shot_hit.emit(b.get_u8())
+		Proto.S_TREE:
+			var root := Proto.get_bpos(b)
+			var yaw := float(b.get_u16()) / 65535.0 * TAU
+			if G.game != null and _world_ready():
+				G.game.tree_falls(root, yaw)
 		Proto.S_MAP:
 			var keys := Proto.get_keys(b)
 			for k in keys:

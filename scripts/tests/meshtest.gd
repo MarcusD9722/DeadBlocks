@@ -2,22 +2,32 @@ extends RefCounted
 ## The drawn world must have no holes: `-- --meshtest`. Meshes chunks of generated land and of
 ## land full of randomly placed built and natural blocks, the way a game does, and checks the
 ## drawn solid surface (rounded ground, cubes, boxes) is closed: no edge that only one triangle
-## uses, apart from the bottom of the world. Also counts rounded-ground triangles that are folded
+## uses, apart from the bottom of the world; the natural trees, drawn as models since M4.6, are
+## left out of it. Also counts rounded-ground triangles that are folded
 ## over (drawn facing away from their own normals). Prints MESHTEST lines and DONE fails=N.
 
 const WorldScript := preload("res://scripts/world.gd")
 const CH := 16
 
+static var _seed := 0
+static var _trees := 0
+
 
 static func run(seed_v: int) -> void:
 	SmoothMesher.init_tables()
+	_seed = seed_v
 	var fails := 0
 	var gen := WorldGen.new(seed_v)
 	var base := {}
 	for z in range(-2, 3):
 		for x in range(-2, 3):
 			base[Vector2i(x, z)] = gen.generate(x, z)
+	_trees = 0
 	fails += _check("generated land", base, {})
+	# The natural trees are drawn as models (M4.6), their blocks left out of the picture.
+	var ok := _trees > 0
+	print("MESHTEST %s generated land: %d trees drawn as models" % ["PASS" if ok else "FAIL", _trees])
+	fails += 0 if ok else 1
 	# Built and natural blocks mixed at random around the surface (walls, floors, logs, tunnels).
 	var ids := [Blocks.AIR, Blocks.AIR, Blocks.AIR, Blocks.DIRT, Blocks.STONE, Blocks.GRASS, Blocks.PLANKS,
 		Blocks.COBBLE, Blocks.LOG, Blocks.STONE_BRICK, Blocks.LEAVES, Blocks.TORCH, Blocks.BED, Blocks.SAND,
@@ -51,6 +61,7 @@ static func run(seed_v: int) -> void:
 ## middle chunk's surface. Returns the number of failed checks.
 static func _check(what: String, data: Dictionary, metas: Dictionary) -> int:
 	var w = WorldScript.new()
+	w.seed_v = _seed
 	var edges := {}
 	var folded := 0
 	var tris := 0
@@ -61,7 +72,9 @@ static func _check(what: String, data: Dictionary, metas: Dictionary) -> int:
 				for dx in range(-1, 2):
 					nb.append(data[Vector2i(cx + dx, cz + dz)])
 			nb.append(metas.get(Vector2i(cx, cz), {}))
+			nb.append(Vector2i(cx, cz))
 			var buf = w._build(nb)
+			_trees += buf.trees.size()
 			var o := Vector3(cx * CH, 0, cz * CH)
 			var f: PackedVector3Array = buf.vfaces
 			for i in range(0, f.size(), 3):

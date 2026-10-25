@@ -26,6 +26,10 @@ class Chunk:
 	var vbody: StaticBody3D = null
 	var vshape: CollisionShape3D = null
 	var lights: Array = []
+	## The chunk's tree models (M4.6): one MultiMeshInstance3D per model, and where each tree
+	## is in them: root -> [MultiMeshInstance3D, instance, transform] (lean_tree).
+	var trees: Array = []
+	var tree_slots := {}
 	var modified := false
 	var ready := false
 
@@ -68,6 +72,9 @@ class MeshBuf:
 	var vfaces := PackedVector3Array()
 	var lights: Array = []
 	var beacons: Array = []
+	## Natural trees rooted in this chunk (M4.6): [Trees model, transform in the chunk, root],
+	## drawn as models; their logs and leaves are left out of the picture (_without_trees).
+	var trees: Array = []
 	## The smooth ground (SmoothMesher): material weights in the colour and uv/uv2, sky in uv2.y.
 	var t_verts := PackedVector3Array()
 	var t_norms := PackedVector3Array()
@@ -504,6 +511,8 @@ func _free_visual(c: Chunk) -> void:
 		c.node.queue_free()
 		c.node = null
 	c.lights.clear()
+	c.trees.clear()  # (children of c.node)
+	c.tree_slots.clear()
 	if c.body != null:
 		c.body.queue_free()
 		c.body = null
@@ -583,6 +592,7 @@ func _neighbours(k: Vector2i) -> Array:
 				return []
 			nb[(dz + 1) * 3 + dx + 1] = nc.data
 	nb.append(chunks[k].meta.duplicate())  # nb[9]: this chunk's block states (a copy for the worker)
+	nb.append(k)  # nb[10]: which chunk
 	return nb
 
 
@@ -673,15 +683,16 @@ func _quad(out: PackedVector3Array, o: Vector3, dir: int, lo := Vector3.ZERO, hi
 
 func _build(nb: Array) -> MeshBuf:
 	var buf := MeshBuf.new()
+	var meta: Dictionary = nb[9]
+	# Collision is whole blocks, the same as on the server (the rounding is only drawn).
+	buf.faces = _build_collision(nb[4], nb[5], nb[3], nb[7], nb[1], meta)
+	nb = _without_trees(nb, buf)  # (the trees are drawn as models)
 	var sky := SmoothMesher.build(nb, buf)
 	var d: PackedByteArray = nb[4]
 	var px: PackedByteArray = nb[5]
 	var nx: PackedByteArray = nb[3]
 	var pz: PackedByteArray = nb[7]
 	var nz: PackedByteArray = nb[1]
-	var meta: Dictionary = nb[9]
-	# Collision is whole blocks, the same as on the server (the rounding is only drawn).
-	buf.faces = _build_collision(d, px, nx, pz, nz, meta)
 	var opq: Array = Blocks.OPAQUE
 	var shp: Array = Blocks.SHAPE
 	var tiles: Array = Blocks.TILES
@@ -744,6 +755,64 @@ func _build(nb: Array) -> MeshBuf:
 	for i in buf.t_idx:
 		buf.vfaces.append(buf.t_verts[i])
 	return buf
+
+
+## The block data the picture is made from (M4.6): nb with the natural trees that still stand
+## (Trees) taken out, as air, so the ground, cubes and leaves are drawn as if they were not
+## there; the trees rooted in this chunk go into buf.trees, to be drawn as models. Collision
+## still comes from nb itself. A chunk's data is copied only when a tree is taken out of it.
+func _without_trees(nb: Array, buf: MeshBuf) -> Array:
+	var out := nb.duplicate()
+	var k: Vector2i = nb[10]
+	var bx := k.x * CH
+	var bz := k.y * CH
+	var gen := WorldGen.new(seed_v)  # (a worker thread: its own)
+	var block := func(c: Vector3i) -> int: return _nb_block(nb, c.x - bx, c.y, c.z - bz)
+	var copied := {}
+	# Trees whose cells reach the middle chunk or the SmoothMesher.P blocks it reads around it.
+	var reach := SmoothMesher.P + 2
+	for tz in range(bz - reach, bz + CH + reach):
+		for tx in range(bx - reach, bx + CH + reach):
+			var t := Trees.at(gen, tx, tz)
+			if t.is_empty() or not Trees.standing(t, block):
+				continue
+			for c in Trees.cells(gen, t):
+				var cell: Vector3i = c[0]
+				var lx := cell.x - bx
+				var lz := cell.z - bz
+				if cell.y < 0 or cell.y >= H or lx < -CH or lx >= 2 * CH or lz < -CH or lz >= 2 * CH:
+					continue
+				var cx := floori(lx / 16.0)
+				var cz := floori(lz / 16.0)
+				var ci := (cz + 1) * 3 + cx + 1
+				var d: PackedByteArray = out[ci]
+				if d.is_empty():
+					continue
+				var i := (lx - cx * CH) + (lz - cz * CH) * CH + cell.y * CH2
+				if d[i] != (Blocks.LOG if c[1] else Blocks.LEAVES):
+					continue
+				if not copied.has(ci):
+					d = d.duplicate()
+					copied[ci] = true
+				d[i] = 0
+				out[ci] = d
+			if tx >= bx and tx < bx + CH and tz >= bz and tz < bz + CH:
+				buf.trees.append([t["model"], Trees.xform(t, Vector3(bx, 0, bz)), t["root"]])
+	return out
+
+
+## A block in the 3 x 3 chunks around (nb), by its position in the middle chunk's coordinates.
+static func _nb_block(nb: Array, lx: int, y: int, lz: int) -> int:
+	if y < 0 or y >= H:
+		return 0
+	var cx := floori(lx / 16.0)
+	var cz := floori(lz / 16.0)
+	if absi(cx) > 1 or absi(cz) > 1:
+		return 0
+	var data = nb[(cz + 1) * 3 + cx + 1]
+	if data == null or (data as PackedByteArray).is_empty():
+		return 0
+	return (data as PackedByteArray)[(lx - cx * CH) + (lz - cz * CH) * CH + y * CH2]
 
 
 func _mesh_done(k: Vector2i, ver: int, buf: MeshBuf) -> void:
@@ -851,6 +920,7 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		c.node.add_child(o)
 		o.position = Vector3(lp) + Vector3(0.5, 0.8, 0.5)
 		c.lights.append(o)
+	_apply_trees(c, buf)
 	for bp in buf.beacons:
 		var m := MeshInstance3D.new()
 		m.mesh = beacon_mesh
@@ -860,6 +930,54 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		m.position = Vector3(bp) + Vector3(0.5, 0.62 + BEACON_H * 0.5, 0.5)
 		c.lights.append(m)
 	c.ready = true
+
+
+## The chunk's trees as models (M4.6): one MultiMesh per model kind.
+func _apply_trees(c: Chunk, buf: MeshBuf) -> void:
+	for n in c.trees:
+		if is_instance_valid(n):
+			n.queue_free()
+	c.trees.clear()
+	c.tree_slots.clear()
+	if _headless or buf.trees.is_empty():
+		return
+	var by_model := {}
+	for t in buf.trees:
+		if not by_model.has(t[0]):
+			by_model[t[0]] = []
+		by_model[t[0]].append(t)
+	for model in by_model:
+		var mesh := Trees.mesh(model)
+		if mesh == null:
+			continue
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh
+		var list: Array = by_model[model]
+		mm.instance_count = list.size()
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		for j in list.size():
+			mm.set_instance_transform(j, list[j][1])
+			c.tree_slots[list[j][2]] = [mmi, j, list[j][1]]
+		c.node.add_child(mmi)
+		c.trees.append(mmi)
+
+
+## A standing tree leans by `angle` about `axis` through its foot (the tree being chopped
+## shakes; angle 0 stands it up again).
+func lean_tree(root: Vector3i, axis: Vector3, angle: float) -> void:
+	var c: Chunk = chunks.get(Vector2i(root.x >> 4, root.z >> 4))
+	if c == null or not c.tree_slots.has(root):
+		return
+	var slot: Array = c.tree_slots[root]
+	if not is_instance_valid(slot[0]):
+		return
+	var xf: Transform3D = slot[2]
+	if angle != 0.0 and axis != Vector3.ZERO:
+		var foot := Vector3(root.x & 15, root.y, root.z & 15) + Vector3(0.5, 0.0, 0.5)
+		xf = Transform3D(Basis(axis.normalized(), angle), foot) * Transform3D(Basis.IDENTITY, -foot) * xf
+	(slot[0] as MultiMeshInstance3D).multimesh.set_instance_transform(slot[1], xf)
 
 
 func _apply_collision(c: Chunk, origin: Vector3, faces: PackedVector3Array) -> void:

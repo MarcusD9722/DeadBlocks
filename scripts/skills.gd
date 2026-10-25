@@ -18,6 +18,7 @@ const ZOMBIE_XP := {"walker": 10, "runner": 20, "brute": 50, "crawler": 15, "scr
 const BOAR_XP := 15
 const ORE_XP := {Blocks.COAL_ORE: 3, Blocks.IRON_ORE: 5}
 const UPGRADE_XP := 3
+const TREE_XP := 2
 
 ## The perks, by branch: id (on the network), key (in the save files), name, ranks, what a rank does.
 const PERKS := [

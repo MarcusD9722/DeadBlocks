@@ -39,8 +39,12 @@ func _run() -> void:
 	dir = G.arg_value("--shots=")
 	var g = G.game
 	var w = G.world
+	var waited := 0
 	while g.state == "loading":
 		await _wait(0.25)
+		waited += 1
+		if waited % 40 == 0:
+			print("SCENERY loading %d%% (%d fps)" % [int(w.load_progress() * 100.0), Engine.get_frames_per_second()])
 	g.start_game()
 	for m in get_tree().get_nodes_in_group("mobs"):
 		m.queue_free()

@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 12
+const PROTOCOL := 13
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -58,6 +58,8 @@ const S_SOCIAL := 58     # players u8 x (name, net id u16 (0 offline), ping u16,
 # M4.5: experience and perks, and the armor you wear.
 const S_PROGRESS := 60   # experience u32 (in all), count u8 x (perk id u8, rank u8)
 const S_ARMOR := 61      # 4 x item u16: head, chest, legs, feet (0 = none)
+# M4.6: a natural tree was felled (its blocks go as edits); everyone near sees it fall.
+const S_TREE := 64       # block pos (the trunk's lowest log), fall direction u16 (yaw, 0-65535 = 0-2 pi)
 # Client -> server
 const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8, hotbar slot u8
 const C_READY := 31      # my chunks are loaded, count me as online

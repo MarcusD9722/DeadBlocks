@@ -883,6 +883,27 @@ static func zombie_type(mood: String, d: int, roll: float) -> String:
 
 
 ## Admins' /spawn: a mob 8-14 m from a player. A zombie type comes in tonight's mood.
+## A natural tree comes down (M4.6): ours as we fell it, someone else's from S_TREE. Shown once
+## per tree (we already show the one we felled when the server tells everyone).
+var _falling := {}
+
+func tree_falls(root: Vector3i, yaw: float) -> void:
+	if G.server_mode or G.world == null:
+		return
+	var now := Time.get_ticks_msec()
+	if now - int(_falling.get(root, -100000)) < 8000:
+		return
+	_falling[root] = now
+	if G.player != null and G.player.global_position.distance_to(Vector3(root)) > 120.0:
+		return
+	var t := Trees.at(Trees.gen_for(G.world.seed_v), root.x, root.z)
+	if t.is_empty() or t["root"] != root:
+		return
+	var f := Trees.Falling.new()
+	G.world.add_child(f)
+	f.setup(t, yaw, G.sfx)
+
+
 func spawn_near(what: String, pos: Vector3) -> Node:
 	if what == "boar":
 		return _spawn_animal(pos, 8.0, 14.0)
