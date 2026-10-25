@@ -13,6 +13,18 @@ Marcus asked (after 0.12.0) for:
 - villages with farms and new foods, villagers who trade, roads with wrecked cars to loot, run-down
   houses, shops, farms and towns with loot in boxes and cabinets.
 
+After 0.14.0 Marcus added ("I'm trying to make this into a real game now"):
+- **M** opens a **world map** that is uncovered as you travel;
+- **I** opens the inventory with more **tabs**: an **armor** screen to equip armor and clothes, a
+  **players** tab (who's on the server, send an **ally request**; allies show on the map and as a
+  waypoint with distance, like a dropped bag), a **skills** tab for skills and perks, and a
+  **tribe** tab (like ARK's tribes, to add people to your journey);
+- an **experience bar**: zombie kills level you up, and levels become points for the skill tree;
+- tools and weapons reskinned as **rounded 3D models** from free sources, so they don't look blocky;
+- away from the blocky Minecraft feel, towards **simple 3D**;
+- a world that feels **alive** (villages and villagers, run-down towns with homes, shops and
+  farms, streets with wrecked cars: M4.8 and M4.9 below).
+
 This plan replaces the old "M4 — Exploration & loot" line in DESIGN.md (its ruins, loot tables,
 refills and locks are part of M4.5 below). Each step is its own release; the games update
 themselves, so a release is the GitHub release plus `update.sh` on the Pi.
@@ -23,16 +35,24 @@ themselves, so a release is the GitHub release plus `update.sh` on the Pi.
 |---|---|---|
 | **M4.1** (0.13.0) | Controls, controller, crafting by station, tool tiers up to Blood Steel, shovels, Blood Moon loot, more rounding | Everything after it adds items, blocks and screens; the keys and the crafting split come first |
 | **M4.2** (0.14.0) | Building: block format with room for many more blocks and their facing, structure tiers, hammer upgrades and repairs, doors, hatches, ramps, storage boxes, bags opened with E | Doors, ramps and tiers need the bigger block format; storage boxes are the base for all loot |
-| **M4.3** (0.15.0) | Ranged weapons: spears (thrown, picked up again), bow and arrows, crossbow and bolts | Needs only the server's projectiles (the spitter's acid already flies) |
-| **M4.4** (0.16.0) | Deep world: twice as tall, mountains, cave systems, ores by depth, zombies in caves, better clouds; the fair Blood Moon (old M3.2) | New terrain is a new world, so it waits until the crafting and building it serves are in |
-| **M4.5** (0.17.0) | Roads and towns: roads between towns, wrecked cars, run-down houses, shops and farms, loot containers with rarity and refills, sleeping zombies; then the Pi benchmark (old M3.4) | Needs the containers (M4.2) and the new terrain (M4.4) |
-| **M4.6** (0.18.0) | Villages, farming and traders: settlements with fields, seeds and crops, new foods, traders who buy and sell | Needs towns and roads to sit on, and loot to trade |
+| **M4.3** (0.15.0) | Ranged weapons (spears thrown and picked up again, bow and arrows, crossbow and bolts) and **every tool and weapon as a rounded 3D model** | The new weapons need models anyway; the first step away from the blocky look |
+| **M4.4** (0.16.0) | **Character screen and map**: I opens tabs (Inventory, Players, Tribe); M opens the world map, uncovered as you travel; ally requests and tribes, allies marked on the map and with waypoints | The tabs are the frame the next step fills; the map is wanted before the world grows |
+| **M4.5** (0.17.0) | **Progress**: experience bar, levels, skill points and a first skill tree (Skills tab); armor and clothes (Armor tab) | Fills the character screen; gives zombie kills a purpose |
+| **M4.6** (0.18.0) | **The look, away from Minecraft**: trees, bushes, grass and rocks as 3D models, items as 3D models on the ground, new icons, a cleaner HUD and menus | Before the deep world, so new worlds are made with it |
+| **M4.7** (0.19.0) | Deep world: twice as tall, mountains, cave systems, ores by depth, zombies in caves, better clouds; the fair Blood Moon (old M3.2); a **living world**: more animals, birds, weather, ambient sound | New terrain is a new world, so it waits until the crafting, building and look it serves are in |
+| **M4.8** (0.20.0) | Roads and towns: roads between towns, wrecked cars, run-down houses, shops and farms, loot containers with rarity and refills, sleeping zombies; then the Pi benchmark (old M3.4) | Needs the containers (M4.2) and the new terrain (M4.7) |
+| **M4.9** (0.21.0) | Villages, farming and traders: settlements with fields, seeds and crops, new foods, villagers, traders who buy and sell | Needs towns and roads to sit on, and loot to trade |
+
+The order is a proposal: any step can move up if Marcus wants it sooner (the map, the character
+screen and progress need nothing from the world steps, and the towns could come before the deep
+world if the world feeling alive matters most).
 
 The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays after M4.
 
 ## Existing worlds (default)
-- Up to M4.3 everything works in today's worlds, the Pi's included.
-- M4.4 changes the terrain. Old worlds keep their terrain (the world remembers which generator made
+- Up to M4.6 everything works in today's worlds, the Pi's included (whether old worlds' block
+  trees turn into the new tree models is decided in M4.6; the aim is yes).
+- M4.7 changes the terrain. Old worlds keep their terrain (the world remembers which generator made
   it, and the server sends that to the games), so the Pi world goes on as it is. Mountains, caves,
   roads, towns and villages appear only in a **new world** (`dbctl` / `--new-world`, the old one
   goes to backups).
@@ -171,14 +191,62 @@ The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays a
 - The mesh test builds random land full of every shape and facing and finds no holes; the save
   test round-trips block states and boxes and still reads `DBC1` chunks.
 
-## M4.3 Ranged weapons (0.15.0) — outline
+## M4.3 Ranged weapons and 3D tools (0.15.0) — outline
 - **Spears** (wood, stone, iron): stab, or hold right-click to throw; a thrown spear sticks where
   it lands and is picked up again with E.
 - **Bow** with arrows (stone, iron tips), **crossbow** with bolts: hold to draw, release to shoot;
   arrows that miss can sometimes be picked up again.
 - Projectiles fly on the server (like the spitter's acid) and everyone sees them.
+- **Every tool and weapon becomes a rounded 3D model** (pickaxes, axes, shovels, hammers, club,
+  swords, spears, bow, crossbow): in your hand, in other players' hands, and in flight. One shape
+  per tool, with the tier shown by its material (wood, stone, iron, steel, Blood Steel).
+- Models from free CC0 packs (Quaternius, Kenney and the like, credited in `assets/CREDITS.md`),
+  or built in code where no pack fits; held-item swings animated on the model.
+- Inventory icons are drawn from the models (rendered once when the game starts) instead of
+  pixel art.
 
-## M4.4 Deep world (0.16.0) — outline
+## M4.4 Character screen and map (0.16.0) — outline
+- **I opens the character screen**, with tabs along the top (mouse, or LB/RB on the controller):
+  **Inventory** (today's screen with hand crafting), **Players**, **Tribe**; **Armor** and
+  **Skills** join in M4.5. E on a station still opens the inventory with that station's recipes.
+- **World map (M)**: a top-down picture of the land, uncovered around you as you travel (the rest
+  stays dark). Each player's map is their own, kept by the server and saved with their account, so
+  it follows them to another PC. Zoom and drag; markers for you, your bed, your bags, your allies
+  and tribe; your own pins with a name. Towns, villages and traders appear on it once found.
+- **Players tab**: who is on the server (name, ping, ally or tribe), **send an ally request**;
+  the other player gets a prompt to accept or decline; remove an ally.
+- **Allies** see each other on the map and as a **waypoint with the distance** on screen (like a
+  dropped bag's marker), and their name tags show through walls.
+- **Tribe tab** (like ARK): found a tribe with a name, invite players, leave, and the founder can
+  remove members or hand over leadership. Tribe members are allies, plus: a tribe chat channel,
+  respawning at any tribe bed, and (once locks come) tribe-only doors and boxes.
+- Allies and tribes are kept by the server (world.json), and work the same in Play solo, Host
+  game and on the Pi.
+
+## M4.5 Progress: experience, skills, armor (0.17.0) — outline
+- **Experience** from zombie kills (more for Runners, Brutes, Screamers and Spitters, more again
+  for Blood Moon zombies), a little from other things later (hunting, building, quests). An
+  **experience bar** on the HUD; each level needs a bit more than the last.
+- **Every level gives a skill point** to spend in the **Skills tab**: a tree of perks in a few
+  branches, for example fighting (melee damage, stamina), survival (health, slower hunger,
+  faster healing), building (hammer speed, cheaper upgrades, mining speed) and later scavenging
+  (better loot, M4.8).
+- **Armor tab**: slots for head, chest, legs and feet, with your character shown. Armor from boar
+  hide (leather: boars drop hide), iron, steel and Blood Steel, each tier blocking more damage;
+  clothes in the same slots (warmth matters once the weather does, M4.7). Other players see your
+  armor if the models allow it.
+- Dying keeps your level and skills (only your things go into the bag).
+
+## M4.6 The look, away from Minecraft (0.18.0) — outline
+- The aim is a simple 3D look like 7 Days to Die: the world stays a grid underneath (mining,
+  building and zombies breaking walls depend on it), but only built blocks look like blocks.
+- **Trees as 3D models** (several kinds per biome): chop the trunk and the tree falls and gives
+  logs. **Bushes, grass, flowers and rocks** as 3D models too; berry bushes with berries on them.
+- Things on the ground (dropped items, thrown spears) as small 3D models.
+- New item icons, a cleaner HUD and menus (no pixel font), built blocks with even softer edges.
+- Free CC0 model packs again where they fit.
+
+## M4.7 Deep world and a living world (0.19.0) — outline
 - The world becomes **128 blocks tall**: real mountains with snow tops, valleys, and deep ground.
 - **Caves** like Minecraft's: long winding tunnels, big caverns, ravines, underground lakes;
   coal near the top, iron deeper, a new rare ore at the bottom.
@@ -186,8 +254,10 @@ The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays a
 - **Clouds**: thicker, rounder, lit from inside at sunset, moving shadows on the ground.
 - The fair Blood Moon from the M3 plan: the horde shared out by groups of players, spawned at each
   group's edge.
+- **A living world**: more animals (deer, wolves, bears, birds), weather (rain, fog, storms),
+  ambient sound (wind, birds, insects at night) and some music.
 
-## M4.5 Roads and towns (0.17.0) — outline
+## M4.8 Roads and towns (0.20.0) — outline
 - **Roads** connect towns across the world; **wrecked cars** along them can be searched.
 - **Towns**: run-down houses, shops (a gas station, a grocery, a hardware store), farms and barns.
   Buildings have loot in boxes, cabinets, fridges and crates; better loot further from the center.
@@ -195,8 +265,9 @@ The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays a
 - Sleeping zombies inside buildings.
 - Then the Pi benchmark with the new world (the old M3.4).
 
-## M4.6 Villages, farming and traders (0.18.0) — outline
-- **Villages**: walled settlements of survivors with fields, safe from zombies.
+## M4.9 Villages, farming and traders (0.21.0) — outline
+- **Villages**: walled settlements of survivors with fields, safe from zombies, with villagers
+  going about their day.
 - **Farming**: seeds from villages and loot; till ground with a hoe, crops grow over in-game days
   (wheat, corn, potatoes, carrots, pumpkins). New foods: bread, corn bread, baked potato, stew.
 - **Traders** in villages: buy and sell for **Scrap** (a coin made from scrap metal), stock that

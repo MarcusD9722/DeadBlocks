@@ -105,6 +105,13 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - **Storage boxes** (wood 18 slots, iron 27) opened with E; shared by everyone. A broken box leaves its things in a bag; dropped bags open into the same screen.
 - Block ids stay one byte; facing and upper/lower half are a small per-chunk state (save format 3, protocol 9).
 
+## Character, progress and the look (decided after 0.14.0, Marcus: "a real game now")
+- **I** opens a character screen with tabs: Inventory, Armor, Players, Skills, Tribe. **M** opens a world map that each player uncovers by travelling (kept by the server with their account).
+- Players send **ally requests**; allies are marked on the map and with an on-screen waypoint and distance (like a dropped bag). **Tribes** like ARK's: a named group with a founder; members are allies with a tribe chat and shared tribe beds, and later tribe-only doors and boxes.
+- **Experience** comes from zombie kills (tougher types and Blood Moon zombies give more); every level is a skill point for the skill tree. Levels and skills are kept on death.
+- **Armor and clothes** in head, chest, legs and feet slots.
+- **Look:** away from the blocky Minecraft feel, towards simple 3D like 7 Days to Die. The world stays a grid underneath (mining, building and zombies breaking things need it), but tools, weapons, trees, plants, rocks and dropped items become rounded 3D models from free CC0 sources; only built blocks look like blocks.
+
 ## Bases & ownership
 - Boxes and doors are **open to everyone by default** (as built in 0.14.0).
 - A player can add a **lock / PIN code** to a door or chest to restrict it.
@@ -195,10 +202,10 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
   - M1.8 (the friends evening and its stats) waits until Marcus has his home-lab parts and the router forward.
 - **M3 — Zombie rework** (plan: `docs/M3-plan.md`): proximity-only aggression on normal days (a first version is in 0.7.1), Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot.
   - M3.1 (0.9.0): the five new types (Runner, Brute, Crawler, Screamer, Spitter), mixed into nights and Blood Moons by day. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
-  - Paused after M3.1 for the graphics overhaul (below). Since Marcus's wish list after 0.12.0 (M4 below): M3.3 (Blood Moon loot) is part of M4.1, M3.2 (the fair Blood Moon) goes with M4.4, M3.4 (the Pi benchmark) after M4.5.
+  - Paused after M3.1 for the graphics overhaul (below). Since Marcus's wish list after 0.12.0 (M4 below): M3.3 (Blood Moon loot) is part of M4.1, M3.2 (the fair Blood Moon) goes with M4.7 (the deep world), M3.4 (the Pi benchmark) after M4.8 (towns).
 - **V — Graphics overhaul** (plan: `docs/V-plan.md`): V1 renderer and lighting, V2 smooth terrain and rounded models (0.10.0), V3 CC0 textures (0.11.0), V4 CC0 animated models (0.12.0).
 - **M4 — Survival depth** (plan: `docs/M4-plan.md`; Marcus's list after 0.12.0, which takes in the old "exploration & loot" milestone):
   - M4.1 (0.13.0, built): controls (E interacts, I inventory, keys in Settings, controller), crafting by station, tools in five tiers with shovels, Steel and Blood Steel, the Blood Forge, Blood Shards, Blood Brick, rounder ground and blocks.
   - M4.2 (0.14.0, built): structure tiers in four shapes, hammers that upgrade and repair, doors and hatches, storage boxes, bags opened with E, block states (facing, upper half).
-  - M4.3 thrown spears, bow, crossbow; M4.4 the deep world (taller, caves, cave zombies, clouds); M4.5 roads, towns, loot containers; M4.6 villages, farming, traders.
+  - Planned (order revised after 0.14.0 with Marcus's second list): M4.3 thrown spears, bow, crossbow, and every tool and weapon as a 3D model; M4.4 the character screen (I with tabs: inventory, players, tribe), the world map (M, uncovered as you travel), ally requests and tribes with map markers and waypoints; M4.5 experience, levels, skill points and a skill tree, armor and clothes; M4.6 the look away from Minecraft (3D trees, plants, rocks, items; cleaner HUD); M4.7 the deep world and a living world (taller, caves, cave zombies, clouds, more animals, weather, ambient sound); M4.8 roads, towns, loot containers; M4.9 villages, farming, villagers, traders.
 - **M5 — Smarter zombies**: pathfinding toward the weakest part of a base.
