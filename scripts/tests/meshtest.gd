@@ -11,6 +11,7 @@ const CH := 16
 
 static var _seed := 0
 static var _trees := 0
+static var _decor := 0
 
 
 static func run(seed_v: int) -> void:
@@ -23,10 +24,12 @@ static func run(seed_v: int) -> void:
 		for x in range(-2, 3):
 			base[Vector2i(x, z)] = gen.generate(x, z)
 	_trees = 0
+	_decor = 0
 	fails += _check("generated land", base, {})
-	# The natural trees are drawn as models (M4.6), their blocks left out of the picture.
-	var ok := _trees > 0
-	print("MESHTEST %s generated land: %d trees drawn as models" % ["PASS" if ok else "FAIL", _trees])
+	# The natural trees are drawn as models (M4.6), their blocks left out of the picture; grass,
+	# flowers and stones stand on the drawn ground.
+	var ok := _trees > 0 and _decor > 100
+	print("MESHTEST %s generated land: %d trees drawn as models, %d plants and stones" % ["PASS" if ok else "FAIL", _trees, _decor])
 	fails += 0 if ok else 1
 	# Built and natural blocks mixed at random around the surface (walls, floors, logs, tunnels).
 	var ids := [Blocks.AIR, Blocks.AIR, Blocks.AIR, Blocks.DIRT, Blocks.STONE, Blocks.GRASS, Blocks.PLANKS,
@@ -75,6 +78,7 @@ static func _check(what: String, data: Dictionary, metas: Dictionary) -> int:
 			nb.append(Vector2i(cx, cz))
 			var buf = w._build(nb)
 			_trees += buf.trees.size()
+			_decor += buf.decor.size()
 			var o := Vector3(cx * CH, 0, cz * CH)
 			var f: PackedVector3Array = buf.vfaces
 			for i in range(0, f.size(), 3):

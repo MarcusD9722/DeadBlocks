@@ -620,8 +620,14 @@ func _progress() -> void:
 	await _clear_mobs()
 	var stood: Vector3 = p.global_position
 	p.last_hurt = 0
-	G.net.send_chat("/spawn zombie 1")
-	var hit := await _until(func(): return p.last_hurt > 0, 40.0)
+	# (A zombie can land behind a hill and wander off: then another, up to three.)
+	var hit := false
+	for attempt in 3:
+		G.net.send_chat("/spawn zombie 1")
+		hit = await _until(func(): return p.last_hurt > 0, 25.0)
+		if hit:
+			break
+		await _clear_mobs()
 	check(hit and p.last_hurt <= 7, "a zombie's hit through iron armor: %d (8 or more without)" % p.last_hurt)
 	await _clear_mobs()
 	# Back where we stood before the hit knocked us away, with the zombie gone from view.

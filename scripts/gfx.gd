@@ -8,12 +8,15 @@ const QUALITY_NAMES := ["Low", "Medium", "High", "Ultra", "Custom"]
 const CUSTOM := 4
 ## What each quality preset sets (the Settings panel can change each one; then it is "Custom").
 const PRESETS := [
-	{"shadows": 1, "ssao": false, "ssil": false, "fog": false, "aa": 1, "view": 5},
-	{"shadows": 2, "ssao": true, "ssil": false, "fog": false, "aa": 3, "view": 6},
-	{"shadows": 3, "ssao": true, "ssil": true, "fog": true, "aa": 4, "view": 7},
-	{"shadows": 4, "ssao": true, "ssil": true, "fog": true, "aa": 5, "view": 8},
+	{"shadows": 1, "ssao": false, "ssil": false, "fog": false, "aa": 1, "view": 5, "plants": 1},
+	{"shadows": 2, "ssao": true, "ssil": false, "fog": false, "aa": 3, "view": 6, "plants": 2},
+	{"shadows": 3, "ssao": true, "ssil": true, "fog": true, "aa": 4, "view": 7, "plants": 2},
+	{"shadows": 4, "ssao": true, "ssil": true, "fog": true, "aa": 5, "view": 8, "plants": 3},
 ]
 const SHADOW_NAMES := ["Off", "Low", "Medium", "High", "Ultra"]
+## Grass and flowers (M4.6): how far they are drawn.
+const PLANT_NAMES := ["Off", "Near", "Medium", "Far"]
+const PLANT_RANGE := [0.0, 28.0, 48.0, 80.0]
 const AA_NAMES := ["Off", "FXAA", "SMAA", "MSAA 2x", "MSAA 4x", "MSAA 8x"]
 const FPS_CAPS := [0, 30, 60, 120, 144, 165, 240]
 const WINDOW_NAMES := ["Windowed", "Fullscreen", "Exclusive fullscreen"]
@@ -21,7 +24,7 @@ const WINDOW_NAMES := ["Windowed", "Fullscreen", "Exclusive fullscreen"]
 const VIEW_MIN := 4
 const VIEW_MAX := 8
 const DEFAULTS := {
-	"quality": 2, "shadows": 3, "ssao": true, "ssil": true, "fog": true, "aa": 4, "view": 7,
+	"quality": 2, "shadows": 3, "ssao": true, "ssil": true, "fog": true, "aa": 4, "view": 7, "plants": 2,
 	"brightness": 50, "cave_light": 35, "fov": 75, "render_scale": 100, "vsync": true,
 	"max_fps": 0, "window": 0, "show_fps": false, "sens": 2.5, "stick_sens": 3.0, "invert_y": false,
 }
@@ -75,6 +78,7 @@ func _clamp_all() -> void:
 	opt["shadows"] = clampi(opt["shadows"], 0, SHADOW_NAMES.size() - 1)
 	opt["aa"] = clampi(opt["aa"], 0, AA_NAMES.size() - 1)
 	opt["view"] = clampi(opt["view"], VIEW_MIN, VIEW_MAX)
+	opt["plants"] = clampi(opt["plants"], 0, PLANT_NAMES.size() - 1)
 	opt["brightness"] = clampi(opt["brightness"], 0, 100)
 	opt["cave_light"] = clampi(opt["cave_light"], 0, 100)
 	opt["fov"] = clampi(opt["fov"], 60, 110)
@@ -222,6 +226,7 @@ func apply_all(window := false) -> void:
 	if G.world != null and is_instance_valid(G.world) and G.world.render:
 		G.world.set_render_radius(view_radius())
 		G.world.set_min_light(min_light())
+		G.world.set_plant_range(PLANT_RANGE[opt["plants"]])
 	if not G.server_mode:
 		Engine.max_fps = opt["max_fps"]
 	if DisplayServer.get_name() != "headless":

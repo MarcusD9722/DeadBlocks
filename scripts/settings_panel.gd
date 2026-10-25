@@ -57,6 +57,7 @@ func _ready() -> void:
 	_slider(grid, "brightness", "Brightness", 0, 100, 1, func(v): return "%d" % v)
 	_slider(grid, "cave_light", "Light in caves and indoors", 0, 100, 1, func(v): return "%d" % v)
 	_slider(grid, "view", "View distance", g.VIEW_MIN, g.VIEW_MAX, 1, func(v): return "%d m" % (v * 16))
+	_choice(grid, "plants", "Grass and flowers", g.PLANT_NAMES)
 	_slider(grid, "fov", "Field of view", 60, 110, 1, func(v): return "%d°" % v)
 	_choice(grid, "shadows", "Shadows", g.SHADOW_NAMES)
 	_check(grid, "ssao", "Ambient occlusion")

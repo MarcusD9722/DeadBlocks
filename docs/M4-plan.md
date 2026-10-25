@@ -38,7 +38,7 @@ themselves, so a release is the GitHub release plus `update.sh` on the Pi.
 | **M4.3** (0.15.0, built) | Ranged weapons (spears thrown and picked up again, bow and arrows, crossbow and bolts) and **every tool and weapon as a rounded 3D model** | The new weapons need models anyway; the first step away from the blocky look |
 | **M4.4** (0.16.0) | **Character screen and map**: I opens tabs (Inventory, Players, Tribe); M opens the world map, uncovered as you travel; ally requests and tribes, allies marked on the map and with waypoints | The tabs are the frame the next step fills; the map is wanted before the world grows |
 | **M4.5** (0.17.0) | **Progress**: experience bar, levels, skill points and a first skill tree (Skills tab); armor and clothes (Armor tab) | Fills the character screen; gives zombie kills a purpose |
-| **M4.6** (0.18.0) | **The look, away from Minecraft**: trees, bushes, grass and rocks as 3D models, items as 3D models on the ground, new icons, a cleaner HUD and menus | Before the deep world, so new worlds are made with it |
+| **M4.6** (0.18.0, built) | **The look, away from Minecraft**: trees, bushes, grass and rocks as 3D models, items as 3D models on the ground, new icons, a cleaner HUD and menus | Before the deep world, so new worlds are made with it |
 | **M4.7** (0.19.0) | Deep world: twice as tall, mountains, cave systems, ores by depth, zombies in caves, better clouds; the fair Blood Moon (old M3.2); a **living world**: more animals, birds, weather, ambient sound | New terrain is a new world, so it waits until the crafting, building and look it serves are in |
 | **M4.8** (0.20.0) | Roads and towns: roads between towns, wrecked cars, run-down houses, shops and farms, loot containers with rarity and refills, sleeping zombies; then the Pi benchmark (old M3.4) | Needs the containers (M4.2) and the new terrain (M4.7) |
 | **M4.9** (0.21.0) | Villages, farming and traders: settlements with fields, seeds and crops, new foods, villagers, traders who buy and sell | Needs towns and roads to sit on, and loot to trade |
@@ -50,8 +50,8 @@ world if the world feeling alive matters most).
 The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays after M4.
 
 ## Existing worlds (default)
-- Up to M4.6 everything works in today's worlds, the Pi's included (whether old worlds' block
-  trees turn into the new tree models is decided in M4.6; the aim is yes).
+- Up to M4.6 everything works in today's worlds, the Pi's included (old worlds' block trees did
+  turn into the new tree models in M4.6).
 - M4.7 changes the terrain. Old worlds keep their terrain (the world remembers which generator made
   it, and the server sends that to the games), so the Pi world goes on as it is. Mountains, caves,
   roads, towns and villages appear only in a **new world** (`dbctl` / `--new-world`, the old one
@@ -395,14 +395,50 @@ Three branches; a rank costs a point, rank 1 can be learned at any level, rank 2
 - The save test round-trips experience, perks and armor and drops unknown perks.
 - `--scenery --only=screens` shows the Armor and Skills tabs.
 
-## M4.6 The look, away from Minecraft (0.18.0) — outline
-- The aim is a simple 3D look like 7 Days to Die: the world stays a grid underneath (mining,
-  building and zombies breaking walls depend on it), but only built blocks look like blocks.
-- **Trees as 3D models** (several kinds per biome): chop the trunk and the tree falls and gives
-  logs. **Bushes, grass, flowers and rocks** as 3D models too; berry bushes with berries on them.
-- Things on the ground (dropped items, thrown spears) as small 3D models.
-- New item icons, a cleaner HUD and menus (no pixel font), built blocks with even softer edges.
-- Free CC0 model packs again where they fit.
+## M4.6 The look, away from Minecraft (0.18.0) — built
+
+### Trees
+- The natural trees are **3D models**: five broadleaf trees and five pines from Quaternius'
+  Stylized Nature MegaKit (CC0); forests are half pines, the plains mostly broadleaf. Each one's
+  kind, turn and size come from the seed, so everyone sees the same tree, and **old worlds'
+  trees became models too** (they are found from the seed, as the terrain makes them).
+- Underneath, a tree is still its blocks (the trunk's logs and the leaves): collision, zombies,
+  the server and the map go by those. They are left out of the picture (`world._without_trees`).
+  A tree whose trunk is no longer whole (one chopped at before 0.18.0) is drawn as blocks.
+- **Chopping any block of a tree fells the whole tree** (`scripts/trees.gd`): it takes longer
+  than one log (an axe helps), the tree shakes with each blow, then creaks, falls away from you
+  and crashes down, lies a moment and sinks away. You get **all its logs** (trunk + 1, 5–7),
+  1–3 sticks and 1–3 plant fibres, and 2 experience. Zombies breaking through a trunk bring
+  the tree down too (no wood for anyone).
+- Protocol 13: S_TREE tells everyone near to show the tree falling.
+
+### Grass, flowers and rocks
+- Scattered over the land from the seed (`scripts/decor.gd`): grass (four kinds), flowers,
+  clover, ferns, small plants, mushrooms (forest), bushes and rocks on the grass; pebbles and
+  rocks on sand and bare stone. They stand on the drawn (rounded) ground. Picture only: nothing
+  to collide with or collect.
+- **Settings → Grass and flowers**: Off, Near (28 m), Medium (48 m), Far (80 m); the quality
+  presets pick Near / Medium / Medium / Far. Bushes and rocks are drawn twice as far.
+- **Berry bushes** are bushes with red berries on them (still a block you pick).
+
+### Icons, HUD and menus
+- **3D icons for everything**: the remaining items are models too (`scripts/item_models.gd`:
+  sticks, coal, ingots, raw and cooked meat, berries, the bandage, plant fibre, Blood Shards,
+  boar hide; held in your hand as models), and **every block's icon is the block drawn in 3D**
+  with its textures and shape (half blocks, ramps, pillars, doors, hatches, boxes).
+- **Cleaner HUD**: rounded hotbar slots on a soft strip (the one in hand stands up), slim
+  health / food / stamina bars with little icons, the day and time on a panel with the sun or
+  the moon.
+- **Menus**: one look for all buttons and fields (dark, rounded; a warm edge on the one the
+  controller is on).
+- **Built blocks**: where the same block goes on (a wall of planks), the rounded edges between
+  its blocks are gone, so a wall looks like one wall; the outer edges stay soft.
+
+### Tests
+- The mesh test: the trees are drawn as models and plants and stones are placed, with no hole in
+  the drawn ground.
+- The autotest fells a tree: it falls, the server gives all its logs, sticks and fibre, and the
+  whole tree (leaves too) is gone.
 
 ## M4.7 Deep world and a living world (0.19.0) — outline
 - The world becomes **128 blocks tall**: real mountains with snow tops, valleys, and deep ground.

@@ -454,6 +454,7 @@ func _run_pair() -> void:
 
 	await _social(me, other, oid)
 	await _armor_seen(other, oid)
+	await _tree_seen(other)
 
 	G.net.send_chat("NT checked")
 	check(await _until(func(): return _chat_from(other, "NT checked") != "", 100.0), "%s finished its checks" % other)
@@ -550,6 +551,53 @@ func _armor_seen(other: String, oid: int) -> void:
 		var rp = G.game.remote_players.get(oid)
 		check(await _until(func(): return rp != null and rp.armor_bits == Proto.armor_bits([Items.ARMOR_FIRST + 8, 0, 0, 0]), 3.0),
 			"and the figure wears it")
+
+
+## M4.6: "a" fells a tree near the spawn and "b" sees it fall (S_TREE), the whole tree gone.
+func _tree_seen(other: String) -> void:
+	var w = G.world
+	if role == "a":
+		var t := _near_tree(40)
+		check(not t.is_empty(), "a standing tree within 40 m")
+		if t.is_empty():
+			G.net.send_chat("NT tree none")
+			return
+		var root: Vector3i = t["root"]
+		await _walk_to(Vector3(root) + Vector3(0.5, 0, 0.5), 2.5, 40.0)
+		await _until(func(): return G.player.is_on_floor(), 3.0)
+		_look_at(Vector3(root) + Vector3(0.5, 1.5, 0.5))
+		var logs := _server_count(Blocks.LOG)
+		G.player.fell(t, root + Vector3i(0, 1, 0), Blocks.LOG)
+		var n := int(t["trunk"]) + 1
+		check(await _until(func(): return _server_count(Blocks.LOG) == logs + n, 10.0), "felled a tree: %d logs" % n)
+		G.net.send_chat("NT tree %d %d %d" % [root.x, root.y, root.z])
+	else:
+		check(await _until(func(): return _chat_from(other, "NT tree") != "", 90.0), "%s felled a tree" % other)
+		var v := _vec(_chat_from(other, "NT tree "))
+		if v == Vector3.INF:
+			return
+		var root := Vector3i(int(v.x), int(v.y), int(v.z))
+		check(G.game._falling.has(root), "and this player saw it fall")
+		check(await _until(func(): return w.get_blockv(root) == Blocks.AIR and w.get_blockv(root + Vector3i.UP) == Blocks.AIR, 5.0),
+			"its trunk is gone here too")
+
+
+## The nearest standing natural tree within r blocks ({} if none).
+func _near_tree(r: int) -> Dictionary:
+	var gen := Trees.gen_for(G.world.seed_v)
+	var pp: Vector3 = G.player.global_position
+	var best := {}
+	var bd := 1e9
+	for dz in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			var t := Trees.at(gen, floori(pp.x) + dx, floori(pp.z) + dz)
+			if t.is_empty() or not Trees.standing(t, G.world.get_blockv):
+				continue
+			var d := Vector2(dx, dz).length()
+			if d < bd:
+				bd = d
+				best = t
+	return best
 
 
 func _run_screens() -> void:

@@ -3,19 +3,25 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 // Cubes, boxes and log trunks: one layer of the block texture array per face (UV2.x), with
 // normal maps (blue = height). UV2.y is 1 on round trunks. The vertex colour's alpha is the sky
 // light (dark under cover and in caves; only ambient light is dimmed, see SmoothMesher).
-// Cube faces get softly rounded edges: the normal bends outwards near each block's border.
+// Cube faces get softly rounded edges: the normal bends outwards near each block's border, except
+// where the same face goes on into the next block (UV2.y below 0 holds those edges, M4.6).
 
 uniform sampler2DArray albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2DArray normal_tex : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float bevel = 0.11;   // metres of rounding at each block edge
 uniform float min_light = 0.12;  // ambient light left in caves (Settings: light in caves)
+uniform bool own_space = false;  // the rounded edges by the model's own cells (an icon, M4.6)
 
 varying vec3 wpos;
 varying vec3 wnrm;
+varying vec3 lpos;
+varying vec3 lnrm;
 
 void vertex() {
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	wnrm = normalize(mat3(MODEL_MATRIX) * NORMAL);
+	lpos = VERTEX;
+	lnrm = NORMAL;
 }
 
 float edge(float f) {
@@ -48,10 +54,22 @@ void fragment() {
 	}
 	vec3 wn = normalize(t * tn.x + b * tn.y + n * tn.z);
 	if (UV2.y < 0.5) {
-		vec3 an = abs(n);
-		vec3 f = fract(wpos - n * 0.01);
+		vec3 on = own_space ? normalize(lnrm) : n;
+		vec3 an = abs(on);
+		vec3 f = fract((own_space ? lpos : wpos) - on * 0.01);
 		vec3 e = vec3(edge(f.x), edge(f.y), edge(f.z)) * (1.0 - an);
+		if (UV2.y < -0.001) {
+			// Edges where the same face goes on into the next block stay flat (a wall looks like
+			// one wall): bits -x +x -y +y -z +z.
+			int j = int(round(-UV2.y * 64.0)) - 1;
+			e.x *= (e.x < 0.0 ? float(1 - (j & 1)) : float(1 - ((j >> 1) & 1)));
+			e.y *= (e.y < 0.0 ? float(1 - ((j >> 2) & 1)) : float(1 - ((j >> 3) & 1)));
+			e.z *= (e.z < 0.0 ? float(1 - ((j >> 4) & 1)) : float(1 - ((j >> 5) & 1)));
+		}
 		float k = max(abs(e.x), max(abs(e.y), abs(e.z)));
+		if (own_space && k > 0.0) {
+			e = normalize(mat3(MODEL_MATRIX) * e) * length(e);
+		}
 		wn = normalize(wn + e * 0.9);
 		alb *= 1.0 - k * k * 0.18;  // a hint of shade in the rounded edge
 	}

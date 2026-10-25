@@ -33,6 +33,18 @@ const MATS := {
 	"string": ["", 0, 1.0, Color(0.86, 0.83, 0.76), 0.0, 0.9, 0.0, Color(0, 0, 0)],
 	"feather": ["", 0, 1.0, Color(0.9, 0.88, 0.84), 0.0, 1.0, 0.4, Color(0, 0, 0)],
 	"redfeather": ["", 0, 1.0, Color(0.75, 0.16, 0.12), 0.0, 1.0, 0.4, Color(0, 0, 0)],
+	# M4.6: the other items (ItemModels).
+	"coal": ["", 0, 1.0, Color(0.075, 0.075, 0.085), 0.25, 0.38, 0.0, Color(0, 0, 0)],
+	"meat": ["", 0, 1.0, Color(0.6, 0.12, 0.12), 0.0, 0.42, 0.45, Color(0, 0, 0)],
+	"fat": ["", 0, 1.0, Color(0.92, 0.84, 0.76), 0.0, 0.5, 0.0, Color(0, 0, 0)],
+	"cooked": ["", 0, 1.0, Color(0.4, 0.19, 0.07), 0.0, 0.5, 0.5, Color(0, 0, 0)],
+	"bone": ["", 0, 1.0, Color(0.9, 0.86, 0.76), 0.0, 0.6, 0.0, Color(0, 0, 0)],
+	"berry": ["", 0, 1.0, Color(0.6, 0.04, 0.12), 0.0, 0.22, 0.0, Color(0, 0, 0)],
+	"leaf": ["", 0, 1.0, Color(0.22, 0.45, 0.14), 0.0, 0.7, 0.3, Color(0, 0, 0)],
+	"cloth": ["", 0, 1.0, Color(0.93, 0.92, 0.88), 0.0, 0.95, 0.5, Color(0, 0, 0)],
+	"shard": ["", 0, 1.0, Color(0.62, 0.03, 0.07), 0.3, 0.14, 0.0, Color(0.4, 0.0, 0.04)],
+	"hide": ["", 0, 1.0, Color(0.44, 0.29, 0.17), 0.0, 0.92, 0.6, Color(0, 0, 0)],
+	"darkhide": ["", 0, 1.0, Color(0.3, 0.19, 0.11), 0.0, 0.95, 0.6, Color(0, 0, 0)],
 }
 ## A head's material by tier (0 = hand, 1 wood ... 5 Blood Steel).
 const TIER_MAT := ["wood", "wood", "stone", "iron", "steel", "blood"]
@@ -47,10 +59,11 @@ static var icons := {}
 static var _icons_started := false
 
 
-## Does this item have a 3D model (every tool, weapon and ammo; armor since M4.5, ArmorModels)?
+## Does this item have a 3D model (every tool, weapon and ammo; armor since M4.5, ArmorModels;
+## the other items since M4.6, ItemModels)?
 static func has_model(id: int) -> bool:
 	var d := Items.info(id)
-	return d.has("tool") or d.has("ammo_of") or d.has("armor")
+	return d.has("tool") or d.has("ammo_of") or d.has("armor") or ItemModels.has_model(id)
 
 
 ## A new copy of the item's model (null if it has none). `held`: the one in your own hand, drawn
@@ -65,7 +78,7 @@ static func make(id: int, held := false) -> Node3D:
 	for part in _parts[id]:
 		var mi := MeshInstance3D.new()
 		mi.mesh = part[0]
-		mi.material_override = material(part[1], held)
+		mi.material_override = part[1] if part[1] is Material else material(part[1], held)
 		if held:
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		root.add_child(mi)
@@ -114,6 +127,10 @@ static func held_pose(id: int, swing: float, draw: float, charge: float) -> Tran
 	if ArmorModels.has_model(id):
 		# Armor (M4.5) is held out low in front, as if about to be put on.
 		return Transform3D(Basis(Vector3.RIGHT, 0.35 - swing * 0.6) * Basis(Vector3.UP, PI + 0.4), Vector3(0.3, -0.38, -0.6))
+	if ItemModels.has_model(id):
+		# Other things (M4.6) lie in the hand, low on the right.
+		var lean := Basis(Vector3.FORWARD, 0.5) if ItemModels.leans(id) else Basis.IDENTITY
+		return Transform3D(Basis(Vector3.RIGHT, 0.45 - swing * 0.7) * Basis(Vector3.UP, 0.5) * lean, Vector3(0.22, -0.2, -0.45 - swing * 0.05))
 	match Items.tool_type(id):
 		"bow":
 			# Just left of the crosshair, so the arrow on it points where you look.
@@ -229,6 +246,8 @@ static func material(kind: String, held := false) -> ShaderMaterial:
 static func _build(id: int) -> Array:
 	if ArmorModels.has_model(id):
 		return ArmorModels.item_parts(id)
+	if ItemModels.has_model(id):
+		return ItemModels.parts(id)
 	var tier := Items.tier(id)
 	var head: String = TIER_MAT[clampi(tier, 0, 5)]
 	var handle := "darkwood" if tier == 5 else "wood"
@@ -708,6 +727,11 @@ static func render_icons(parent: Node) -> void:
 	for id in Items.DATA:
 		if has_model(int(id)):
 			ids.append(int(id))
+	# M4.6: the blocks too, drawn as little blocks with their pictures.
+	if parent.get("tex") != null:
+		for b in Blocks.COUNT:
+			if ItemModels.block_has_model(b):
+				ids.append(b)
 	var rows := ceili(ids.size() / float(ICON_COLS))
 	var vp := SubViewport.new()
 	vp.size = Vector2i(ICON_COLS * ICON_PX, rows * ICON_PX)
@@ -748,7 +772,7 @@ static func render_icons(parent: Node) -> void:
 		var holder := Node3D.new()
 		holder.position = Vector3(k % ICON_COLS + 0.5, -floorf(k / float(ICON_COLS)) - 0.5, 0)
 		vp.add_child(holder)
-		var m := make(ids[k])
+		var m: Node3D = make(ids[k]) if ids[k] >= 100 else _block_model(ids[k], parent.get("tex"))
 		var pose := Node3D.new()
 		holder.add_child(pose)
 		pose.add_child(m)
@@ -764,6 +788,10 @@ static func render_icons(parent: Node) -> void:
 		pose.basis = Basis(Vector3.FORWARD, deg_to_rad(20.0 if tt == "crossbow" else 45.0)) * Basis(Vector3.RIGHT, 0.35) * turn
 		if ArmorModels.has_model(ids[k]):
 			pose.basis = Basis(Vector3.RIGHT, 0.3) * Basis(Vector3.UP, PI + 0.55)  # (armor: its front, from a little above)
+		elif ids[k] < 100:
+			pose.basis = Basis(Vector3.RIGHT, 0.52) * Basis(Vector3.UP, PI * 0.25)  # (a block: from above a corner)
+		elif ItemModels.has_model(ids[k]) and not ItemModels.leans(ids[k]):
+			pose.basis = Basis(Vector3.RIGHT, 0.6) * Basis(Vector3.UP, 0.45)  # (lying things: from above)
 		var box := _bounds(m, pose.transform)
 		var s := 0.94 / maxf(box.size.x, box.size.y)
 		holder.scale = Vector3.ONE * s
@@ -777,6 +805,17 @@ static func render_icons(parent: Node) -> void:
 		cell.generate_mipmaps()
 		icons[ids[k]] = ImageTexture.create_from_image(cell)
 	vp.queue_free()
+
+
+## A block's model for its icon (ItemModels.block_parts).
+static func _block_model(id: int, tex) -> Node3D:
+	var root := Node3D.new()
+	for part in ItemModels.block_parts(id, tex):
+		var mi := MeshInstance3D.new()
+		mi.mesh = part[0]
+		mi.material_override = part[1]
+		root.add_child(mi)
+	return root
 
 
 ## The bounds of a model's meshes under `xf`.

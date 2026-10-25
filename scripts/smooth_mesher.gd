@@ -98,7 +98,7 @@ static func _limit(d: Vector3, g: Vector3) -> Vector3:
 
 
 ## nb: the nine chunks' block data, nb[(dz + 1) * 3 + dx + 1] (4 = this chunk). Fills the
-## terrain arrays of buf (world.gd MeshBuf) and returns the open-sky heights per column
+## terrain arrays of buf (MeshBuf) and returns the open-sky heights per column
 ## (see sky_at), which the cube faces use too.
 static func build(nb: Array, buf) -> PackedFloat32Array:
 	var nat: Array = NAT

@@ -104,6 +104,7 @@ func _ready() -> void:
 	layer = 10
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	font = ThemeDB.fallback_font
+	_apply_theme()
 	style_slot = _style(Color(0.16, 0.17, 0.19, 0.95), Color(0.32, 0.34, 0.36), 1)
 	style_sel = _style(Color(0.2, 0.24, 0.18, 0.95), Color(0.85, 0.95, 0.6), 2)
 	canvas = Control.new()
@@ -135,8 +136,43 @@ func _style(bg: Color, border: Color, w: int) -> StyleBoxFlat:
 	s.bg_color = bg
 	s.border_color = border
 	s.set_border_width_all(w)
-	s.set_corner_radius_all(4)
+	s.set_corner_radius_all(6)
 	return s
+
+
+## M4.6: one look for every menu (the whole window's theme): dark rounded buttons and fields,
+## with a warm edge on the one the controller (or the keyboard) is on.
+func _apply_theme() -> void:
+	var t := Theme.new()
+	var box := func(bg: Color, border: Color, w: int) -> StyleBoxFlat:
+		var sb := _style(bg, border, w)
+		sb.set_corner_radius_all(8)
+		sb.content_margin_left = 14.0
+		sb.content_margin_right = 14.0
+		sb.content_margin_top = 6.0
+		sb.content_margin_bottom = 6.0
+		sb.anti_aliasing = true
+		return sb
+	t.set_stylebox("normal", "Button", box.call(Color(0.19, 0.2, 0.23, 0.95), Color(1, 1, 1, 0.16), 1))
+	t.set_stylebox("hover", "Button", box.call(Color(0.27, 0.28, 0.32, 0.97), Color(1, 1, 1, 0.3), 1))
+	t.set_stylebox("pressed", "Button", box.call(Color(0.08, 0.09, 0.1, 0.95), Color(1, 0.85, 0.5, 0.6), 1))
+	t.set_stylebox("hover_pressed", "Button", box.call(Color(0.1, 0.11, 0.12, 0.95), Color(1, 0.85, 0.5, 0.7), 1))
+	t.set_stylebox("disabled", "Button", box.call(Color(0.1, 0.1, 0.11, 0.6), Color(1, 1, 1, 0.05), 1))
+	var focus: StyleBoxFlat = box.call(Color(0, 0, 0, 0), Color(1, 0.84, 0.45, 0.95), 2)
+	focus.draw_center = false
+	t.set_stylebox("focus", "Button", focus)
+	t.set_color("font_color", "Button", Color(0.92, 0.92, 0.88))
+	t.set_color("font_hover_color", "Button", Color(1, 1, 1))
+	t.set_color("font_focus_color", "Button", Color(1, 1, 1))
+	t.set_color("font_pressed_color", "Button", Color(1, 0.9, 0.65))
+	t.set_color("font_hover_pressed_color", "Button", Color(1, 0.9, 0.65))
+	t.set_color("font_disabled_color", "Button", Color(1, 1, 1, 0.35))
+	t.set_stylebox("normal", "LineEdit", box.call(Color(0.07, 0.08, 0.09, 0.92), Color(1, 1, 1, 0.16), 1))
+	t.set_stylebox("focus", "LineEdit", focus)
+	t.set_stylebox("read_only", "LineEdit", box.call(Color(0.07, 0.08, 0.09, 0.6), Color(1, 1, 1, 0.08), 1))
+	t.set_stylebox("panel", "PanelContainer", box.call(Color(0.08, 0.09, 0.1, 0.9), Color(1, 1, 1, 0.08), 1))
+	t.set_stylebox("panel", "Panel", box.call(Color(0.08, 0.09, 0.1, 0.9), Color(1, 1, 1, 0.08), 1))
+	get_tree().root.theme = t
 
 
 func _label(text: String, size: int, col := Color(1, 1, 1)) -> Label:
@@ -1578,10 +1614,48 @@ func _text(pos: Vector2, s: String, size: int, col: Color, align := HORIZONTAL_A
 	canvas.draw_string(font, pos, s, align, width, size, col)
 
 
-func _bar(pos: Vector2, w: float, label: String, frac: float, col: Color) -> void:
-	canvas.draw_rect(Rect2(pos, Vector2(w, 18)), Color(0, 0, 0, 0.55))
-	canvas.draw_rect(Rect2(pos + Vector2(2, 2), Vector2((w - 4) * clampf(frac, 0, 1), 14)), col)
-	_text(pos + Vector2(7, 14), label, 13, Color(1, 1, 1, 0.95))
+## A rounded box on the HUD (cached style boxes: the HUD redraws every frame).
+var _boxes := {}
+
+func _rbox(r: Rect2, bg: Color, radius := 8, border := Color(0, 0, 0, 0), bw := 0) -> void:
+	var key := "%s|%d|%s|%d" % [bg, radius, border, bw]
+	var sb: StyleBoxFlat = _boxes.get(key)
+	if sb == null:
+		sb = StyleBoxFlat.new()
+		sb.bg_color = bg
+		sb.set_corner_radius_all(radius)
+		sb.border_color = border
+		sb.set_border_width_all(bw)
+		sb.anti_aliasing = true
+		_boxes[key] = sb
+	canvas.draw_style_box(sb, r)
+
+
+## A vital as a slim rounded bar with its icon (M4.6): `icon` heart, food or stamina.
+func _bar(pos: Vector2, w: float, icon: String, value: String, frac: float, col: Color) -> void:
+	_icon(pos + Vector2(9, 8), icon, col)
+	var r := Rect2(pos + Vector2(24, 2), Vector2(w - 24, 12))
+	_rbox(r, Color(0, 0, 0, 0.45), 6)
+	if frac > 0.0:
+		_rbox(Rect2(r.position + Vector2(2, 2), Vector2(maxf((r.size.x - 4) * clampf(frac, 0, 1), 8.0), 8)), col, 4)
+	if value != "":
+		_text(Vector2(pos.x + w + 8, pos.y + 13), value, 14, Color(1, 1, 1, 0.85))
+
+
+## The little pictures beside the vitals, drawn from shapes.
+func _icon(c: Vector2, kind: String, col: Color) -> void:
+	match kind:
+		"heart":
+			canvas.draw_circle(c + Vector2(-3, -2), 3.6, col)
+			canvas.draw_circle(c + Vector2(3, -2), 3.6, col)
+			canvas.draw_colored_polygon(PackedVector2Array([c + Vector2(-6.4, -0.8), c + Vector2(6.4, -0.8), c + Vector2(0, 6.5)]), col)
+		"food":
+			canvas.draw_line(c + Vector2(-6, 5), c + Vector2(-1, 0), Color(0.95, 0.92, 0.85), 2.4)
+			canvas.draw_circle(c + Vector2(-6.5, 5.5), 1.8, Color(0.95, 0.92, 0.85))
+			canvas.draw_circle(c + Vector2(2, -2), 5.0, col)
+		_:
+			canvas.draw_colored_polygon(PackedVector2Array([c + Vector2(1.5, -7), c + Vector2(-5, 1), c + Vector2(-0.5, 1),
+				c + Vector2(-2, 7), c + Vector2(5, -1.5), c + Vector2(0.5, -1.5)]), col)
 
 
 ## Our own backpacks: an icon with the distance and the time left, over the pack (at the side of
@@ -1717,50 +1791,70 @@ func _draw_hud() -> void:
 	if G.mode == "client" and st == "playing":
 		_draw_waypoints(vs)
 
-	# Hotbar
-	var sz := 58.0
-	var gap := 4.0
+	# Hotbar (M4.6: rounded slots on a soft strip; the one in hand stands up a little)
+	var sz := 56.0
+	var gap := 6.0
 	var total := 9 * sz + 8 * gap
 	var x0 := (vs.x - total) * 0.5
 	var y0 := vs.y - sz - 16.0
+	_rbox(Rect2(x0 - 8, y0 - 6, total + 16, sz + 14), Color(0, 0, 0, 0.22), 14)
 	for i in 9:
-		var r := Rect2(x0 + i * (sz + gap), y0, sz, sz)
 		var sel: bool = i == p.selected
-		canvas.draw_rect(r, Color(0, 0, 0, 0.55))
-		canvas.draw_rect(r, Color(1, 1, 0.8, 0.95) if sel else Color(1, 1, 1, 0.22), false, 3.0 if sel else 1.0)
+		var r := Rect2(x0 + i * (sz + gap), y0 - (4.0 if sel else 0.0), sz, sz)
+		if sel:
+			_rbox(r, Color(0.22, 0.2, 0.15, 0.78), 10, Color(1, 0.85, 0.5, 0.95), 2)
+		else:
+			_rbox(r, Color(0.05, 0.06, 0.07, 0.55), 10, Color(1, 1, 1, 0.1), 1)
 		var s = p.inv.slots[i]
 		if s != null:
-			canvas.draw_texture_rect(G.tex.icon(int(s["id"])), r.grow(-9), false)
+			canvas.draw_texture_rect(G.tex.icon(int(s["id"])), r.grow(-6 if sel else -8), false)
 			if int(s["n"]) > 1:
-				_text(r.position + Vector2(0, sz - 6), str(s["n"]), 16, Color(1, 1, 1), HORIZONTAL_ALIGNMENT_RIGHT, sz - 5)
-		_text(r.position + Vector2(4, 14), str(i + 1), 11, Color(1, 1, 1, 0.45))
+				_text(r.position + Vector2(0, sz - 6), str(s["n"]), 15, Color(1, 1, 1), HORIZONTAL_ALIGNMENT_RIGHT, sz - 6)
+		_text(r.position + Vector2(6, 15), str(i + 1), 11, Color(1, 1, 1, 0.75 if sel else 0.4))
 	var cur: int = p.cur_id()
 	if cur > 0:
-		_text(Vector2(x0, y0 - 20), Items.name_of(cur), 18, Color(1, 1, 1, 0.9), HORIZONTAL_ALIGNMENT_CENTER, total)
+		_text(Vector2(x0, y0 - 26), Items.name_of(cur), 18, Color(1, 1, 1, 0.9), HORIZONTAL_ALIGNMENT_CENTER, total)
 	if G.mode == "client" or G.has_arg("--scenery"):
 		_draw_xp(x0, y0, total)
 
-	# Vitals
-	var bx := 20.0
+	# Vitals (M4.6: slim bars with their icons on a soft panel, bottom left)
+	var bx := 22.0
 	var by := vs.y - 34.0
-	_bar(Vector2(bx, by - 48), 240, "HEALTH  %d" % int(ceilf(p.health)), p.health / p.max_health, Color(0.8, 0.18, 0.16))
-	_bar(Vector2(bx, by - 24), 240, "FOOD  %d" % int(ceilf(p.food)), p.food / 100.0, Color(0.85, 0.55, 0.15))
-	_bar(Vector2(bx, by), 240, "STAMINA", p.stamina / p.max_stamina(), Color(0.85, 0.8, 0.25))
+	_rbox(Rect2(bx - 10, by - 58, 300, 82), Color(0, 0, 0, 0.22), 12)
+	_bar(Vector2(bx, by - 48), 240, "heart", str(int(ceilf(p.health))), p.health / p.max_health, Color(0.86, 0.22, 0.2))
+	_bar(Vector2(bx, by - 24), 240, "food", str(int(ceilf(p.food))), p.food / 100.0, Color(0.9, 0.58, 0.2))
+	_bar(Vector2(bx, by), 240, "stamina", "", p.stamina / p.max_stamina(), Color(0.9, 0.84, 0.32))
 
-	# Clock + horde countdown
+	# Clock + horde countdown, on a soft panel with the sun or the moon
 	var g = G.game
 	var hh := int(g.time)
 	var mm := int((g.time - hh) * 60.0)
-	_text(Vector2(20, 38), "DAY %d    %02d:%02d" % [g.day, hh, mm], 26, Color(1, 1, 1))
 	var ht: String = g.horde_text()
 	var hcol := Color(0.85, 0.85, 0.8)
 	if g.horde_active:
 		hcol = Color(1, 0.25, 0.2, 0.6 + 0.4 * absf(sin(Time.get_ticks_msec() * 0.004)))
 	elif g.days_until_horde() <= 1:
 		hcol = Color(1, 0.55, 0.4)
-	_text(Vector2(20, 64), ht, 18, hcol)
+	var pw := maxf(250.0, font.get_string_size(ht, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x + 60.0)
+	_rbox(Rect2(12, 12, pw, 66 if not p.flashlight.visible else 84), Color(0, 0, 0, 0.3), 12)
+	if g.is_night():
+		var moon := PackedVector2Array()  # (a crescent: round on the left, hollow on the right)
+		for k in 13:
+			var a := PI * 0.5 + PI * k / 12.0
+			moon.append(Vector2(34, 36) + Vector2(cos(a), sin(a)) * 9.0)
+		for k in 13:
+			var a := PI * 1.5 - PI * k / 12.0
+			moon.append(Vector2(34, 36) + Vector2(cos(a) * 4.5, sin(a) * 9.0))
+		canvas.draw_colored_polygon(moon, Color(0.85, 0.88, 1.0) if not g.horde_active else Color(1, 0.3, 0.25))
+	else:
+		canvas.draw_circle(Vector2(34, 36), 7.5, Color(1, 0.86, 0.4))
+		for k in 8:
+			var a := TAU * k / 8.0
+			canvas.draw_line(Vector2(34, 36) + Vector2(cos(a), sin(a)) * 10.0, Vector2(34, 36) + Vector2(cos(a), sin(a)) * 13.0, Color(1, 0.86, 0.4), 2.0)
+	_text(Vector2(56, 44), "DAY %d   %02d:%02d" % [g.day, hh, mm], 24, Color(1, 1, 1))
+	_text(Vector2(24, 68), ht, 16, hcol)
 	if p.flashlight.visible:
-		_text(Vector2(20, 88), "Flashlight on", 14, Color(1, 1, 0.8, 0.7))
+		_text(Vector2(24, 88), "Flashlight on", 14, Color(1, 1, 0.8, 0.7))
 
 	# Messages
 	var my := 120.0
@@ -1786,12 +1880,13 @@ func _draw_xp(x0: float, y0: float, total: float) -> void:
 	var xp: int = G.net.xp
 	var lv := Skills.level_of(xp)
 	var frac := 1.0 if lv >= Skills.MAX_LEVEL else float(xp - Skills.xp_for(lv)) / Skills.xp_step(lv)
-	var r := Rect2(x0, y0 - 9, total, 5)
-	canvas.draw_rect(r, Color(0, 0, 0, 0.55))
-	canvas.draw_rect(Rect2(r.position, Vector2(total * clampf(frac, 0.0, 1.0), 5)), Color(0.95, 0.78, 0.3, 0.95))
-	_text(Vector2(x0 - 62, y0 - 2), "LV %d" % lv, 15, Color(1, 0.88, 0.45, 0.95))
+	var r := Rect2(x0, y0 - 16, total, 5)
+	_rbox(r, Color(0, 0, 0, 0.5), 3)
+	if frac > 0.0:
+		_rbox(Rect2(r.position, Vector2(maxf(total * clampf(frac, 0.0, 1.0), 5.0), 5)), Color(0.95, 0.78, 0.3, 0.95), 3)
+	_text(Vector2(x0 - 66, y0 + 4), "LV %d" % lv, 15, Color(1, 0.88, 0.45, 0.95))
 	if Skills.points(xp, G.net.perks) > 0:
-		_text(Vector2(x0 + total + 8, y0 - 2), "+%d" % Skills.points(xp, G.net.perks), 15, Color(1, 0.88, 0.45, 0.95))
+		_text(Vector2(x0 + total + 14, y0 + 4), "+%d" % Skills.points(xp, G.net.perks), 15, Color(1, 0.88, 0.45, 0.95))
 
 
 ## Online: the chat log above the health bars, and players / ping at the top right.

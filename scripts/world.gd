@@ -30,256 +30,10 @@ class Chunk:
 	## is in them: root -> [MultiMeshInstance3D, instance, transform] (lean_tree).
 	var trees: Array = []
 	var tree_slots := {}
+	## Grass, flowers, rocks and berry bushes (M4.6, Decor): [MultiMeshInstance3D, big], ...
+	var decor: Array = []
 	var modified := false
 	var ready := false
-
-
-class MeshBuf:
-	const CORNERS := [
-		[Vector3(0, 1, 0), Vector3(1, 1, 0), Vector3(1, 1, 1), Vector3(0, 1, 1)],
-		[Vector3(0, 0, 0), Vector3(0, 0, 1), Vector3(1, 0, 1), Vector3(1, 0, 0)],
-		[Vector3(1, 0, 0), Vector3(1, 0, 1), Vector3(1, 1, 1), Vector3(1, 1, 0)],
-		[Vector3(0, 0, 0), Vector3(0, 1, 0), Vector3(0, 1, 1), Vector3(0, 0, 1)],
-		[Vector3(0, 0, 1), Vector3(0, 1, 1), Vector3(1, 1, 1), Vector3(1, 0, 1)],
-		[Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 1, 0), Vector3(0, 1, 0)],
-	]
-	const NORMALS := [Vector3(0, 1, 0), Vector3(0, -1, 0), Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)]
-	const DIRS := [Vector3i(0, 1, 0), Vector3i(0, -1, 0), Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
-
-	## Cubes, boxes and log trunks: uv across each face, uv2 = (Tex block layer, 1 for a round
-	## trunk), the colour's alpha is the sky light (SmoothMesher.sky_at).
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var uvs := PackedVector2Array()
-	var uv2s := PackedVector2Array()
-	var cols := PackedColorArray()
-	var idx := PackedInt32Array()
-	## Plants (crosses): the pixel atlas.
-	var p_verts := PackedVector3Array()
-	var p_norms := PackedVector3Array()
-	var p_uvs := PackedVector2Array()
-	var p_cols := PackedColorArray()
-	var p_idx := PackedInt32Array()
-	## Leaves: leafy faces a little outside the block and two planes through it.
-	var l_verts := PackedVector3Array()
-	var l_norms := PackedVector3Array()
-	var l_uvs := PackedVector2Array()
-	var l_cols := PackedColorArray()
-	var l_idx := PackedInt32Array()
-	var faces := PackedVector3Array()
-	## Drawn chunks: the ground as it is drawn (rounded ground, solid cubes, boxes and trunks),
-	## for standing creatures on what the player sees (VISUAL_LAYER, see game.gd).
-	var vfaces := PackedVector3Array()
-	var lights: Array = []
-	var beacons: Array = []
-	## Natural trees rooted in this chunk (M4.6): [Trees model, transform in the chunk, root],
-	## drawn as models; their logs and leaves are left out of the picture (_without_trees).
-	var trees: Array = []
-	## The smooth ground (SmoothMesher): material weights in the colour and uv/uv2, sky in uv2.y.
-	var t_verts := PackedVector3Array()
-	var t_norms := PackedVector3Array()
-	var t_cols := PackedColorArray()
-	var t_uv := PackedVector2Array()
-	var t_uv2 := PackedVector2Array()
-	var t_idx := PackedInt32Array()
-
-	static func face_uv(dir: int, c: Vector3) -> Vector2:
-		if dir < 2:
-			return Vector2(c.x, c.z)
-		if dir < 4:
-			return Vector2(c.z, 1.0 - c.y)
-		return Vector2(c.x, 1.0 - c.y)
-
-	func face(dir: int, x: int, y: int, z: int, tile: int, solid: bool, lit := 1.0) -> void:
-		box_face(dir, Vector3(x, y, z), Vector3.ZERO, Vector3.ONE, tile, solid, lit)
-
-	## One face of the box lo..hi inside the cell at o, showing the whole picture of `tile`.
-	func box_face(dir: int, o: Vector3, lo: Vector3, hi: Vector3, tile: int, solid: bool, lit: float) -> void:
-		var base := verts.size()
-		var cs: Array = CORNERS[dir]
-		var n: Vector3 = NORMALS[dir]
-		var col := Color(1, 1, 1, lit)
-		var layer := Vector2(Tex.block_layer(tile), 0.0)
-		var ext := hi - lo
-		for k in 4:
-			var c: Vector3 = cs[k]
-			verts.append(o + lo + c * ext)
-			norms.append(n)
-			cols.append(col)
-			uvs.append(face_uv(dir, c))
-			uv2s.append(layer)
-		idx.append_array(PackedInt32Array([base, base + 1, base + 2, base, base + 2, base + 3]))
-		if solid:
-			for k in [0, 1, 2, 0, 2, 3]:
-				vfaces.append(verts[base + k])
-
-	## An SH_BOX block: all six faces of the box lo..hi inside the cell ([top, side, bottom] tiles).
-	func box(x: int, y: int, z: int, tl: Array, lo: Vector3, hi: Vector3, solid: bool, lit := 1.0) -> void:
-		for dir in 6:
-			var tile: int = tl[0] if dir == 0 else (tl[2] if dir == 1 else tl[1])
-			box_face(dir, Vector3(x, y, z), lo, hi, tile, solid, lit)
-
-	## A ramp: a wedge rising towards facing f (Blocks.rot_point), with the side tile on every face.
-	func ramp(x: int, y: int, z: int, tl: Array, f: int, lit: float) -> void:
-		var o := Vector3(x, y, z)
-		var col := Color(1, 1, 1, lit)
-		var layer := Vector2(Tex.block_layer(tl[1]), 0.0)
-		var quads := [
-			[[Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 0, 1), Vector3(0, 0, 1)], Vector3.DOWN],
-			[[Vector3(0, 0, 1), Vector3(1, 0, 1), Vector3(1, 1, 1), Vector3(0, 1, 1)], Vector3.BACK],
-			[[Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 1, 1), Vector3(0, 1, 1)], Vector3(0, 1, -1).normalized()],
-		]
-		for q in quads:
-			var base := verts.size()
-			var n: Vector3 = Blocks.rot_point(q[1] + Vector3(0.5, 0, 0.5), f) - Vector3(0.5, 0, 0.5)
-			for c in q[0]:
-				verts.append(o + Blocks.rot_point(c, f))
-				norms.append(n)
-				cols.append(col)
-				uvs.append(Vector2(c.x, 1.0 - (c.z if q[1] != Vector3.BACK else c.y)))
-				uv2s.append(layer)
-			_wind_outward(base, n)
-		for side in [[Vector3(0, 0, 0), Vector3(0, 0, 1), Vector3(0, 1, 1), Vector3.LEFT], [Vector3(1, 0, 0), Vector3(1, 0, 1), Vector3(1, 1, 1), Vector3.RIGHT]]:
-			var base := verts.size()
-			var n: Vector3 = Blocks.rot_point(side[3] + Vector3(0.5, 0, 0.5), f) - Vector3(0.5, 0, 0.5)
-			for k in 3:
-				var c: Vector3 = side[k]
-				verts.append(o + Blocks.rot_point(c, f))
-				norms.append(n)
-				cols.append(col)
-				uvs.append(Vector2(c.z, 1.0 - c.y))
-				uv2s.append(layer)
-			_tri_outward(base, n)
-
-	## A log as a round (eight-sided) trunk, with a cut end where no log continues it.
-	func trunk(x: int, y: int, z: int, tl: Array, cap_top: bool, cap_bottom: bool, lit: float, lit_top: float) -> void:
-		const R := 0.42
-		const SIDES := 8
-		var c := Vector3(x + 0.5, y, z + 0.5)
-		var col := Color(1, 1, 1, lit)
-		var side_layer := Vector2(Tex.block_layer(tl[1]), 1.0)
-		var end_layer := Vector2(Tex.block_layer(tl[0]), 1.0)
-		var ring: Array[Vector3] = []
-		for k in SIDES + 1:
-			var a := (k + 0.5) * TAU / SIDES
-			ring.append(Vector3(cos(a), 0.0, sin(a)))
-		for k in SIDES:
-			var base := verts.size()
-			var a: Vector3 = ring[k]
-			var b: Vector3 = ring[k + 1]
-			var pts := [c + a * R, c + b * R, c + b * R + Vector3.UP, c + a * R + Vector3.UP]
-			var ns := [a, b, b, a]
-			var us := [k * 2.0 / SIDES, (k + 1) * 2.0 / SIDES]
-			var quad_uv := [Vector2(us[0], 1), Vector2(us[1], 1), Vector2(us[1], 0), Vector2(us[0], 0)]
-			for j in 4:
-				verts.append(pts[j])
-				norms.append(ns[j])
-				cols.append(col)
-				uvs.append(quad_uv[j])
-				uv2s.append(side_layer)
-			_wind_outward(base, (a + b).normalized())
-		for top in [true, false]:
-			if (top and not cap_top) or (not top and not cap_bottom):
-				continue
-			var yy := 1.0 if top else 0.0
-			var n := Vector3.UP if top else Vector3.DOWN
-			var ccol := Color(1, 1, 1, lit_top if top else lit)
-			for k in SIDES:
-				var base := verts.size()
-				var pts := [c + Vector3(0, yy, 0), c + ring[k] * R + Vector3(0, yy, 0), c + ring[k + 1] * R + Vector3(0, yy, 0)]
-				for p in pts:
-					verts.append(p)
-					norms.append(n)
-					cols.append(ccol)
-					uvs.append(Vector2(0.5 + (p.x - c.x) * 0.5 / R * 0.9, 0.5 + (p.z - c.z) * 0.5 / R * 0.9))
-					uv2s.append(end_layer)
-				_tri_outward(base, n)
-
-	## Index a quad (4 verts from base) so it faces `out` (Godot: front faces wind clockwise).
-	func _wind_outward(base: int, out: Vector3) -> void:
-		var a := verts[base]
-		var b := verts[base + 1]
-		var c := verts[base + 2]
-		var order := [0, 1, 2, 0, 2, 3]
-		if (b - a).cross(c - a).dot(out) > 0.0:
-			order = [0, 2, 1, 0, 3, 2]
-		for k in order:
-			idx.append(base + k)
-			vfaces.append(verts[base + k])
-
-	func _tri_outward(base: int, out: Vector3) -> void:
-		var a := verts[base]
-		var b := verts[base + 1]
-		var c := verts[base + 2]
-		var order := [0, 1, 2] if (b - a).cross(c - a).dot(out) <= 0.0 else [0, 2, 1]
-		for k in order:
-			idx.append(base + k)
-			vfaces.append(verts[base + k])
-
-	func cross(x: int, y: int, z: int, tile: int, lit := 1.0) -> void:
-		var o := Vector3(x, y, z)
-		var tu := float(tile % 8) * 0.125
-		@warning_ignore("integer_division")
-		var tv := float(tile / 8) * 0.125
-		var col := Color(0.95, 0.95, 0.95, lit)
-		var pairs := [[Vector3(0.15, 0, 0.15), Vector3(0.85, 0, 0.85)], [Vector3(0.85, 0, 0.15), Vector3(0.15, 0, 0.85)]]
-		for pr in pairs:
-			var a: Vector3 = pr[0]
-			var b: Vector3 = pr[1]
-			var p := [o + a, o + b, o + b + Vector3.UP, o + a + Vector3.UP]
-			var uv := [Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)]
-			for side in 2:
-				var base := p_verts.size()
-				var order := [0, 1, 2, 3] if side == 0 else [0, 3, 2, 1]
-				for k in order:
-					p_verts.append(p[k])
-					p_norms.append(Vector3.UP)
-					p_cols.append(col)
-					var q: Vector2 = uv[k]
-					p_uvs.append(Vector2(tu + 0.002 + q.x * 0.121, tv + 0.002 + q.y * 0.121))
-				p_idx.append_array(PackedInt32Array([base, base + 1, base + 2, base, base + 2, base + 3]))
-
-	## A leaf block: leafy faces a little outside the block (`open` = the directions with no
-	## leaves next to it), and two planes through it unless leaves surround it. Pictures follow
-	## world positions, so neighbouring blocks continue each other.
-	func leaf(x: int, y: int, z: int, open: Array, lit: float) -> void:
-		const OUT := 0.14
-		var o := Vector3(x, y, z)
-		var col := Color(1, 1, 1, lit)
-		for dir in open:
-			var n: Vector3 = NORMALS[dir]
-			var cs: Array = CORNERS[dir]
-			var base := l_verts.size()
-			for k in 4:
-				var c: Vector3 = cs[k]
-				# Out from the block, and a little wider so the edges overlap their neighbours'.
-				var p: Vector3 = o + c + n * OUT + (c - Vector3(0.5, 0.5, 0.5)) * (Vector3.ONE - n.abs()) * 0.24
-				l_verts.append(p)
-				l_norms.append(n)
-				l_cols.append(col)
-				l_uvs.append(_leaf_uv(dir, p))
-			l_idx.append_array(PackedInt32Array([base, base + 1, base + 2, base, base + 2, base + 3]))
-		if open.is_empty():
-			return
-		for pr in [[Vector3(0, 0, 0), Vector3(1, 0, 1)], [Vector3(1, 0, 0), Vector3(0, 0, 1)]]:
-			var a: Vector3 = o + pr[0]
-			var b: Vector3 = o + pr[1]
-			var base := l_verts.size()
-			var pts := [a + Vector3(0, -0.1, 0), b + Vector3(0, -0.1, 0), b + Vector3(0, 1.1, 0), a + Vector3(0, 1.1, 0)]
-			for k in 4:
-				var p: Vector3 = pts[k]
-				l_verts.append(p)
-				l_norms.append(Vector3(0.3, 0.9, 0.3).normalized())
-				l_cols.append(col)
-				l_uvs.append(Vector2((p.x + p.z) * 0.35, -p.y * 0.5))
-			l_idx.append_array(PackedInt32Array([base, base + 1, base + 2, base, base + 2, base + 3]))
-
-	static func _leaf_uv(dir: int, p: Vector3) -> Vector2:
-		if dir < 2:
-			return Vector2(p.x, p.z) * 0.5
-		if dir < 4:
-			return Vector2(p.z, -p.y) * 0.5
-		return Vector2(p.x, -p.y) * 0.5
 
 
 var render_radius := 6
@@ -513,6 +267,7 @@ func _free_visual(c: Chunk) -> void:
 	c.lights.clear()
 	c.trees.clear()  # (children of c.node)
 	c.tree_slots.clear()
+	c.decor.clear()
 	if c.body != null:
 		c.body.queue_free()
 		c.body = null
@@ -686,8 +441,10 @@ func _build(nb: Array) -> MeshBuf:
 	var meta: Dictionary = nb[9]
 	# Collision is whole blocks, the same as on the server (the rounding is only drawn).
 	buf.faces = _build_collision(nb[4], nb[5], nb[3], nb[7], nb[1], meta)
-	nb = _without_trees(nb, buf)  # (the trees are drawn as models)
+	var gen := WorldGen.new(seed_v)  # (a worker thread: its own)
+	nb = _without_trees(nb, buf, gen)  # (the trees are drawn as models)
 	var sky := SmoothMesher.build(nb, buf)
+	var bins := _ground_bins(buf)
 	var d: PackedByteArray = nb[4]
 	var px: PackedByteArray = nb[5]
 	var nx: PackedByteArray = nb[3]
@@ -708,6 +465,11 @@ func _build(nb: Array) -> MeshBuf:
 				if b == 0 or nat[b]:
 					continue  # natural ground is part of the smooth surface
 				var tl: Array = tiles[b]
+				if b == Blocks.BERRY_BUSH:
+					var gy := _ground_y(buf, bins, x + 0.5, z + 0.5, y + 0.6)
+					var yaw := float(gen.hash2(x + k_x(nb), z + k_z(nb)) % 628) / 100.0
+					buf.decor.append([Decor.BERRY, Transform3D(Basis(Vector3.UP, yaw), Vector3(x + 0.5, y if is_nan(gy) else gy, z + 0.5))])
+					continue
 				if shp[b] == 2:
 					buf.cross(x, y, z, tl[1], SmoothMesher.sky_at(sky, x, y, z))
 					if b == Blocks.TORCH or b == Blocks.CAMPFIRE:
@@ -751,22 +513,126 @@ func _build(nb: Array) -> MeshBuf:
 					if nbk == 0 or nat[nbk] or (not opq[nbk] and not (leaf and nbk == b)):
 						var dv: Vector3i = dirs[dir]
 						var tile: int = tl[0] if dir == 0 else (tl[2] if dir == 1 else tl[1])
-						buf.face(dir, x, y, z, tile, solid, SmoothMesher.sky_at(sky, x + dv.x, y + dv.y, z + dv.z))
+						buf.face(dir, x, y, z, tile, solid, SmoothMesher.sky_at(sky, x + dv.x, y + dv.y, z + dv.z),
+							_joined(nb, b, x, y, z, dir) if opq[b] else 0)
 	for i in buf.t_idx:
 		buf.vfaces.append(buf.t_verts[i])
+	_decorate(nb, buf, bins, gen)
 	return buf
+
+
+## Which edges of block b's face `dir` at (x, y, z) go on into the same face of a neighbour of
+## the same kind (MeshBuf.face's `joined` bits): that neighbour is there and its face shows too.
+static func _joined(nb: Array, b: int, x: int, y: int, z: int, dir: int) -> int:
+	var n: Vector3i = MeshBuf.DIRS[dir]
+	var bits := 0
+	for k in 6:
+		var e: Vector3i = MeshBuf.DIRS[k]
+		if e.x * n.x + e.y * n.y + e.z * n.z != 0:
+			continue  # (along the face's own normal)
+		var q := Vector3i(x, y, z) + e
+		if _nb_block(nb, q.x, q.y, q.z) != b:
+			continue
+		var over := _nb_block(nb, q.x + n.x, q.y + n.y, q.z + n.z)
+		if over != 0 and Blocks.OPAQUE[over] and not SmoothMesher.NAT[over]:
+			continue  # (its face is covered)
+		# DIRS order is +y -y +x -x +z -z; the bits go -x +x -y +y -z +z.
+		bits |= [8, 4, 2, 1, 32, 16][k]
+	return bits
+
+
+static func k_x(nb: Array) -> int:
+	return (nb[10] as Vector2i).x * CH
+
+
+static func k_z(nb: Array) -> int:
+	return (nb[10] as Vector2i).y * CH
+
+
+## Grass, flowers and stones on the land (M4.6, Decor), on the drawn ground of each column whose
+## top is open to the sky: picked from the seed, so they come back the same.
+func _decorate(nb: Array, buf: MeshBuf, bins: Array, gen: WorldGen) -> void:
+	var d: PackedByteArray = nb[4]
+	var bx := k_x(nb)
+	var bz := k_z(nb)
+	for z in CH:
+		for x in CH:
+			var y := H - 1
+			while y > 0 and d[x + z * CH + y * CH2] == 0:
+				y -= 1
+			var top := d[x + z * CH + y * CH2]
+			if y >= H - 1 or not SmoothMesher.NAT[top]:
+				continue
+			var model := Decor.pick(gen, bx + x, bz + z, top, gen.biome_at(bx + x, bz + z) if top == Blocks.GRASS else 0)
+			if model < 0:
+				continue
+			var sp := Decor.spot(gen, bx + x, bz + z, model)
+			var gy := _ground_y(buf, bins, x + sp[0], z + sp[1], y + 1.6)
+			if is_nan(gy) or gy < y - 0.6:
+				continue
+			var b := Basis(Vector3.UP, sp[2]).scaled(Vector3.ONE * float(sp[3]))
+			buf.decor.append([model, Transform3D(b, Vector3(x + sp[0], gy - 0.04, z + sp[1]))])
+
+
+## The drawn ground's triangles (SmoothMesher) by the columns they cover: 256 lists of the first
+## index of each triangle in buf.t_idx, for _ground_y.
+static func _ground_bins(buf: MeshBuf) -> Array:
+	var bins := []
+	bins.resize(CH * CH)
+	for i in bins.size():
+		bins[i] = PackedInt32Array()
+	var v := buf.t_verts
+	var idx := buf.t_idx
+	for t in range(0, idx.size(), 3):
+		var a := v[idx[t]]
+		var b := v[idx[t + 1]]
+		var c := v[idx[t + 2]]
+		var x0 := clampi(floori(minf(a.x, minf(b.x, c.x))), 0, CH - 1)
+		var x1 := clampi(floori(maxf(a.x, maxf(b.x, c.x))), 0, CH - 1)
+		var z0 := clampi(floori(minf(a.z, minf(b.z, c.z))), 0, CH - 1)
+		var z1 := clampi(floori(maxf(a.z, maxf(b.z, c.z))), 0, CH - 1)
+		for zz in range(z0, z1 + 1):
+			for xx in range(x0, x1 + 1):
+				bins[xx + zz * CH].append(t)
+	return bins
+
+
+## The height of the drawn ground at (x, z) in the chunk: the highest upward-facing triangle there
+## that is not above `below` (NAN if none).
+static func _ground_y(buf: MeshBuf, bins: Array, x: float, z: float, below: float) -> float:
+	var col := clampi(floori(x), 0, CH - 1) + clampi(floori(z), 0, CH - 1) * CH
+	var best := NAN
+	var v := buf.t_verts
+	var idx := buf.t_idx
+	for t in bins[col]:
+		var a := v[idx[t]]
+		var b := v[idx[t + 1]]
+		var c := v[idx[t + 2]]
+		var d := (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)
+		if absf(d) < 1e-6:
+			continue  # (seen edge-on from above)
+		var u := ((x - a.x) * (c.z - a.z) - (c.x - a.x) * (z - a.z)) / d
+		var w := ((b.x - a.x) * (z - a.z) - (x - a.x) * (b.z - a.z)) / d
+		if u < -0.001 or w < -0.001 or u + w > 1.002:
+			continue
+		var n := (b - a).cross(c - a)
+		if absf(n.y) < 0.3 * n.length():
+			continue  # (too steep to stand anything on)
+		var y := a.y + u * (b.y - a.y) + w * (c.y - a.y)
+		if y <= below and (is_nan(best) or y > best):
+			best = y
+	return best
 
 
 ## The block data the picture is made from (M4.6): nb with the natural trees that still stand
 ## (Trees) taken out, as air, so the ground, cubes and leaves are drawn as if they were not
 ## there; the trees rooted in this chunk go into buf.trees, to be drawn as models. Collision
 ## still comes from nb itself. A chunk's data is copied only when a tree is taken out of it.
-func _without_trees(nb: Array, buf: MeshBuf) -> Array:
+func _without_trees(nb: Array, buf: MeshBuf, gen: WorldGen) -> Array:
 	var out := nb.duplicate()
 	var k: Vector2i = nb[10]
 	var bx := k.x * CH
 	var bz := k.y * CH
-	var gen := WorldGen.new(seed_v)  # (a worker thread: its own)
 	var block := func(c: Vector3i) -> int: return _nb_block(nb, c.x - bx, c.y, c.z - bz)
 	var copied := {}
 	# Trees whose cells reach the middle chunk or the SmoothMesher.P blocks it reads around it.
@@ -921,6 +787,7 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		o.position = Vector3(lp) + Vector3(0.5, 0.8, 0.5)
 		c.lights.append(o)
 	_apply_trees(c, buf)
+	_apply_decor(c, buf)
 	for bp in buf.beacons:
 		var m := MeshInstance3D.new()
 		m.mesh = beacon_mesh
@@ -962,6 +829,66 @@ func _apply_trees(c: Chunk, buf: MeshBuf) -> void:
 			c.tree_slots[list[j][2]] = [mmi, j, list[j][1]]
 		c.node.add_child(mmi)
 		c.trees.append(mmi)
+
+
+## The chunk's decor (M4.6): one MultiMesh per Decor model; the small things are drawn only
+## within plant_range (Settings: Grass and flowers), the big ones further.
+func _apply_decor(c: Chunk, buf: MeshBuf) -> void:
+	for e in c.decor:
+		if is_instance_valid(e[0]):
+			e[0].queue_free()
+	c.decor.clear()
+	if _headless or buf.decor.is_empty():
+		return
+	var by_model := {}
+	for t in buf.decor:
+		if not by_model.has(t[0]):
+			by_model[t[0]] = []
+		by_model[t[0]].append(t[1])
+	for model in by_model:
+		var mesh := Decor.mesh(model)
+		if mesh == null:
+			continue
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh
+		var list: Array = by_model[model]
+		mm.instance_count = list.size()
+		for j in list.size():
+			mm.set_instance_transform(j, list[j])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		var big := Decor.is_big(model)
+		if not big:
+			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		c.node.add_child(mmi)
+		var e := [mmi, big, model == Decor.BERRY]
+		_decor_range(e)
+		c.decor.append(e)
+
+
+## How far grass and flowers are drawn (0: not at all); the bushes and rocks go twice as far,
+## the berry bushes (blocks you can pick) always.
+var plant_range := 56.0
+
+func set_plant_range(r: float) -> void:
+	plant_range = r
+	for k in chunks:
+		for e in (chunks[k] as Chunk).decor:
+			_decor_range(e)
+
+
+func _decor_range(e: Array) -> void:
+	var mmi: MultiMeshInstance3D = e[0]
+	if not is_instance_valid(mmi):
+		return
+	if e[2]:
+		return
+	var r := maxf(plant_range * 2.0, 64.0) if e[1] else plant_range
+	mmi.visible = r > 0.0
+	# (Measured to the middle of the chunk: half a chunk more, so nearby ones never pop.)
+	mmi.visibility_range_end = r + 11.0
+	mmi.visibility_range_end_margin = 6.0
 
 
 ## A standing tree leans by `angle` about `axis` through its foot (the tree being chopped
