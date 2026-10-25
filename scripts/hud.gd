@@ -687,15 +687,22 @@ func _build_inventory() -> void:
 	tab_bar = HBoxContainer.new()
 	tab_bar.add_theme_constant_override("separation", 6)
 	main.add_child(tab_bar)
-	var group := ButtonGroup.new()
+	var tab_on := _style(Color(0.2, 0.25, 0.17, 1.0), Color(0.75, 0.9, 0.5), 2)
+	var tab_off := _style(Color(0.13, 0.14, 0.15, 1.0), Color(0.28, 0.3, 0.3), 1)
+	var tab_hover := _style(Color(0.18, 0.2, 0.2, 1.0), Color(0.5, 0.55, 0.5), 1)
 	for t in TABS:
 		var tb := Button.new()
 		tb.text = t[1]
 		tb.toggle_mode = true
-		tb.button_group = group
 		tb.focus_mode = Control.FOCUS_ALL
 		tb.custom_minimum_size = Vector2(150, 40)
 		tb.add_theme_font_size_override("font_size", 18)
+		tb.add_theme_stylebox_override("normal", tab_off)
+		tb.add_theme_stylebox_override("hover", tab_hover)
+		tb.add_theme_stylebox_override("pressed", tab_on)
+		tb.add_theme_stylebox_override("hover_pressed", tab_on)
+		tb.add_theme_color_override("font_pressed_color", Color(0.9, 1, 0.75))
+		tb.add_theme_color_override("font_hover_pressed_color", Color(0.9, 1, 0.75))
 		tb.pressed.connect(show_tab.bind(t[0]))
 		tab_bar.add_child(tb)
 		tab_btns[t[0]] = tb
@@ -1021,7 +1028,7 @@ func _show_page(t: String) -> void:
 	tab = t
 	for k in pages:
 		pages[k].visible = k == t
-	(tab_btns[t] as Button).set_pressed_no_signal(true)
+		(tab_btns[k] as Button).set_pressed_no_signal(k == t)
 	tab_hint.text = ("LB / RB: switch tabs" if Controls.pad_in_use else "%s inventory   ·   %s map   ·   Esc closes" % [
 		Controls.key_name(Controls.key_of("inventory")), Controls.key_name(Controls.key_of("map"))])
 
@@ -1187,7 +1194,7 @@ func _refresh_players() -> void:
 			n += 1
 	players_head.text = ("%d playing on %s:%d.   " % [n, G.net.host, G.net.port] if not G.solo else "Play solo: nobody else is here.   ") + \
 		"Allies see each other on the map and on screen (with the distance), and their names show through walls. Tribe members are allies too."
-	_row(players_list, [[G.net.player_name + " (you)", Color(1, 1, 0.85)], ["Online   ·   %d ms" % G.net.ping_ms(), Color(0.75, 0.8, 0.75), 15, 260],
+	_row(players_list, [[G.net.player_name + " (you)", Color(1, 1, 0.85)], ["Online   ·   %d ms" % maxi(0, G.net.ping_ms()), Color(0.75, 0.8, 0.75), 15, 260],
 		[("Tribe: " + G.net.tribe["name"]) if not G.net.tribe.is_empty() else "", Color(0.6, 1, 0.65), 15, 300]], [])
 	for e in G.net.social:
 		var rel: int = e["rel"]

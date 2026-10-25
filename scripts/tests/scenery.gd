@@ -390,7 +390,8 @@ func _character_tabs(p) -> void:
 	for t in ["map", "players", "tribe"]:
 		G.hud.show_tab(t)
 		await _shot("screens_6_%s" % t, 0.6)
-	G.hud.map_panel.zoom = 0.6
+	G.hud.show_tab("map")
+	G.hud.map_panel.zoom = 0.7
 	await _shot("screens_6_map_far", 0.6)
 	G.game.close_inventory()
 

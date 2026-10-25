@@ -9,8 +9,8 @@ extends Node
 
 const REGION := 8
 const REGION_PX := REGION * 16
-## Chunks per worker task.
-const BATCH := 24
+## Chunks per worker task (about 0.7 ms each).
+const BATCH := 64
 ## Seconds between repaints of chunks whose blocks changed.
 const DIRTY_EVERY := 0.5
 
@@ -18,7 +18,11 @@ const DIRTY_EVERY := 0.5
 var regions := {}
 ## Chunk key -> 1 (painted from the seed) or 2 (from the world's blocks).
 var painted := {}
-var _todo := {}            # chunk keys to paint (from blocks if the world has them)
+## Chunks to paint (from blocks if the world has them): ones whose blocks changed first, then
+## newly explored ones in the order they came (each batch sorted nearest first).
+var _urgent := {}
+var _queue: Array = []
+var _qi := 0
 var _task := -1
 var _task_in: Array = []   # [[key, block data or empty], ...]
 var _task_out: Array = []  # [[key, 16x16 RGBA8 bytes], ...]
@@ -39,8 +43,11 @@ func _exit_tree() -> void:
 
 
 func _on_grew(keys: Array) -> void:
-	for k in keys:
-		_todo[k] = true
+	if keys.size() > 1 and G.player != null:
+		var c := Vector2i(floori(G.player.global_position.x / 16.0), floori(G.player.global_position.z / 16.0))
+		keys = keys.duplicate()
+		keys.sort_custom(func(a, b): return (a - c).length_squared() < (b - c).length_squared())
+	_queue.append_array(keys)
 
 
 func _process(delta: float) -> void:
@@ -53,7 +60,7 @@ func _process(delta: float) -> void:
 		# Chunks the world generated, received or changed: paint them from their blocks.
 		for k in w.map_dirty:
 			if G.net.explored.has(k):
-				_todo[k] = true
+				_urgent[k] = true
 		w.map_dirty.clear()
 	if _task >= 0:
 		if not WorkerThreadPool.is_task_completed(_task):
@@ -64,26 +71,29 @@ func _process(delta: float) -> void:
 			var k: Vector2i = _task_out[i][0]
 			_put(k, _task_out[i][1])
 			painted[k] = 2 if not (_task_in[i][1] as PackedByteArray).is_empty() else 1
-	if _todo.is_empty():
-		return
-	# The chunks nearest to us first (walking reveals them there).
-	var c := Vector2i(floori(G.player.global_position.x / 16.0), floori(G.player.global_position.z / 16.0))
-	var keys: Array = _todo.keys()
-	if keys.size() > BATCH:
-		keys.sort_custom(func(a, b): return (a - c).length_squared() < (b - c).length_squared())
 	_task_in = []
-	for k in keys:
+	for k in _urgent.keys():
 		if _task_in.size() >= BATCH:
 			break
-		_todo.erase(k)
-		var d: PackedByteArray = w.chunk_data(k)
-		if d.is_empty() and painted.has(k):
-			continue  # (painted already, from blocks or the seed: nothing better to do now)
-		_task_in.append([k, d])
+		_urgent.erase(k)
+		_take(k)
+	while _task_in.size() < BATCH and _qi < _queue.size():
+		_take(_queue[_qi])
+		_qi += 1
+	if _qi >= _queue.size() and _qi > 0:
+		_queue.clear()
+		_qi = 0
 	if _task_in.is_empty():
 		return
 	_task_out = []
 	_task = WorkerThreadPool.add_task(_paint_batch.bind(_task_in, _task_out, _seed), false, "map")
+
+
+func _take(k: Vector2i) -> void:
+	var d: PackedByteArray = G.world.chunk_data(k)
+	if d.is_empty() and painted.has(k):
+		return  # (painted already, from blocks or the seed: nothing better to do now)
+	_task_in.append([k, d])
 
 
 ## Worker thread: each chunk's 16 x 16 pixels.
