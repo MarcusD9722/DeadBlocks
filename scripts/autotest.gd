@@ -782,23 +782,28 @@ func _ranged_shots() -> void:
 ## or 0.
 func _target_zombie() -> int:
 	var kinds := [Proto.MOB_ZOMBIE, Proto.MOB_NIGHT]
-	var before: Array = G.net.mobs.keys()
-	G.net.send_chat("/spawn zombie 1")
-	if not await _until(func(): return _mob_ids(kinds).any(func(id): return not before.has(id)), 10.0):
-		return 0
-	var zid := 0
-	for id in _mob_ids(kinds):
-		if not before.has(id):
-			zid = id
 	var p = G.player
-	var clear := func():
-		if not _zombie_alive(zid) or _mob_dist(zid) > 14.0:
-			return false
-		var at: Vector3 = (G.net.mobs[zid]["samples"].back()[1] as Vector3) + Vector3(0, 1.1, 0)
-		var eye: Vector3 = p.cam.global_position
-		var hit: Dictionary = G.world.raycast(eye, (at - eye).normalized(), eye.distance_to(at))
-		return not hit.get("hit", false)
-	return zid if await _until(clear, 25.0) else 0
+	# A zombie can land behind a tree or a hill and wander off: then try another (up to three).
+	for attempt in 3:
+		var before: Array = G.net.mobs.keys()
+		G.net.send_chat("/spawn zombie 1")
+		if not await _until(func(): return _mob_ids(kinds).any(func(id): return not before.has(id)), 10.0):
+			continue
+		var zid := 0
+		for id in _mob_ids(kinds):
+			if not before.has(id):
+				zid = id
+		var clear := func():
+			if not _zombie_alive(zid) or _mob_dist(zid) > 14.0:
+				return false
+			var at: Vector3 = (G.net.mobs[zid]["samples"].back()[1] as Vector3) + Vector3(0, 1.1, 0)
+			var eye: Vector3 = p.cam.global_position
+			var hit: Dictionary = G.world.raycast(eye, (at - eye).normalized(), eye.distance_to(at))
+			return not hit.get("hit", false)
+		if await _until(clear, 20.0):
+			return zid
+		print("AUTOTEST zombie %d stayed out of sight, spawning another" % zid)
+	return 0
 
 
 func _zombie_alive(id: int) -> bool:

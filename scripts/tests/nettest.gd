@@ -474,7 +474,8 @@ func _social(me: String, other: String, oid: int) -> void:
 	if role == "a":
 		G.net.send_chat("NT social")
 		G.net.request_social(Proto.SOC_ASK, other)
-		check(await _until(func(): return rel.call() & Proto.R_ASKED != 0, 10.0), "asked %s to be allies" % other)
+		# (If they were waiting already, the yes can come before we see the request as sent.)
+		check(await _until(func(): return rel.call() & (Proto.R_ASKED | Proto.R_ALLY) != 0, 10.0), "asked %s to be allies" % other)
 		check(await _until(func(): return rel.call() & Proto.R_ALLY != 0, 30.0), "%s said yes: we are allies" % other)
 		G.net.request_social(Proto.SOC_FOUND, "", "x")
 		check(await _until(func(): return G.hud.msgs.any(func(m): return "A tribe's name is" in String(m["text"])), 10.0) and G.net.tribe.is_empty(),
