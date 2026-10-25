@@ -87,7 +87,9 @@ static func run() -> void:
 	check(social2.is_ally("ann", "bob") and social2.tribes.has(3) and social2.tribes[3]["name"] == "The Survivors" and social2.tribes[3]["leader"] == "bob"
 		and social2.tribe_of.get("ann") == 3, "allies and the tribe came back (%s, %s)" % [str(s.allies), str(s.tribes)])
 	var players := s.load_players()
-	check(players.has("bob") and _same_account(players["bob"], bob), "Bob came back identical (with his explored map and pins)")
+	check(players.has("bob") and _same_account(players["bob"], bob), "Bob came back identical (with his explored map, pins, experience, perks and armor)")
+	check(SaveScript._perks({"bogus": 1, "tough": 9, "miner": 0}) == {"tough": 5} and SaveScript._armor([Items.ARMOR_FIRST + 1, 5, Items.ARMOR_FIRST + 2]) == [0, 0, Items.ARMOR_FIRST + 2, 0],
+		"unknown perks, too many ranks and armor in the wrong slot are dropped on loading")
 	check(players.has("ann") and players["ann"]["pin_key"].is_empty(), "a reset PIN stays reset")
 	var bp: Dictionary = s.backpacks[0] if s.backpacks.size() == 1 else {}
 	var bp_inv: Array = bp.get("inv", [])
@@ -254,7 +256,8 @@ static func _account(name: String, rng: RandomNumberGenerator) -> Dictionary:
 	inv.slots[35] = {"id": Blocks.TORCH, "n": 5}
 	return {"name": name, "pin_key": pin, "fails": 0, "locked_until": 0.0,
 		"pos": Vector3(-120.25, 33.0, 4096.5), "yaw": 1.25, "health": 61.5, "food": 12.25, "kills": 9,
-		"bed": Vector3i(3, 31, -2), "play_s": 5400.0, "inv": inv, "map": _map(rng), "pins": [["Base", 10, -20], ["Cave by the lake", -300, 77]]}
+		"bed": Vector3i(3, 31, -2), "play_s": 5400.0, "inv": inv, "map": _map(rng), "pins": [["Base", 10, -20], ["Cave by the lake", -300, 77]],
+		"xp": 1234, "perks": {"tough": 2, "miner": 1}, "armor": [Items.ARMOR_FIRST + 8, 0, Items.ARMOR_FIRST + 10, 0]}
 
 
 ## An explored map (M4.4): a few thousand chunks around the world, negative ones too.
@@ -272,6 +275,9 @@ static func _same_account(a: Dictionary, b: Dictionary) -> bool:
 			print("SAVETEST   %s differs: %s vs %s" % [key, a[key], b[key]])
 			return false
 	if not (a["pos"] as Vector3).is_equal_approx(b["pos"]) or a["bed"] != b["bed"]:
+		return false
+	if a.get("xp", 0) != b.get("xp", 0) or a.get("perks", {}) != b.get("perks", {}) or a.get("armor", []) != b.get("armor", []):
+		print("SAVETEST   experience, perks or armor differ: %s %s %s vs %s %s %s" % [a.get("xp"), a.get("perks"), a.get("armor"), b.get("xp"), b.get("perks"), b.get("armor")])
 		return false
 	if a.get("map", {}) != b.get("map", {}) or a.get("pins", []) != b.get("pins", []):
 		print("SAVETEST   the map (%d / %d chunks) or the pins differ: %s vs %s" % [a.get("map", {}).size(), b.get("map", {}).size(), a.get("pins"), b.get("pins")])

@@ -24,6 +24,8 @@ var _use_was := false
 var _attack_was := false
 
 var max_health := 100.0
+## How much the server's last hit took (after armor; tests read it).
+var last_hurt := 0
 var health := 100.0
 var food := 100.0
 var stamina := 100.0
@@ -309,10 +311,11 @@ func _process(delta: float) -> void:
 	swing = maxf(0.0, swing - delta * 4.0)
 	hit_mark = maxf(0.0, hit_mark - delta)
 	if st == "playing" or st == "menu" or st == "chat" or (st == "paused" and G.mode == "client"):
+		var perks: Dictionary = G.net.perks if G.mode == "client" else {}
 		if sprinting:
-			stamina = maxf(0.0, stamina - 16.0 * delta)
+			stamina = maxf(0.0, stamina - 16.0 * Skills.sprint_cost(perks) * delta)
 		else:
-			stamina = minf(100.0, stamina + 20.0 * delta)
+			stamina = minf(max_stamina(), stamina + 20.0 * delta)
 	if st == "playing":
 		_stick_look(delta)
 		_buttons()
@@ -449,7 +452,12 @@ func _update_target() -> void:
 
 
 func _break_time(id: int) -> float:
-	return Rules.break_time(id, cur_id())
+	return Rules.break_time(id, cur_id(), Skills.mine_speed(G.net.perks if G.mode == "client" else {}))
+
+
+## Stamina when rested (the Endurance perk adds to it, M4.5).
+func max_stamina() -> float:
+	return Skills.max_stamina(G.net.perks if G.mode == "client" else {})
 
 
 func _handle_mining(delta: float) -> void:
@@ -493,7 +501,7 @@ func _hammer(p: Vector3i, delta: float) -> void:
 	if not ht[1]:
 		mine_progress = 0.0
 		return
-	mine_progress += delta / Items.hammer_time(cur_id())
+	mine_progress += delta * Skills.hammer_speed(G.net.perks if G.mode == "client" else {}) / Items.hammer_time(cur_id())
 	dig_snd -= delta
 	if dig_snd <= 0.0:
 		dig_snd = 0.35
@@ -643,6 +651,9 @@ func use_item() -> void:
 		return
 	if Items.is_consumable(cur):
 		consume(cur)
+	elif Items.armor_slot(cur) >= 0 and G.mode == "client":
+		G.net.request_equip(0, selected)  # (M4.5: right-click puts it on)
+		G.sfx.play("click", -6.0)
 	elif Items.is_block(cur) and target.get("hit", false):
 		place(cur)
 
@@ -730,8 +741,9 @@ func take_damage(amount: float, from: Vector3) -> void:
 		die()
 
 
-## Online: health, food and kills as the server has them.
-func apply_stats(hp: int, f: int, is_dead: bool, k: int) -> void:
+## Online: health (and how much there can be), food and kills as the server has them.
+func apply_stats(hp: int, f: int, is_dead: bool, k: int, hp_max := 100) -> void:
+	max_health = hp_max
 	health = hp
 	food = f
 	G.game.kills = k
@@ -740,7 +752,7 @@ func apply_stats(hp: int, f: int, is_dead: bool, k: int) -> void:
 		die()
 	elif not is_dead and dead:
 		dead = false
-		stamina = 100.0
+		stamina = max_stamina()
 		velocity = Vector3.ZERO
 		air_min_vy = 0.0
 		G.game.on_respawned()
@@ -748,6 +760,7 @@ func apply_stats(hp: int, f: int, is_dead: bool, k: int) -> void:
 
 ## Online: the server says we were hit (from = Vector3.ZERO: no knockback).
 func hurt_effect(amount: int, from: Vector3) -> void:
+	last_hurt = amount
 	hurt_flash = 1.0
 	G.sfx.play("hurt", -2.0)
 	if from != Vector3.ZERO:

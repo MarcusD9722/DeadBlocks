@@ -386,7 +386,16 @@ func _character_tabs(p) -> void:
 	while md.painted.size() < n.explored.size() and Time.get_ticks_msec() - t0 < 60000:
 		await _wait(0.25)
 	print("SCENERY map: %d of %d chunks painted" % [md.painted.size(), n.explored.size()])
+	# M4.5: some experience, perks and armor.
+	n.xp = 2600
+	n.perks = {"tough": 2, "brawler": 1, "miner": 2, "endurance": 1}
+	n.armor = [Items.ARMOR_FIRST + 8, Items.ARMOR_FIRST + 5, Items.ARMOR_FIRST + 10, Items.ARMOR_FIRST + 7]
+	for id in [Items.ARMOR_FIRST + 12, Items.ARMOR_FIRST + 13, Items.ARMOR_FIRST + 0, Items.BOAR_HIDE]:
+		p.inv.add(id, 3 if id == Items.BOAR_HIDE else 1)
 	G.game.open_inventory()
+	for t in ["armor", "skills"]:
+		G.hud.show_tab(t)
+		await _shot("screens_6_%s" % t, 1.2)
 	for t in ["map", "players", "tribe"]:
 		G.hud.show_tab(t)
 		await _shot("screens_6_%s" % t, 0.6)

@@ -13,6 +13,8 @@ const ZombieScript := preload("res://scripts/zombie.gd")
 var _night_bp := Vector3i.MIN
 ## Our bed, the respawn point (placed after the workbench).
 var _bed := Vector3i.MIN
+## Experience, perks and armor after _progress, to compare after Continue.
+var _progress_seen := []
 
 
 func _ready() -> void:
@@ -159,6 +161,7 @@ func _play() -> void:
 	_pad_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
 	await get_tree().process_frame
 	await _character()
+	await _progress()
 
 	# A bed (M2): placing it makes it where we wake up after dying.
 	G.net.send_chat("/give plant_fiber 3")
@@ -236,6 +239,7 @@ func _play() -> void:
 		await _hold(Items.STONE_SWORD)
 		check(await _hunt(boars[0], 40.0), "hunted down a boar")
 		check(await _until(func(): return _count(Items.RAW_MEAT) > meat0, 5.0), "the boar drops raw meat")
+		check(_count(Items.BOAR_HIDE) >= 1, "and hide (%d)" % _count(Items.BOAR_HIDE))
 		await _shot("07_boar")
 
 	# Night: wall ourselves in with dirt; a horde breaks in, hurts us, and we fight back.
@@ -403,7 +407,10 @@ func _play() -> void:
 		var free := func():
 			var f := Vector3i(floori(p.global_position.x), floori(p.global_position.y + 0.1), floori(p.global_position.z))
 			return not Blocks.is_solid(w.get_blockv(f)) and not Blocks.is_solid(w.get_blockv(f + Vector3i.UP))
-		check(await _until(free, 5.0), "buried in the ground, we climb out by ourselves")
+		var out: bool = await _until(free, 5.0)
+		var at := Vector3i(floori(p.global_position.x), floori(p.global_position.y + 0.1), floori(p.global_position.z))
+		check(out, "buried in the ground, we climb out by ourselves (from %s to %s: %s / %s there)" % [buried, p.global_position,
+			Blocks.NAMES[w.get_blockv(at)], Blocks.NAMES[w.get_blockv(at + Vector3i.UP)]])
 
 ## Admin /clear: every zombie and animal goes. True once the server says so.
 func _clear_mobs() -> bool:
@@ -416,19 +423,26 @@ func _clear_mobs() -> bool:
 ## Place the bed we hold on the ground behind us; sets _bed once the server says it's ours.
 func _place_bed() -> void:
 	var p = G.player
-	await _hold(Blocks.BED)
+	var slot := await _hold(Blocks.BED)
 	await _until(func(): return p.is_on_floor(), 5.0)
-	for yaw in [PI, PI * 0.5, -PI * 0.5, 0.0]:
-		p.set_look(yaw, -1.1)
-		await _wait(0.3)
-		p._update_target()
-		if not p.target.get("hit", false):
-			continue
-		var at: Vector3i = p.target["pos"] + p.target["normal"]
-		if p.place(Blocks.BED):
-			if await _until(func(): return G.net.bed == at and G.world.get_blockv(at) == Blocks.BED, 5.0):
-				_bed = at
-				return
+	var tried := []
+	for pitch in [-1.1, -0.8]:
+		for k in 8:
+			p.set_look(PI + k * PI * 0.25, pitch)
+			await _wait(0.25)
+			p._update_target()
+			if not p.target.get("hit", false):
+				tried.append("no target")
+				continue
+			var at: Vector3i = p.target["pos"] + p.target["normal"]
+			if p.place(Blocks.BED):
+				if await _until(func(): return G.net.bed == at and G.world.get_blockv(at) == Blocks.BED, 5.0):
+					_bed = at
+					return
+				tried.append("%s refused" % at)
+			else:
+				tried.append("%s: %s" % [at, Blocks.NAMES[G.world.get_blockv(at)]])
+	print("AUTOTEST no bed placed (held in slot %d: %s; at %s): %s" % [slot, Items.name_of(p.cur_id()), p.global_position, ", ".join(tried)])
 
 
 ## Chase mob `id` and hit it until it dies (a boar runs away once it is hit).
@@ -509,6 +523,8 @@ func _continue_later() -> void:
 	check(await _until(func(): return _count(Items.STONE_SWORD) == 1 and _count(Items.WOOD_PICK) == picks + 1, 5.0),
 		"picked it up: the sword and the pickaxe are back")
 	check(G.net.bed != Vector3i.MIN and G.world.get_blockv(G.net.bed) == Blocks.BED, "our bed is still our respawn point")
+	check(not _progress_seen.is_empty() and G.net.xp >= int(_progress_seen[0]) and G.net.perks == _progress_seen[1] and G.net.armor == _progress_seen[2],
+		"experience, perks and armor are still there (%d XP, %s, %s)" % [G.net.xp, G.net.perks, G.net.armor])
 	check(G.net.pins.any(func(e): return e["name"] == "Autotest pin") and G.net.explored.size() >= 90,
 		"the map pin and the explored map are still there (%d chunks)" % G.net.explored.size())
 
@@ -535,6 +551,78 @@ func _continue_later() -> void:
 	await _wait(3.0)
 	check(not p.dead and p.global_position.y > 1.0, "and still fine 3 s later")
 	await _wait(1.0)
+
+
+## Experience, perks and armor (M4.5): the fights so far gave experience; /xp levels us up and
+## Tough from the Skills tab raises our health; four iron pieces go on from the Armor tab, the
+## helmet comes off and goes back on with right-click, and a zombie's hit does less through them;
+## a padded hood is made by hand.
+func _progress() -> void:
+	var g = G.game
+	var p = G.player
+	var hud = G.hud
+	var worn := func() -> int: return G.net.armor.filter(func(a): return int(a) != 0).size()
+	check(G.net.xp > 0, "the kills gave experience (%d XP, level %d)" % [G.net.xp, Skills.level_of(G.net.xp)])
+	var lv0 := Skills.level_of(G.net.xp)
+	G.net.send_chat("/xp 600")
+	check(await _until(func(): return Skills.level_of(G.net.xp) > lv0 + 1, 5.0), "/xp 600: level %d now" % Skills.level_of(G.net.xp))
+	check(await _until(func(): return hud.msgs.any(func(m): return String(m["text"]).begins_with("Level ")), 5.0), "the level-up message shows")
+	await _press(KEY_I)
+	await _pad_press(JOY_BUTTON_RIGHT_SHOULDER)
+	await _pad_press(JOY_BUTTON_RIGHT_SHOULDER)
+	check(g.state == "menu" and hud.tab == "skills", "RB twice: the Skills tab")
+	var btn: Button = hud.skill_cards["tough"]["btn"]
+	check(not btn.disabled, "Tough can be learned")
+	btn.pressed.emit()
+	check(await _until(func(): return int(G.net.perks.get("tough", 0)) == 1 and is_equal_approx(p.max_health, 110.0), 5.0),
+		"learned Tough: up to 110 health (%d)" % p.max_health)
+	check(await _until(func(): return (hud.skill_cards["tough"]["rank"] as Label).text.begins_with("●"), 2.0), "the Skills tab shows the rank")
+	(hud.skill_cards["carpenter"]["btn"] as Button).pressed.emit()
+	check(await _until(func(): return int(G.net.perks.get("carpenter", 0)) == 1, 5.0), "and Carpenter")
+	await _wait(0.3)
+	await _shot("05_skills")
+	await _pad_press(JOY_BUTTON_LEFT_SHOULDER)
+	check(hud.tab == "armor", "LB: the Armor tab")
+	for piece in ["iron_helmet", "iron_chestplate", "iron_leggings", "iron_boots"]:
+		G.net.send_chat("/give " + piece)
+	check(await _until(func(): return hud.armor_bag.get_child_count() == 4 and hud.armor_bag.get_child(0) is Button, 5.0), "four iron pieces in the bag show on the Armor tab")
+	for k in 4:
+		var n0: int = worn.call()
+		if hud.armor_bag.get_child(0) is Button:
+			(hud.armor_bag.get_child(0) as Button).pressed.emit()
+		await _until(func(): return worn.call() > n0 and hud.armor_bag.get_child_count() <= 4 - (k + 1) + 1, 5.0)
+	check(G.net.armor == [Items.ARMOR_FIRST + 8, Items.ARMOR_FIRST + 9, Items.ARMOR_FIRST + 10, Items.ARMOR_FIRST + 11], "wearing all four (%s)" % str(G.net.armor))
+	check(hud.armor_total_lbl.text.contains("38%"), "the tab says they stop 38%% (%s)" % hud.armor_total_lbl.text)
+	await _wait(0.5)
+	await _shot("06_armor")
+	hud.armor_btns[0].pressed.emit()
+	check(await _until(func(): return int(G.net.armor[0]) == 0 and _count(Items.ARMOR_FIRST + 8) == 1, 5.0), "took the helmet off: it's back in the bag")
+	await _press(KEY_I)
+	await _press(KEY_I)
+	check(g.state == "playing", "I twice: back to the Inventory tab, then closed")
+	await _hold(Items.ARMOR_FIRST + 8)
+	p.use_item()
+	check(await _until(func(): return int(G.net.armor[0]) == Items.ARMOR_FIRST + 8 and _count(Items.ARMOR_FIRST + 8) == 0, 5.0), "right-click puts the helmet on")
+	await _clear_mobs()
+	var stood: Vector3 = p.global_position
+	p.last_hurt = 0
+	G.net.send_chat("/spawn zombie 1")
+	var hit := await _until(func(): return p.last_hurt > 0, 40.0)
+	check(hit and p.last_hurt <= 7, "a zombie's hit through iron armor: %d (8 or more without)" % p.last_hurt)
+	await _clear_mobs()
+	# Back where we stood before the hit knocked us away, with the zombie gone from view.
+	await _until(func(): return _zombie_ids().is_empty(), 5.0)
+	await _walk_to(stood, 0.6, 10.0)
+	G.net.send_chat("/give plant_fiber 4")
+	await _until(func(): return _count(Items.FIBER) >= 4, 5.0)
+	G.net.request_craft(_recipe(Items.ARMOR_FIRST), 1)
+	check(await _until(func(): return _count(Items.ARMOR_FIRST) == 1, 5.0), "a Padded Hood made by hand")
+	# Only the helmet stays on (so the night's fights go as before); it must still be on after
+	# the night's death and after Continue.
+	for i in [1, 2, 3]:
+		G.net.request_equip(1, i)
+	check(await _until(func(): return worn.call() == 1, 5.0), "took the rest off again")
+	_progress_seen = [G.net.xp, G.net.perks.duplicate(), G.net.armor.duplicate()]
 
 
 ## The character screen (M4.4): M opens the map (the land around us painted, explored as the

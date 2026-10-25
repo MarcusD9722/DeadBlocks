@@ -36,6 +36,8 @@ var _dead := false
 var _last_pos := Vector3.INF
 ## The drawn ground's height under the feet (game.gd), so the figure stands on what we see.
 var ground_target := 0.0
+## What they wear (M4.5, Proto.armor_bits), as last put on the model.
+var armor_bits := 0
 var ground_off := 0.0
 var snap_y := INF
 
@@ -166,6 +168,15 @@ func _process(delta: float) -> void:
 	if label.no_depth_test != through:
 		label.no_depth_test = through
 	show_state(s["pos"], s["yaw"], s["pitch"], s["flags"], o.get("held", 0), delta)
+	wear(int(o.get("armor", 0)))
+
+
+## M4.5: the armor they wear (Proto.armor_bits), on the survivor model.
+func wear(bits: int) -> void:
+	if bits == armor_bits or rig == null:
+		return
+	armor_bits = bits
+	ArmorModels.dress(rig, Proto.armor_tiers(bits))
 
 
 ## Stand, turn and move the figure as a snapshot says (lineup.gd calls this directly).

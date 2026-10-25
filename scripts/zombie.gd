@@ -523,6 +523,8 @@ func _on_death(attacker: Node) -> void:
 	if attacker != null and attacker.has_method("give"):
 		if "kills" in attacker:
 			attacker.kills += 1
+		if attacker.has_method("add_xp"):
+			attacker.add_xp(Skills.zombie_xp(type, kind))  # (M4.5)
 		if rng.randf() < 0.6:
 			attacker.give(Items.FIBER, rng.randi_range(1, 2))
 		# Blood Moon loot: half the ordinary ones drop a Blood Shard, Screamers and Spitters 2,

@@ -453,6 +453,7 @@ func _run_pair() -> void:
 			"mined it and got %s's things" % other)
 
 	await _social(me, other, oid)
+	await _armor_seen(other, oid)
 
 	G.net.send_chat("NT checked")
 	check(await _until(func(): return _chat_from(other, "NT checked") != "", 100.0), "%s finished its checks" % other)
@@ -532,6 +533,23 @@ func _social(me: String, other: String, oid: int) -> void:
 	var here := Vector2i(floori(p.global_position.x / 16.0), floori(p.global_position.z / 16.0))
 	check(G.net.explored.size() >= 90 and G.net.explored.has(here), "the server sent my map (%d chunks explored)" % G.net.explored.size())
 	check(await _until(func(): return G.game.map_data.painted.get(here, 0) == 2, 10.0), "and the map has the chunk I am in, from its blocks")
+
+
+## M4.5: "a" puts on an iron helmet and "b" sees it on "a"'s figure.
+func _armor_seen(other: String, oid: int) -> void:
+	if role == "a":
+		G.net.send_chat("/give iron_helmet")
+		check(await _until(func(): return _slot_of(Items.ARMOR_FIRST + 8) >= 0, 10.0), "got an iron helmet")
+		G.net.request_equip(0, _slot_of(Items.ARMOR_FIRST + 8))
+		check(await _until(func(): return int(G.net.armor[0]) == Items.ARMOR_FIRST + 8, 10.0), "wearing it")
+		G.net.send_chat("NT armor")
+	else:
+		check(await _until(func(): return _chat_from(other, "NT armor") != "", 60.0), "%s put on a helmet" % other)
+		var tiers := func(): return Proto.armor_tiers(int(G.net.others[oid].get("armor", 0)))
+		check(await _until(func(): return tiers.call() == [2, -1, -1, -1], 5.0), "the snapshots say %s wears iron on the head (%s)" % [other, tiers.call()])
+		var rp = G.game.remote_players.get(oid)
+		check(await _until(func(): return rp != null and rp.armor_bits == Proto.armor_bits([Items.ARMOR_FIRST + 8, 0, 0, 0]), 3.0),
+			"and the figure wears it")
 
 
 func _run_screens() -> void:

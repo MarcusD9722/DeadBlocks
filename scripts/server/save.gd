@@ -5,7 +5,7 @@ extends Node
 ##                                      allies and tribes (M4.4)
 ##   worlds/<world>/players/<name>.json name, PIN hash, position, look, health, food, kills,
 ##                                      inventory, bed (M2), play time, the explored map and
-##                                      map pins (M4.4)
+##                                      map pins (M4.4), experience, perks and armor (M4.5)
 ##   worlds/<world>/chunks/<x>_<z>.bin  edited chunks: header + SHA-256 + zstd(16 KB of blocks)
 ##                                      + block states (M4.2, "DBC2"; "DBC1" files have none)
 ##   worlds/<world>/world.lock          refuses a second server on the same world
@@ -20,7 +20,8 @@ extends Node
 ## 2 (M2): backpacks in world.json, and block ids older servers don't know.
 ## 3 (M4.2): block states in the chunk files (DBC2), storage boxes in world.json.
 ## 4 (M4.4): allies and tribes in world.json, each player's explored map and pins.
-const FORMAT := 4
+## 5 (M4.5): each player's experience, perks and the armor they wear.
+const FORMAT := 5
 const CHUNK_MAGIC := "DBC2"
 const CHUNK_MAGIC_V1 := "DBC1"
 const LOCK_STALE_S := 90
@@ -169,6 +170,7 @@ func load_players() -> Dictionary:
 			"kills": int(p.get("kills", 0)), "bed": _bpos(p.get("bed")),
 			"play_s": float(p.get("play_s", 0.0)), "inv": Inventory.new(),
 			"map": map_from_b64(str(p.get("map", "")), int(p.get("map_n", 0))), "pins": _pins(p.get("pins")),
+			"xp": int(p.get("xp", 0)), "perks": _perks(p.get("perks")), "armor": _armor(p.get("armor")),
 		}
 		var slots: Array = p.get("inv", [])
 		for i in mini(slots.size(), Inventory.SIZE):
@@ -189,6 +191,27 @@ static func _bpos(v) -> Vector3i:
 	if v is Array and v.size() == 3:
 		return Vector3i(int(v[0]), int(v[1]), int(v[2]))
 	return Vector3i.MIN
+
+
+## Perks as saved (M4.5): {key: rank}, only known perks, at most their highest rank.
+static func _perks(v) -> Dictionary:
+	var out := {}
+	if v is Dictionary:
+		for k in v:
+			var p := Skills.perk(str(k))
+			if not p.is_empty() and int(v[k]) > 0:
+				out[str(k)] = mini(int(v[k]), int(p["max"]))
+	return out
+
+
+## The armor worn as saved: 4 item ids, each in its own slot (0 = none).
+static func _armor(v) -> Array:
+	var out := [0, 0, 0, 0]
+	if v is Array:
+		for i in mini(v.size(), 4):
+			if Items.armor_slot(int(v[i])) == i:
+				out[i] = int(v[i])
+	return out
 
 
 ## Map pins as saved: [[name, x, z], ...].
@@ -243,7 +266,8 @@ static func player_json(acc: Dictionary) -> Dictionary:
 	return {"format": FORMAT, "name": acc["name"], "pin": Marshalls.raw_to_base64(pin) if not pin.is_empty() else "",
 		"pos": [pos.x, pos.y, pos.z], "yaw": acc["yaw"], "health": acc["health"], "food": acc["food"],
 		"kills": acc["kills"], "bed": null if bed == Vector3i.MIN else [bed.x, bed.y, bed.z], "play_s": acc.get("play_s", 0.0), "inv": inv,
-		"map": acc["map_b64"], "map_n": seen.size(), "pins": (acc.get("pins", []) as Array).duplicate(true)}
+		"map": acc["map_b64"], "map_n": seen.size(), "pins": (acc.get("pins", []) as Array).duplicate(true),
+		"xp": int(acc.get("xp", 0)), "perks": (acc.get("perks", {}) as Dictionary).duplicate(), "armor": (acc.get("armor", [0, 0, 0, 0]) as Array).duplicate()}
 
 
 func player_file(key: String) -> String:

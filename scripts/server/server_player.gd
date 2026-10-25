@@ -58,6 +58,13 @@ var fixes: Array[Vector3i] = []
 var health := 100.0
 var food := 100.0
 var kills := 0
+## M4.5: experience (in all), perks (key -> rank, Skills.PERKS) and the armor worn (item ids of
+## the head, chest, legs and feet slots, 0 = none); S_PROGRESS / S_ARMOR go out when they change.
+var xp := 0
+var perks := {}
+var armor: Array = [0, 0, 0, 0]
+var progress_dirty := true
+var armor_dirty := true
 ## Knockback makes a player move faster than walking; the movement check allows it until then.
 var knock_until_ms := 0
 var last_attack_ms := 0
@@ -68,10 +75,17 @@ var joined_ms := 0
 var stats_sent: Array = []
 
 
-## Zombies hit through this (it's a Sim player record), and so do falls.
-func take_damage(amount: float, from: Vector3) -> void:
+func max_health() -> float:
+	return Skills.max_health(perks)
+
+
+## Zombies hit through this (it's a Sim player record), and so do falls. Armor stops part of a
+## hit (M4.5); `armored` is false for falls and the like.
+func take_damage(amount: float, from: Vector3, armored := true) -> void:
 	if dead or not is_ready:
 		return
+	if armored:
+		amount *= 1.0 - Items.armor_total(armor)
 	health -= amount
 	if from != Vector3.ZERO:
 		knock_until_ms = Time.get_ticks_msec() + 1000
@@ -80,6 +94,19 @@ func take_damage(amount: float, from: Vector3) -> void:
 		health = 0.0
 		dead = true
 		G.net_server.player_died(self)
+
+
+## Experience (M4.5): kills, hunting, ore, upgrades. The level shows on the player's HUD.
+func add_xp(n: int) -> void:
+	if n <= 0:
+		return
+	var before := Skills.level_of(xp)
+	xp += n
+	progress_dirty = true
+	var now := Skills.level_of(xp)
+	if now > before:
+		print("SERVER %s reached level %d" % [player_name, now])
+		G.net_server.tell(self, "Level %d! You have a skill point to spend (Skills tab)." % now, Color(1, 0.9, 0.45))
 
 
 ## Kill rewards and drops go to whoever earned them.

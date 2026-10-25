@@ -4,15 +4,16 @@ extends RefCounted
 ## all three always agree: how long a block takes to break and what it drops.
 
 
-## Seconds to break block `id` holding item `tool` (-1 = unbreakable).
-static func break_time(id: int, tool: int) -> float:
+## Seconds to break block `id` holding item `tool` (-1 = unbreakable); `speed` is the player's
+## own (the Miner perk, Skills.mine_speed).
+static func break_time(id: int, tool: int, speed := 1.0) -> float:
 	var hard: float = Blocks.HARDNESS[id]
 	if hard < 0.0:
 		return -1.0
 	var mult := 1.0
 	if Items.tool_type(tool) != "" and Items.tool_type(tool) == Blocks.TOOL[id]:
 		mult = Items.TIER_MULT[Items.tier(tool)]
-	return maxf(0.05, hard / mult)
+	return maxf(0.05, hard / (mult * speed))
 
 
 ## What breaking block `id` with `tool` gives: {"items": [[id, n], ...], "need_tier": 0}.

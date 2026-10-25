@@ -138,3 +138,6 @@ func _on_hurt(_attacker: Node) -> void:
 func _on_death(attacker: Node) -> void:
 	if attacker != null and attacker.has_method("give"):
 		attacker.give(Items.RAW_MEAT, 2 + (1 if randf() < 0.5 else 0))
+		attacker.give(Items.BOAR_HIDE, 1 + (1 if randf() < 0.5 else 0))  # (leather armor, M4.5)
+	if attacker != null and attacker.has_method("add_xp"):
+		attacker.add_xp(Skills.BOAR_XP)

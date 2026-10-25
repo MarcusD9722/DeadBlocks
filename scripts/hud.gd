@@ -69,7 +69,7 @@ var box_lbls: Array[Label] = []
 ## The box or bag shown (Vector3i.MIN: the screen shows crafting).
 var box_at := Vector3i.MIN
 ## M4.4: the character screen's tabs (I: Inventory, M: Map; LB / RB on the controller).
-const TABS := [["inventory", "Inventory"], ["map", "Map"], ["players", "Players"], ["tribe", "Tribe"]]
+const TABS := [["inventory", "Inventory"], ["armor", "Armor"], ["skills", "Skills"], ["map", "Map"], ["players", "Players"], ["tribe", "Tribe"]]
 const PAGE_SIZE := Vector2(1080, 560)
 var tab := "inventory"
 var tab_bar: HBoxContainer
@@ -87,6 +87,17 @@ var tribe_name_edit: LineEdit
 var tribe_name_btn: Button
 var tribe_leave_btn: Button
 var _social_t := 0.0
+## M4.5: the Skills tab (a card per perk: key -> {rank, next, btn}) and the Armor tab (the four
+## worn slots, the armor in your bag, the character picture).
+var skills_head: Label
+var skills_bar: ProgressBar
+var skill_cards := {}
+var armor_btns: Array[Button] = []
+var armor_lbls: Array[Label] = []
+var armor_total_lbl: Label
+var armor_bag: GridContainer
+var armor_view: SubViewportContainer
+var armor_preview: Node3D
 
 
 func _ready() -> void:
@@ -115,6 +126,8 @@ func _ready() -> void:
 	G.net.box_changed.connect(_on_box_changed)
 	G.net.social_changed.connect(_on_social_changed)
 	G.net.pins_changed.connect(_on_pins_changed)
+	G.net.progress_changed.connect(_on_progress)
+	G.net.armor_changed.connect(_refresh_armor)
 
 
 func _style(bg: Color, border: Color, w: int) -> StyleBoxFlat:
@@ -695,7 +708,7 @@ func _build_inventory() -> void:
 		tb.text = t[1]
 		tb.toggle_mode = true
 		tb.focus_mode = Control.FOCUS_ALL
-		tb.custom_minimum_size = Vector2(150, 40)
+		tb.custom_minimum_size = Vector2(124, 40)
 		tb.add_theme_font_size_override("font_size", 18)
 		tb.add_theme_stylebox_override("normal", tab_off)
 		tb.add_theme_stylebox_override("hover", tab_hover)
@@ -715,10 +728,12 @@ func _build_inventory() -> void:
 	hb.custom_minimum_size = PAGE_SIZE
 	main.add_child(hb)
 	pages["inventory"] = hb
+	pages["armor"] = _build_armor_page()
+	pages["skills"] = _build_skills_page()
 	pages["map"] = _build_map_page()
 	pages["players"] = _build_players_page()
 	pages["tribe"] = _build_tribe_page()
-	for k in ["map", "players", "tribe"]:
+	for k in ["armor", "skills", "map", "players", "tribe"]:
 		pages[k].visible = false
 		main.add_child(pages[k])
 
@@ -787,7 +802,8 @@ func _build_inventory() -> void:
 	box_panel.add_child(bhelp)
 
 
-func _make_slot(i: int) -> Button:
+## A slot-looking button (an icon in a square).
+func _slot_button() -> Button:
 	var b := Button.new()
 	b.custom_minimum_size = Vector2(56, 56)
 	b.expand_icon = true
@@ -797,6 +813,11 @@ func _make_slot(i: int) -> Button:
 	b.add_theme_stylebox_override("normal", style_slot)
 	b.add_theme_stylebox_override("hover", style_sel)
 	b.add_theme_stylebox_override("pressed", style_sel)
+	return b
+
+
+func _make_slot(i: int) -> Button:
+	var b := _slot_button()
 	var l := Label.new()
 	l.set_anchors_preset(Control.PRESET_FULL_RECT)
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -895,6 +916,8 @@ func show_inventory(on: bool, station := "") -> void:
 func refresh_inventory() -> void:
 	if not inv_root.visible:
 		return
+	if has_tabs() and tab == "armor":
+		_refresh_armor()  # (the armor in the bag)
 	var p = G.player
 	for i in 36:
 		var s = p.inv.slots[i]
@@ -991,6 +1014,234 @@ func _on_craft(r: Dictionary) -> void:
 	G.net.request_craft(Crafting.RECIPES.find(r), times)
 
 
+# ------------------------------------------------------------ Skills and Armor (M4.5)
+
+## Experience came in: "+N XP" with the pickups, and the Skills tab follows.
+func _on_progress(gained: int) -> void:
+	if gained > 0:
+		pickup("+%d XP" % gained)
+	if has_tabs() and tab == "skills":
+		_refresh_skills()
+
+
+func _build_skills_page() -> Control:
+	var vb := _page("SKILLS")
+	skills_head = _label("", 18, Color(1, 0.93, 0.6))
+	vb.add_child(skills_head)
+	skills_bar = ProgressBar.new()
+	skills_bar.custom_minimum_size = Vector2(PAGE_SIZE.x, 14)
+	skills_bar.show_percentage = false
+	skills_bar.add_theme_stylebox_override("background", _style(Color(0.05, 0.05, 0.06), Color(0.3, 0.3, 0.3), 1))
+	skills_bar.add_theme_stylebox_override("fill", _style(Color(0.85, 0.7, 0.25), Color(0.85, 0.7, 0.25), 0))
+	vb.add_child(skills_bar)
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 14)
+	cols.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vb.add_child(cols)
+	var card_style := _style(Color(0.13, 0.14, 0.15, 1.0), Color(0.28, 0.3, 0.3), 1)
+	card_style.set_content_margin_all(8)
+	for br in Skills.BRANCHES:
+		var col := VBoxContainer.new()
+		col.custom_minimum_size = Vector2(350, 0)
+		col.add_theme_constant_override("separation", 8)
+		cols.add_child(col)
+		col.add_child(_label(br.to_upper(), 18, Color(0.85, 0.95, 0.7)))
+		for pk in Skills.PERKS:
+			if pk["branch"] != br:
+				continue
+			var card := PanelContainer.new()
+			card.add_theme_stylebox_override("panel", card_style)
+			col.add_child(card)
+			var cv := VBoxContainer.new()
+			cv.add_theme_constant_override("separation", 2)
+			card.add_child(cv)
+			var top := HBoxContainer.new()
+			cv.add_child(top)
+			var nm := _label(pk["name"], 17)
+			nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			top.add_child(nm)
+			var rank := _label("", 17, Color(1, 0.85, 0.4))
+			top.add_child(rank)
+			var desc := _label("Each rank: " + pk["text"] + ".", 13, Color(0.78, 0.8, 0.78))
+			desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			desc.custom_minimum_size = Vector2(330, 0)
+			cv.add_child(desc)
+			var row := HBoxContainer.new()
+			cv.add_child(row)
+			var nxt := _label("", 13, Color(0.7, 0.72, 0.7))
+			nxt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(nxt)
+			var id: int = pk["id"]
+			var btn := _small_button("  Learn  ", func(): G.net.request_perk(id))
+			btn.set_meta("key", "perk:%d" % id)
+			row.add_child(btn)
+			skill_cards[pk["key"]] = {"rank": rank, "next": nxt, "btn": btn}
+	var foot := _label("Every level gives a skill point; levels and skills stay when you die. Experience comes from zombies (more from " +
+		"Runners, Brutes, Screamers and Spitters, more at night, twice as much in a Blood Moon), boars, ore and upgrading blocks.", 13, Color(0.7, 0.7, 0.7))
+	foot.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	foot.custom_minimum_size = Vector2(PAGE_SIZE.x, 0)
+	vb.add_child(foot)
+	return vb
+
+
+func _refresh_skills() -> void:
+	var xp: int = G.net.xp
+	var lv := Skills.level_of(xp)
+	var pts := Skills.points(xp, G.net.perks)
+	var into := xp - Skills.xp_for(lv)
+	var step := Skills.xp_step(lv)
+	if lv >= Skills.MAX_LEVEL:
+		skills_head.text = "LEVEL %d (the highest)   ·   Skill points: %d" % [lv, pts]
+		skills_bar.value = 100.0
+	else:
+		skills_head.text = "LEVEL %d   ·   %d / %d XP to level %d   ·   Skill points: %d" % [lv, into, step, lv + 1, pts]
+		skills_bar.value = 100.0 * into / step
+	for pk in Skills.PERKS:
+		var c: Dictionary = skill_cards[pk["key"]]
+		var r := int(G.net.perks.get(pk["key"], 0))
+		var mx := int(pk["max"])
+		(c["rank"] as Label).text = "●".repeat(r) + "○".repeat(mx - r)
+		var why := Skills.cant_take(xp, G.net.perks, pk["key"])
+		var btn: Button = c["btn"]
+		btn.disabled = why != ""
+		if r >= mx:
+			(c["next"] as Label).text = "All ranks learned."
+		elif Skills.level_of(xp) < Skills.RANK_LEVEL[r]:
+			(c["next"] as Label).text = "Rank %d needs level %d." % [r + 1, Skills.RANK_LEVEL[r]]
+		elif pts <= 0:
+			(c["next"] as Label).text = "Rank %d: needs a skill point." % (r + 1)
+		else:
+			(c["next"] as Label).text = "Rank %d ready to learn." % (r + 1)
+
+
+func _build_armor_page() -> Control:
+	var hb := HBoxContainer.new()
+	hb.custom_minimum_size = PAGE_SIZE
+	hb.add_theme_constant_override("separation", 24)
+	armor_view = SubViewportContainer.new()
+	armor_view.stretch = true
+	armor_view.custom_minimum_size = Vector2(300, 540)
+	hb.add_child(armor_view)
+	var mid := VBoxContainer.new()
+	mid.add_theme_constant_override("separation", 10)
+	mid.custom_minimum_size = Vector2(360, 0)
+	hb.add_child(mid)
+	mid.add_child(_label("WORN", 22, Color(0.85, 0.95, 0.7)))
+	for i in 4:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		mid.add_child(row)
+		var b := _slot_button()
+		b.pressed.connect(func(): G.net.request_equip(1, i))
+		row.add_child(b)
+		armor_btns.append(b)
+		var l := _label("", 16)
+		l.custom_minimum_size = Vector2(280, 0)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		row.add_child(l)
+		armor_lbls.append(l)
+	armor_total_lbl = _label("", 17, Color(1, 0.93, 0.6))
+	armor_total_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	armor_total_lbl.custom_minimum_size = Vector2(340, 0)
+	mid.add_child(armor_total_lbl)
+	var right := VBoxContainer.new()
+	right.add_theme_constant_override("separation", 10)
+	hb.add_child(right)
+	right.add_child(_label("ARMOR IN YOUR BAG", 22, Color(0.85, 0.95, 0.7)))
+	armor_bag = GridContainer.new()
+	armor_bag.columns = 6
+	right.add_child(armor_bag)
+	var help := _label("Click a piece to put it on, or a worn one to take it off. Right-click armor in your hand puts it on too.\n\n" +
+		"Padded armor (plant fibre) is made by hand; leather (boar hide), iron and steel at a Workbench; Blood Steel at the Blood Forge. " +
+		"Armor stops part of what zombies and acid do (not falls), and you keep it on when you die.", 13, Color(0.7, 0.7, 0.7))
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	help.custom_minimum_size = Vector2(360, 0)
+	right.add_child(help)
+	return hb
+
+
+func _refresh_armor() -> void:
+	if armor_bag == null:
+		return
+	var worn: Array = G.net.armor
+	for i in 4:
+		var id := int(worn[i])
+		armor_btns[i].icon = G.tex.icon(id) if id > 0 else null
+		armor_btns[i].tooltip_text = Items.name_of(id) if id > 0 else ""
+		armor_lbls[i].text = "%s:  %s" % [Items.ARMOR_SLOT_NAMES[i], "%s  (%.0f%%)" % [Items.name_of(id), Items.armor_def(id)] if id > 0 else "nothing"]
+	armor_total_lbl.text = "Your armor stops %d%% of the damage zombies and acid do." % roundi(Items.armor_total(worn) * 100.0)
+	# The bag's armor: rebuilt (it is short), keeping the focus on the same slot's button.
+	var fo := get_viewport().gui_get_focus_owner()
+	var focus_slot := int(fo.get_meta("inv_slot")) if fo != null and fo.has_meta("inv_slot") and armor_bag.is_ancestor_of(fo) else -1
+	for c in armor_bag.get_children():
+		armor_bag.remove_child(c)
+		c.queue_free()
+	var inv = G.player.inv
+	for i in Inventory.SIZE:
+		var id: int = inv.id_at(i)
+		if Items.armor_slot(id) < 0:
+			continue
+		var b := _slot_button()
+		b.icon = G.tex.icon(id)
+		b.tooltip_text = "%s (%.0f%%)" % [Items.name_of(id), Items.armor_def(id)]
+		b.set_meta("inv_slot", i)
+		b.pressed.connect(func(): G.net.request_equip(0, i))
+		armor_bag.add_child(b)
+		if i == focus_slot:
+			b.grab_focus.call_deferred()
+	if armor_bag.get_child_count() == 0:
+		armor_bag.add_child(_label("None yet.", 15, Color(0.7, 0.7, 0.7)))
+	_dress_preview()
+
+
+## The character picture on the Armor tab: our survivor (as other players see us) in our armor,
+## turning slowly. Made the first time the tab shows.
+func _dress_preview() -> void:
+	if armor_view == null or G.game == null:
+		return
+	if armor_preview == null:
+		var vp := SubViewport.new()
+		vp.own_world_3d = true
+		vp.transparent_bg = true
+		vp.msaa_3d = Viewport.MSAA_2X
+		armor_view.add_child(vp)
+		var cam := Camera3D.new()
+		cam.fov = 34.0
+		vp.add_child(cam)
+		cam.position = Vector3(0, 1.25, 3.6)
+		cam.look_at_from_position(cam.position, Vector3(0, 0.98, 0))
+		var sun := DirectionalLight3D.new()
+		sun.rotation = Vector3(-0.6, 0.5, 0)
+		vp.add_child(sun)
+		var env := WorldEnvironment.new()
+		var e := Environment.new()
+		e.background_mode = Environment.BG_CLEAR_COLOR
+		e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		e.ambient_light_color = Color(0.7, 0.7, 0.75)
+		var sky := Sky.new()
+		var sm := ProceduralSkyMaterial.new()
+		sm.sky_top_color = Color(0.45, 0.55, 0.7)
+		sm.ground_bottom_color = Color(0.25, 0.22, 0.2)
+		sky.sky_material = sm
+		e.sky = sky
+		e.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+		e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+		env.environment = e
+		vp.add_child(env)
+		armor_preview = Node3D.new()
+		vp.add_child(armor_preview)
+		var who: String = G.game.RemotePlayerScript.SURVIVORS[G.net.my_net_id % G.game.RemotePlayerScript.SURVIVORS.size()]
+		var rig := Rig.make("res://assets/models/survivors/Characters_%s_SingleWeapon.gltf" % who, Vector3.ONE * 1.25, [])
+		if rig != null:
+			armor_preview.add_child(rig)
+			rig.strip_props()
+			rig.move("Idle")
+			armor_preview.set_meta("rig", rig)
+	var r = armor_preview.get_meta("rig", null)
+	if r != null:
+		ArmorModels.dress(r, Proto.armor_tiers(Proto.armor_bits(G.net.armor)))
+
+
 # ------------------------------------------------------------ the character screen's tabs (M4.4)
 
 ## The tabs show (I or M); not for a station's or a box's screen.
@@ -1006,6 +1257,12 @@ func show_tab(t: String) -> void:
 		"inventory":
 			refresh_inventory()
 			slot_btns[G.player.selected].grab_focus.call_deferred()
+		"armor":
+			_refresh_armor()
+			focus_first(pages[t])
+		"skills":
+			_refresh_skills()
+			focus_first(pages[t])
 		"map":
 			map_panel.opened()
 			_on_pins_changed()
@@ -1300,6 +1557,11 @@ func _process(delta: float) -> void:
 		_refresh_pause_players()
 		if death_root.visible:
 			_death_text()
+	if has_tabs() and tab == "armor" and armor_preview != null:
+		armor_preview.rotation.y += delta * 0.6
+		var r = armor_preview.get_meta("rig", null)
+		if r != null:
+			r.tick(delta)
 	if has_tabs() and tab == "players":
 		# Pings: ask the server again every few seconds while the list shows.
 		_social_t -= delta
@@ -1474,14 +1736,16 @@ func _draw_hud() -> void:
 		_text(r.position + Vector2(4, 14), str(i + 1), 11, Color(1, 1, 1, 0.45))
 	var cur: int = p.cur_id()
 	if cur > 0:
-		_text(Vector2(x0, y0 - 12), Items.name_of(cur), 18, Color(1, 1, 1, 0.9), HORIZONTAL_ALIGNMENT_CENTER, total)
+		_text(Vector2(x0, y0 - 20), Items.name_of(cur), 18, Color(1, 1, 1, 0.9), HORIZONTAL_ALIGNMENT_CENTER, total)
+	if G.mode == "client" or G.has_arg("--scenery"):
+		_draw_xp(x0, y0, total)
 
 	# Vitals
 	var bx := 20.0
 	var by := vs.y - 34.0
 	_bar(Vector2(bx, by - 48), 240, "HEALTH  %d" % int(ceilf(p.health)), p.health / p.max_health, Color(0.8, 0.18, 0.16))
 	_bar(Vector2(bx, by - 24), 240, "FOOD  %d" % int(ceilf(p.food)), p.food / 100.0, Color(0.85, 0.55, 0.15))
-	_bar(Vector2(bx, by), 240, "STAMINA", p.stamina / 100.0, Color(0.85, 0.8, 0.25))
+	_bar(Vector2(bx, by), 240, "STAMINA", p.stamina / p.max_stamina(), Color(0.85, 0.8, 0.25))
 
 	# Clock + horde countdown
 	var g = G.game
@@ -1515,6 +1779,19 @@ func _draw_hud() -> void:
 
 	if G.mode == "client":
 		_draw_online(vs)
+
+
+## M4.5: the experience bar just above the hotbar, with the level beside it.
+func _draw_xp(x0: float, y0: float, total: float) -> void:
+	var xp: int = G.net.xp
+	var lv := Skills.level_of(xp)
+	var frac := 1.0 if lv >= Skills.MAX_LEVEL else float(xp - Skills.xp_for(lv)) / Skills.xp_step(lv)
+	var r := Rect2(x0, y0 - 9, total, 5)
+	canvas.draw_rect(r, Color(0, 0, 0, 0.55))
+	canvas.draw_rect(Rect2(r.position, Vector2(total * clampf(frac, 0.0, 1.0), 5)), Color(0.95, 0.78, 0.3, 0.95))
+	_text(Vector2(x0 - 62, y0 - 2), "LV %d" % lv, 15, Color(1, 0.88, 0.45, 0.95))
+	if Skills.points(xp, G.net.perks) > 0:
+		_text(Vector2(x0 + total + 8, y0 - 2), "+%d" % Skills.points(xp, G.net.perks), 15, Color(1, 0.88, 0.45, 0.95))
 
 
 ## Online: the chat log above the health bars, and players / ping at the top right.

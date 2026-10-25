@@ -49,6 +49,18 @@ const CROSSBOW := 141
 const STONE_ARROW := 142
 const IRON_ARROW := 143
 const IRON_BOLT := 144
+## M4.5: hide from boars (leather armor), and armor: ARMOR_FIRST + tier * 4 + slot, the tiers
+## padded, leather, iron, steel, Blood Steel and the slots head, chest, legs, feet.
+const BOAR_HIDE := 145
+const ARMOR_FIRST := 150
+const ARMOR_SLOTS := ["head", "chest", "legs", "feet"]
+const ARMOR_SLOT_NAMES := ["Head", "Chest", "Legs", "Feet"]
+const ARMOR_TIERS := ["Padded", "Leather", "Iron", "Steel", "Blood Steel"]
+## How much of a zombie's (or acid's) damage a whole set of each tier stops, in percent; a head
+## piece gives a fifth of it, the chest two fifths, legs a quarter, feet the rest.
+const ARMOR_SET := [10.0, 22.0, 38.0, 52.0, 66.0]
+const ARMOR_SHARE := [0.2, 0.4, 0.25, 0.15]
+
 ## What can fly (thrown or shot): its index here is the projectile's type on the network.
 const PROJECTILES := [STONE_ARROW, IRON_ARROW, IRON_BOLT, WOOD_SPEAR, STONE_SPEAR, IRON_SPEAR]
 ## Seconds to draw the bow fully; the crossbow's reload; holding a spear back to throw it hard.
@@ -114,6 +126,28 @@ const DATA := {
 	142: {"name": "Stone Arrow", "ammo_of": "arrow", "dmg": 12.0},
 	143: {"name": "Iron Arrow", "ammo_of": "arrow", "dmg": 18.0},
 	144: {"name": "Iron Bolt", "ammo_of": "bolt", "dmg": 28.0},
+	145: {"name": "Boar Hide"},
+	# Armor (M4.5): "armor" is the slot (0 head, 1 chest, 2 legs, 3 feet), "atier" the tier.
+	150: {"name": "Padded Hood", "armor": 0, "atier": 0},
+	151: {"name": "Padded Vest", "armor": 1, "atier": 0},
+	152: {"name": "Padded Leggings", "armor": 2, "atier": 0},
+	153: {"name": "Padded Boots", "armor": 3, "atier": 0},
+	154: {"name": "Leather Cap", "armor": 0, "atier": 1},
+	155: {"name": "Leather Jacket", "armor": 1, "atier": 1},
+	156: {"name": "Leather Pants", "armor": 2, "atier": 1},
+	157: {"name": "Leather Boots", "armor": 3, "atier": 1},
+	158: {"name": "Iron Helmet", "armor": 0, "atier": 2},
+	159: {"name": "Iron Chestplate", "armor": 1, "atier": 2},
+	160: {"name": "Iron Leggings", "armor": 2, "atier": 2},
+	161: {"name": "Iron Boots", "armor": 3, "atier": 2},
+	162: {"name": "Steel Helmet", "armor": 0, "atier": 3},
+	163: {"name": "Steel Chestplate", "armor": 1, "atier": 3},
+	164: {"name": "Steel Leggings", "armor": 2, "atier": 3},
+	165: {"name": "Steel Boots", "armor": 3, "atier": 3},
+	166: {"name": "Blood Steel Helmet", "armor": 0, "atier": 4},
+	167: {"name": "Blood Steel Chestplate", "armor": 1, "atier": 4},
+	168: {"name": "Blood Steel Leggings", "armor": 2, "atier": 4},
+	169: {"name": "Blood Steel Boots", "armor": 3, "atier": 4},
 }
 
 
@@ -139,7 +173,7 @@ static func stack_max(id: int) -> int:
 	if is_block(id):
 		return 99
 	var d := info(id)
-	if d.has("tool"):
+	if d.has("tool") or d.has("armor"):
 		return 1
 	if d.has("food"):
 		return 20
@@ -188,6 +222,30 @@ static func ammo_slot(inv, tool: int) -> int:
 		if id > 0 and str(info(id).get("ammo_of", "")) == kind:
 			return i
 	return -1
+
+
+## Armor (M4.5): which slot it goes in (-1: not armor), its tier, and how much damage it stops.
+static func armor_slot(id: int) -> int:
+	return int(info(id).get("armor", -1))
+
+
+static func armor_tier(id: int) -> int:
+	return int(info(id).get("atier", -1))
+
+
+static func armor_def(id: int) -> float:
+	var s := armor_slot(id)
+	if s < 0:
+		return 0.0
+	return ARMOR_SET[armor_tier(id)] * ARMOR_SHARE[s]
+
+
+## The share of damage the worn armor stops (0..0.8), from the four slots' item ids.
+static func armor_total(worn: Array) -> float:
+	var t := 0.0
+	for id in worn:
+		t += armor_def(int(id))
+	return minf(0.8, t / 100.0)
 
 
 ## Can it be thrown or shot (an arrow, a bolt, a spear)?

@@ -76,6 +76,28 @@ const RECIPES := [
 	{"out": Items.BLOOD_SWORD, "n": 1, "needs": {Items.BLOOD_INGOT: 2, Items.STICK: 1}, "st": "bloodforge"},
 	{"out": Items.BLOOD_HAMMER, "n": 1, "needs": {Items.BLOOD_INGOT: 2, Items.STICK: 2}, "st": "bloodforge"},
 	{"out": Blocks.BLOOD_BRICK, "n": 4, "needs": {Blocks.STONE_BRICK: 4, Items.BLOOD_INGOT: 1}, "st": "bloodforge"},
+	# M4.5 armor: padded (plant fibre) by hand, leather (boar hide), iron and steel at the
+	# workbench, Blood Steel at the Blood Forge. Head, chest, legs, feet.
+	{"out": Items.ARMOR_FIRST + 0, "n": 1, "needs": {Items.FIBER: 4}, "st": ""},
+	{"out": Items.ARMOR_FIRST + 1, "n": 1, "needs": {Items.FIBER: 8}, "st": ""},
+	{"out": Items.ARMOR_FIRST + 2, "n": 1, "needs": {Items.FIBER: 6}, "st": ""},
+	{"out": Items.ARMOR_FIRST + 3, "n": 1, "needs": {Items.FIBER: 4}, "st": ""},
+	{"out": Items.ARMOR_FIRST + 4, "n": 1, "needs": {Items.BOAR_HIDE: 2, Items.FIBER: 2}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 5, "n": 1, "needs": {Items.BOAR_HIDE: 5, Items.FIBER: 3}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 6, "n": 1, "needs": {Items.BOAR_HIDE: 4, Items.FIBER: 2}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 7, "n": 1, "needs": {Items.BOAR_HIDE: 2, Items.FIBER: 2}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 8, "n": 1, "needs": {Items.IRON_INGOT: 4, Items.BOAR_HIDE: 1}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 9, "n": 1, "needs": {Items.IRON_INGOT: 8, Items.BOAR_HIDE: 1}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 10, "n": 1, "needs": {Items.IRON_INGOT: 6, Items.BOAR_HIDE: 1}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 11, "n": 1, "needs": {Items.IRON_INGOT: 3, Items.BOAR_HIDE: 1}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 12, "n": 1, "needs": {Items.STEEL_INGOT: 4, Items.BOAR_HIDE: 1}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 13, "n": 1, "needs": {Items.STEEL_INGOT: 8, Items.BOAR_HIDE: 1}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 14, "n": 1, "needs": {Items.STEEL_INGOT: 6, Items.BOAR_HIDE: 1}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 15, "n": 1, "needs": {Items.STEEL_INGOT: 3, Items.BOAR_HIDE: 1}, "st": "workbench"},
+	{"out": Items.ARMOR_FIRST + 16, "n": 1, "needs": {Items.BLOOD_INGOT: 4, Items.BOAR_HIDE: 1}, "st": "bloodforge"},
+	{"out": Items.ARMOR_FIRST + 17, "n": 1, "needs": {Items.BLOOD_INGOT: 8, Items.BOAR_HIDE: 1}, "st": "bloodforge"},
+	{"out": Items.ARMOR_FIRST + 18, "n": 1, "needs": {Items.BLOOD_INGOT: 6, Items.BOAR_HIDE: 1}, "st": "bloodforge"},
+	{"out": Items.ARMOR_FIRST + 19, "n": 1, "needs": {Items.BLOOD_INGOT: 3, Items.BOAR_HIDE: 1}, "st": "bloodforge"},
 ]
 
 

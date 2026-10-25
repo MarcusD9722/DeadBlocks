@@ -26,7 +26,7 @@ After 0.14.0 Marcus added ("I'm trying to make this into a real game now"):
   farms, streets with wrecked cars: M4.8 and M4.9 below).
 
 This plan replaces the old "M4 — Exploration & loot" line in DESIGN.md (its ruins, loot tables,
-refills and locks are part of M4.5 below). Each step is its own release; the games update
+refills and locks are part of M4.8 below). Each step is its own release; the games update
 themselves, so a release is the GitHub release plus `update.sh` on the Pi.
 
 ## Order, and why
@@ -312,19 +312,88 @@ The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays a
 - The save test round-trips an explored map of 3000 chunks, pins, allies and a tribe.
 - `--scenery --only=screens` takes pictures of the Map, Players and Tribe tabs.
 
-## M4.5 Progress: experience, skills, armor (0.17.0) — outline
-- **Experience** from zombie kills (more for Runners, Brutes, Screamers and Spitters, more again
-  for Blood Moon zombies), a little from other things later (hunting, building, quests). An
-  **experience bar** on the HUD; each level needs a bit more than the last.
-- **Every level gives a skill point** to spend in the **Skills tab**: a tree of perks in a few
-  branches, for example fighting (melee damage, stamina), survival (health, slower hunger,
-  faster healing), building (hammer speed, cheaper upgrades, mining speed) and later scavenging
-  (better loot, M4.8).
-- **Armor tab**: slots for head, chest, legs and feet, with your character shown. Armor from boar
-  hide (leather: boars drop hide), iron, steel and Blood Steel, each tier blocking more damage;
-  clothes in the same slots (warmth matters once the weather does, M4.7). Other players see your
-  armor if the models allow it.
-- Dying keeps your level and skills (only your things go into the bag).
+## M4.5 Progress: experience, skills, armor (0.17.0) — built
+
+### Experience and levels
+| Source | Experience |
+|---|---|
+| Walker | 10 |
+| Runner | 20 |
+| Crawler | 15 |
+| Screamer, Spitter | 25 |
+| Brute | 50 |
+| (any zombie) at night | ×1.5 |
+| (any zombie) in a Blood Moon | ×2 |
+| Boar | 15 |
+| Coal ore / iron ore mined | 3 / 5 |
+| A block upgraded with the hammer | 3 |
+
+- Level 2 needs 100 experience, and each level after that 40 more than the last (level 10 is at
+  2,340 in all, level 20 at 8,740); the highest level is 60.
+- The **experience bar** sits just above the hotbar, with the level beside it ("LV 7") and
+  "+N" when skill points are waiting. Each gain shows as "+15 XP" with the pickups; a new
+  level says so in the middle of the screen.
+- **Every level gives a skill point.** Dying keeps your level, experience and skills.
+
+### The Skills tab
+Three branches; a rank costs a point, rank 1 can be learned at any level, rank 2 needs level
+3, rank 3 level 6, rank 4 level 10, rank 5 level 15.
+
+| Perk | Ranks | Each rank |
+|---|---|---|
+| **Fighting** — Brawler | 5 | +10% damage with melee weapons and fists |
+| Marksman | 5 | +10% damage with arrows, bolts and thrown spears |
+| Endurance | 3 | +20% stamina, sprinting tires you 10% less |
+| **Survival** — Tough | 5 | +10 health |
+| Iron Gut | 3 | you get hungry 12% slower |
+| Fast Healer | 3 | you heal 30% faster |
+| **Building** — Miner | 5 | mine, dig and chop 10% faster |
+| Carpenter | 3 | the hammer works 15% faster |
+| Thrifty | 3 | a 15% chance that an upgrade costs nothing |
+
+- Scavenging (better loot) comes with the towns (M4.8).
+- Admins have `/xp <amount>` for trying perks.
+
+### Armor (the Armor tab)
+| Tier | Made | A whole set stops |
+|---|---|---|
+| Padded (plant fibre) | by hand | 10% |
+| Leather (boar hide; boars now drop 1–2 hides) | workbench | 22% |
+| Iron (+1 hide each) | workbench | 38% |
+| Steel (+1 hide each) | workbench | 52% |
+| Blood Steel (+1 hide each) | Blood Forge | 66% |
+
+- Four slots: head (a fifth of the set's protection), chest (two fifths), legs (a quarter),
+  feet (the rest). Iron and steel take 4 / 8 / 6 / 3 ingots for helmet / chest / legs / boots.
+- Armor stops part of what **zombies and acid** do; falls, hunger and /kill go through.
+- The **Armor tab** shows the four worn slots (click one to take it off), the armor in your bag
+  (click to put it on) and your character in what you wear, turning. Right-click armor in your
+  hand puts it on too.
+- **You keep your armor on when you die** (like 7 Days to Die's default); only the bag's things
+  drop. No wear and tear yet.
+- **Other players see your armor** on your figure: helmet, chest piece, leggings with shin guards,
+  boots, in the tier's material. Armor and its icons are 3D models built in code
+  (`scripts/armor_models.gd`), fitted to the survivor models.
+
+### Also
+- The tool and weapon models of 0.15–0.16 were drawn inside out (their triangles faced inwards,
+  so they were lit from the wrong side). Fixed: they are shaded properly now, with highlights
+  on the metals.
+
+### Network and saving
+- Protocol 12: S_PROGRESS (experience and perks), S_ARMOR, C_PERK, C_EQUIP; S_STATS carries the
+  most health you can have; the player record in snapshots carries the armor worn.
+- Save format 5: each player file has the experience, perks and armor worn.
+
+### Tests
+- The autotest: kills gave experience; `/xp` levels up and the level-up message shows; Tough and
+  Carpenter learned from the Skills tab (health goes to 110); four iron pieces worn from the
+  Armor tab (38%), the helmet taken off and put on again with right-click; a zombie's hit is
+  smaller through the armor; a Padded Hood made by hand; boars drop hide; after the night's
+  death and Continue the experience, perks and helmet are still there.
+- The multiplayer pair test: the other player sees the helmet on "a"'s figure.
+- The save test round-trips experience, perks and armor and drops unknown perks.
+- `--scenery --only=screens` shows the Armor and Skills tabs.
 
 ## M4.6 The look, away from Minecraft (0.18.0) — outline
 - The aim is a simple 3D look like 7 Days to Die: the world stays a grid underneath (mining,

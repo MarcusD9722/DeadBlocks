@@ -59,7 +59,8 @@ var players := {}           # peer id -> ServerPlayer
 var lingering := {}
 var linger_s := LINGER_S
 ## Accounts by lower-case name: {name, pin_key, fails, locked_until, pos, yaw, health, food,
-## kills, spawn, inv, play_s, map (explored chunk keys -> true), pins ([[name, x, z], ...])}.
+## kills, spawn, inv, play_s, map (explored chunk keys -> true), pins ([[name, x, z], ...]),
+## xp, perks (key -> rank) and armor (4 item ids), M4.5}.
 ## Loaded from and saved to players/<name>.json by `saver`.
 var accounts := {}
 ## Allies and tribes (M4.4, server/social.gd).
@@ -291,7 +292,8 @@ func _on_auth(id: int, data: PackedByteArray) -> void:
 		inv.add(Items.BERRIES, 3)
 		inv.add(Blocks.TORCH, 2)
 		acc = {"name": pname, "pin_key": pk, "fails": 0, "locked_until": 0.0, "pos": G.game.spawn_pos, "yaw": 0.0, "inv": inv,
-			"health": 100.0, "food": 100.0, "kills": 0, "bed": Vector3i.MIN, "play_s": 0.0, "map": {}, "pins": []}
+			"health": 100.0, "food": 100.0, "kills": 0, "bed": Vector3i.MIN, "play_s": 0.0, "map": {}, "pins": [],
+			"xp": 0, "perks": {}, "armor": [0, 0, 0, 0]}
 		accounts[key] = acc
 		print("SERVER new player %s" % pname)
 	if replacing != 0:
@@ -383,6 +385,9 @@ func _on_connected(id: int) -> void:
 	sp.health = acc["health"]
 	sp.food = acc["food"]
 	sp.kills = acc["kills"]
+	sp.xp = int(acc.get("xp", 0))
+	sp.perks = (acc.get("perks", {}) as Dictionary).duplicate()
+	sp.armor = (acc.get("armor", [0, 0, 0, 0]) as Array).duplicate()
 	sp.dead = sp.health <= 0.0
 	players[id] = sp
 	var w := Proto.writer(Proto.S_WELCOME)
@@ -535,7 +540,7 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 				_send_to(id, _time_bytes())
 				_update_world_paused(sp.player_name)
 		Proto.C_FALL:
-			sp.take_damage(float(b.get_u8()), Vector3.ZERO)
+			sp.take_damage(float(b.get_u8()), Vector3.ZERO, false)
 		Proto.C_PAUSE:
 			sp.paused = b.get_u8() == 1
 			if solo:
@@ -545,7 +550,7 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 			var whose := b.get_utf8_string().to_lower() if where_to == 2 else ""
 			if sp.dead:
 				sp.dead = false
-				sp.health = 100.0
+				sp.health = sp.max_health()
 				sp.food = maxf(sp.food, 60.0)
 				var key: String = sp.player_name.to_lower()
 				var spot := Vector3.INF
@@ -566,7 +571,7 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 		Proto.C_CHAT:
 			_on_chat(sp, b.get_utf8_string().strip_edges().left(Proto.MAX_CHAT))
 		Proto.C_BREAK, Proto.C_PLACE, Proto.C_SWAP, Proto.C_CRAFT, Proto.C_EAT, Proto.C_ATTACK, \
-				Proto.C_USE, Proto.C_UPGRADE, Proto.C_OPEN, Proto.C_BOX, Proto.C_SHOOT, Proto.C_PICKUP:
+				Proto.C_USE, Proto.C_UPGRADE, Proto.C_OPEN, Proto.C_BOX, Proto.C_SHOOT, Proto.C_PICKUP, Proto.C_EQUIP:
 			_on_request(sp, data[0], b)
 		Proto.C_CLOSE:
 			sp.open_box = Vector3i.MIN
@@ -576,6 +581,8 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 			social.on_request(sp, action, who, b.get_utf8_string())
 		Proto.C_PIN:
 			_req_pin(sp, b)
+		Proto.C_PERK:
+			_req_perk(sp, b.get_u8())
 
 
 # ------------------------------------------------------------ building, crafting, eating
@@ -627,6 +634,61 @@ func _on_request(sp, type: int, b: StreamPeerBuffer) -> void:
 			_req_shoot(sp, slot, power, Proto.get_vec3(b))
 		Proto.C_PICKUP:
 			_req_pickup(sp, b.get_u16())
+		Proto.C_EQUIP:
+			var action := b.get_u8()
+			_req_equip(sp, action, b.get_u8())
+
+
+# ------------------------------------------------------------ experience, perks, armor (M4.5)
+
+func _send_progress(sp) -> void:
+	var m := Proto.writer(Proto.S_PROGRESS)
+	m.put_u32(sp.xp)
+	var keys: Array = sp.perks.keys().filter(func(k): return not Skills.perk(k).is_empty())
+	m.put_u8(keys.size())
+	for k in keys:
+		m.put_u8(int(Skills.perk(k)["id"]))
+		m.put_u8(int(sp.perks[k]))
+	_send_to(sp.peer_id, m.data_array)
+
+
+## C_PERK: spend a skill point on the next rank of a perk.
+func _req_perk(sp, id: int) -> void:
+	var p := Skills.perk_by_id(id)
+	var why := Skills.cant_take(sp.xp, sp.perks, p.get("key", ""))
+	if why != "":
+		_msg(sp, why, Color(1, 0.7, 0.5))
+	else:
+		sp.perks[p["key"]] = int(sp.perks.get(p["key"], 0)) + 1
+		print("SERVER %s took %s rank %d" % [sp.player_name, p["name"], sp.perks[p["key"]]])
+		_acc_dirty[sp.player_name.to_lower()] = true
+	sp.progress_dirty = true  # (an answer either way, so the Skills tab is right)
+
+
+## C_EQUIP: wear the armor in an inventory slot (what was worn there goes into that slot), or
+## take off the piece in an armor slot (into the inventory).
+func _req_equip(sp, action: int, slot: int) -> void:
+	sp.armor_dirty = true
+	if sp.dead:
+		return
+	if action == 0:
+		if slot >= Inventory.SIZE:
+			return
+		var id: int = sp.inv.id_at(slot)
+		var a := Items.armor_slot(id)
+		if a < 0:
+			return
+		var old: int = sp.armor[a]
+		sp.inv.slots[slot] = null if old == 0 else {"id": old, "n": 1}
+		sp.armor[a] = id
+	elif slot < 4 and int(sp.armor[slot]) != 0:
+		if not sp.inv.can_fit(int(sp.armor[slot]), 1):
+			_msg(sp, "Inventory full!", Color(1, 0.5, 0.4))
+			return
+		sp.inv.add(int(sp.armor[slot]), 1)
+		sp.armor[slot] = 0
+	sp.inv_dirty = true
+	_acc_dirty[sp.player_name.to_lower()] = true
 
 
 func _eye(sp) -> Vector3:
@@ -655,7 +717,7 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 	if why == "" and (id != expect or id <= 0):
 		why = "block changed"
 	var tool: int = sp.inv.id_at(slot)
-	var bt := Rules.break_time(id, tool)
+	var bt := Rules.break_time(id, tool, Skills.mine_speed(sp.perks))
 	var now := Time.get_ticks_msec()
 	# Mining takes time; allow plenty of slack for lag, but not instant mining. (A bag is picked
 	# up at once with E.)
@@ -673,6 +735,7 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 	if int(got["need_tier"]) > 0:
 		_msg(sp, Rules.too_hard_text(got["need_tier"]), Color(1, 0.8, 0.5))
 		return
+	sp.add_xp(int(Skills.ORE_XP.get(id, 0)))
 	for d in got["items"]:
 		if sp.inv.add(d[0], d[1]) > 0:
 			_msg(sp, "Inventory full!", Color(1, 0.5, 0.4))
@@ -773,7 +836,7 @@ func _req_upgrade(sp, p: Vector3i, slot: int) -> void:
 	var now := Time.get_ticks_msec()
 	if why == "" and Items.tool_type(tool) != "hammer":
 		why = "no hammer"
-	elif why == "" and now - sp.last_hammer_ms < Items.hammer_time(tool) * 350.0:
+	elif why == "" and now - sp.last_hammer_ms < Items.hammer_time(tool) / Skills.hammer_speed(sp.perks) * 350.0:
 		why = "too fast"
 	if why != "":
 		_refuse(sp, p, why)
@@ -796,8 +859,11 @@ func _req_upgrade(sp, p: Vector3i, slot: int) -> void:
 			_msg(sp, "Upgrading to %s takes %s." % [Blocks.NAMES[up[0]], Rules.cost_text(needs)], Color(1, 0.8, 0.5))
 			_refuse(sp, p, "missing materials")
 			return
-	for item in needs:
-		sp.inv.remove(item, int(needs[item]))
+	# Thrifty (M4.5): now and then an upgrade costs nothing.
+	if _rng.randf() >= Skills.free_upgrade_chance(sp.perks):
+		for item in needs:
+			sp.inv.remove(item, int(needs[item]))
+	sp.add_xp(Skills.UPGRADE_XP)
 	var q: Vector3i = w.door_partner(p)
 	w.set_block(p, up[0], w.block_meta(p))
 	if q != Vector3i.MIN:
@@ -981,15 +1047,15 @@ func _req_eat(sp, slot: int) -> void:
 	var d := Items.info(id)
 	var f := float(d.get("food", 0.0))
 	var h := float(d.get("heal", 0.0))
-	if f > 0.0 and sp.food >= 99.0 and (h <= 0.0 or sp.health >= 100.0):
+	if f > 0.0 and sp.food >= 99.0 and (h <= 0.0 or sp.health >= sp.max_health()):
 		_msg(sp, "You're full.", Color(1, 1, 1))
 		return
-	if f <= 0.0 and h > 0.0 and sp.health >= 100.0:
+	if f <= 0.0 and h > 0.0 and sp.health >= sp.max_health():
 		_msg(sp, "You're already at full health.", Color(1, 1, 1))
 		return
 	sp.inv.remove_at(slot, 1)
 	sp.food = minf(100.0, sp.food + f)
-	sp.health = minf(100.0, sp.health + h)
+	sp.health = minf(sp.max_health(), sp.health + h)
 	var a := Proto.writer(Proto.S_ATE)
 	a.put_u16(id)
 	_send_to(sp.peer_id, a.data_array)
@@ -1007,7 +1073,7 @@ func _req_attack(sp, mob_id: int, slot: int) -> void:
 	if _eye(sp).distance_to(mob.global_position + Vector3(0, mob.height * 0.5, 0)) > Proto.MOB_REACH:
 		return
 	sp.last_attack_ms = now
-	mob.hurt(Items.damage(sp.inv.id_at(slot)), sp.global_position, sp)
+	mob.hurt(Items.damage(sp.inv.id_at(slot)) * Skills.melee_mult(sp.perks), sp.global_position, sp)
 
 
 # ------------------------------------------------------------ ranged weapons (M4.3)
@@ -1045,7 +1111,8 @@ func _req_shoot(sp, slot: int, power: float, aim: Vector3) -> void:
 	var item: int = sp.inv.id_at(from_slot)
 	sp.inv.remove_at(from_slot, 1)
 	var dir := aim.normalized()
-	G.sim.shoot(item, clampf(power, 0.0, 1.0), _eye(sp) + dir * 0.35, dir, sp)
+	var pr: Node = G.sim.shoot(item, clampf(power, 0.0, 1.0), _eye(sp) + dir * 0.35, dir, sp)
+	pr.dmg *= Skills.ranged_mult(sp.perks)
 
 
 ## A player's arrow, bolt or spear hit something: their crosshair shows it (Proto.HIT_*).
@@ -1474,24 +1541,34 @@ func _tick_players(delta: float) -> void:
 			continue
 		if not sp.dead and not world_paused:
 			var sprint: bool = (sp.flags & Proto.F_SPRINT) != 0
-			sp.food = maxf(0.0, sp.food - (0.065 + (0.12 if sprint else 0.0)) * delta)
+			sp.food = maxf(0.0, sp.food - (0.065 + (0.12 if sprint else 0.0)) * Skills.hunger_mult(sp.perks) * delta)
 			if sp.food <= 0.0:
 				sp.health -= 1.0 * delta
 				if sp.health <= 0.0:
 					sp.health = 0.0
 					sp.dead = true
 					player_died(sp)
-			elif sp.food > 45.0 and sp.health < 100.0:
-				sp.health = minf(100.0, sp.health + 0.5 * delta)
-		var shown := [ceili(sp.health), ceili(sp.food), sp.dead, sp.kills]
+			elif sp.food > 45.0 and sp.health < sp.max_health():
+				sp.health = minf(sp.max_health(), sp.health + 0.5 * Skills.heal_mult(sp.perks) * delta)
+		var shown := [ceili(sp.health), roundi(sp.max_health()), ceili(sp.food), sp.dead, sp.kills]
 		if shown != sp.stats_sent:
 			sp.stats_sent = shown
 			var m := Proto.writer(Proto.S_STATS)
-			m.put_u8(shown[0])
-			m.put_u8(shown[1])
+			m.put_u8(clampi(shown[0], 0, 255))
+			m.put_u8(clampi(shown[1], 1, 255))
+			m.put_u8(shown[2])
 			m.put_u8(1 if sp.dead else 0)
 			m.put_u16(sp.kills)
 			_send_to(sp.peer_id, m.data_array)
+		if sp.progress_dirty:
+			sp.progress_dirty = false
+			_send_progress(sp)
+		if sp.armor_dirty:
+			sp.armor_dirty = false
+			var a := Proto.writer(Proto.S_ARMOR)
+			for id in sp.armor:
+				a.put_u16(int(id))
+			_send_to(sp.peer_id, a.data_array)
 
 
 func _msg(sp, text: String, col: Color) -> void:
@@ -1732,7 +1809,7 @@ func _on_move(sp, b: StreamPeerBuffer) -> void:
 		# Fell out of the world (through a gap, or a glitch): that's a death, so the player
 		# respawns instead of falling forever.
 		print("SERVER %s fell out of the world" % sp.player_name)
-		sp.take_damage(1000.0, Vector3.ZERO)
+		sp.take_damage(1000.0, Vector3.ZERO, false)
 	sp.yaw = yaw
 	sp.pitch = pitch
 	sp.flags = flags & ~Proto.F_DEAD  # the server decides who is dead
@@ -1786,7 +1863,7 @@ func _command(sp, text: String) -> void:
 		# (your things go into a backpack, as with any death).
 		if not sp.dead:
 			print("SERVER %s used /kill" % sp.player_name)
-			sp.take_damage(1000.0, Vector3.ZERO)
+			sp.take_damage(1000.0, Vector3.ZERO, false)
 		return
 	if cmd == "/hash" and parts.size() >= 4:
 		# Tests: a fingerprint of the server's blocks around a chunk, to compare with a client's.
@@ -1844,6 +1921,13 @@ func _command(sp, text: String) -> void:
 			print("SERVER %s used %s" % [sp.player_name, text])
 			_send_to(sp.peer_id, _notice_bytes("Spawned %d %s." % [made, what], Color(0.8, 0.9, 1)))
 			return
+		"/xp":
+			# Tests and trying perks: experience for yourself.
+			var n := clampi(int(parts[1]) if parts.size() > 1 else 100, 1, 1000000)
+			sp.add_xp(n)
+			print("SERVER %s used %s" % [sp.player_name, text])
+			_send_to(sp.peer_id, _notice_bytes("Gave you %d experience." % n, Color(0.8, 0.9, 1)))
+			return
 		"/give":
 			var id := _item_named(parts[1] if parts.size() > 1 else "")
 			if id <= 0:
@@ -1856,7 +1940,7 @@ func _command(sp, text: String) -> void:
 			_send_to(sp.peer_id, _notice_bytes("Gave you %d %s." % [n - left, Items.name_of(id)], Color(0.8, 0.9, 1)))
 			return
 		_:
-			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /t <tribe chat> /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|night|horde|runner|brute|crawler|screamer|spitter|boar> [count] /clear /damage <x y z amount> /save", Color(0.8, 0.9, 1)))
+			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /t <tribe chat> /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /xp <amount> /spawn <zombie|night|horde|runner|brute|crawler|screamer|spitter|boar> [count] /clear /damage <x y z amount> /save", Color(0.8, 0.9, 1)))
 			return
 	print("SERVER %s used %s" % [sp.player_name, text])
 	_broadcast(_time_bytes())
@@ -1962,7 +2046,7 @@ func _physics_process(delta: float) -> void:
 				var f: int = p.flags | (Proto.F_DEAD if p.dead else 0)
 				if p.peer_id == 0:
 					f = (p.flags & Proto.F_FLASHLIGHT) | Proto.F_AWAY  # standing still where they left
-				Proto.put_player_record(s, p.net_id, p.global_position, p.yaw, p.pitch, f, maxi(0, p.inv.id_at(p.slot)))
+				Proto.put_player_record(s, p.net_id, p.global_position, p.yaw, p.pitch, f, maxi(0, p.inv.id_at(p.slot)), Proto.armor_bits(p.armor))
 		_send_raw(to.peer_id, s.data_array, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE_ORDERED, Proto.CH_STATE)
 		_send_mobs(to, mobs)
 
@@ -2060,6 +2144,9 @@ func _store_account(sp) -> void:
 	acc["health"] = sp.health
 	acc["food"] = sp.food
 	acc["kills"] = sp.kills
+	acc["xp"] = sp.xp
+	acc["perks"] = sp.perks.duplicate()
+	acc["armor"] = sp.armor.duplicate()
 	_acc_dirty[key] = true
 
 

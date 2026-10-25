@@ -47,10 +47,10 @@ static var icons := {}
 static var _icons_started := false
 
 
-## Does this item have a 3D model (every tool, weapon and ammo)?
+## Does this item have a 3D model (every tool, weapon and ammo; armor since M4.5, ArmorModels)?
 static func has_model(id: int) -> bool:
 	var d := Items.info(id)
-	return d.has("tool") or d.has("ammo_of")
+	return d.has("tool") or d.has("ammo_of") or d.has("armor")
 
 
 ## A new copy of the item's model (null if it has none). `held`: the one in your own hand, drawn
@@ -111,6 +111,9 @@ static func held_pose(id: int, swing: float, draw: float, charge: float) -> Tran
 	var yaw := 0.0
 	var pos := Vector3.ZERO
 	var size := 1.0
+	if ArmorModels.has_model(id):
+		# Armor (M4.5) is held out low in front, as if about to be put on.
+		return Transform3D(Basis(Vector3.RIGHT, 0.35 - swing * 0.6) * Basis(Vector3.UP, PI + 0.4), Vector3(0.3, -0.38, -0.6))
 	match Items.tool_type(id):
 		"bow":
 			# Just left of the crosshair, so the arrow on it points where you look.
@@ -224,6 +227,8 @@ static func material(kind: String, held := false) -> ShaderMaterial:
 
 ## The parts of an item's model: [[mesh, material], ...].
 static func _build(id: int) -> Array:
+	if ArmorModels.has_model(id):
+		return ArmorModels.item_parts(id)
 	var tier := Items.tier(id)
 	var head: String = TIER_MAT[clampi(tier, 0, 5)]
 	var handle := "darkwood" if tier == 5 else "wood"
@@ -636,7 +641,7 @@ static func _surface(st: SurfaceTool, rings: Array, centers: PackedVector3Array)
 
 ## Godot draws a triangle's front side where its corners go round clockwise: put each one's
 ## corners in the order that turns its front to the side its normals point to.
-const FRONT_SIGN := 1.0
+const FRONT_SIGN := -1.0
 
 
 static func _tri(st: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, n0: Vector3, n1: Vector3, n2: Vector3) -> void:
@@ -757,6 +762,8 @@ static func render_icons(parent: Node) -> void:
 		elif ahead:
 			turn = turn * Basis(Vector3.RIGHT, PI * 0.5)  # (its point up first, like a handle)
 		pose.basis = Basis(Vector3.FORWARD, deg_to_rad(20.0 if tt == "crossbow" else 45.0)) * Basis(Vector3.RIGHT, 0.35) * turn
+		if ArmorModels.has_model(ids[k]):
+			pose.basis = Basis(Vector3.RIGHT, 0.3) * Basis(Vector3.UP, PI + 0.55)  # (armor: its front, from a little above)
 		var box := _bounds(m, pose.transform)
 		var s := 0.94 / maxf(box.size.x, box.size.y)
 		holder.scale = Vector3.ONE * s

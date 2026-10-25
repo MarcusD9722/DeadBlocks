@@ -2,8 +2,8 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.16.0"
-const BUILD_NAME := "Map and tribes"
+const VERSION := "0.17.0"
+const BUILD_NAME := "Skills and armor"
 
 var game: Node = null
 var world: Node3D = null

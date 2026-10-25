@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 11
+const PROTOCOL := 12
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -38,7 +38,7 @@ const S_INV := 23        # ack u16 (last request seq handled), 36 x (item u16, c
 const S_MSG := 24        # text, colour rgb u8 x3: a message in the middle of the screen
 const S_ATE := 25        # item u16: the server took the food (plays the eating sound)
 const S_MOBS := 26       # (unreliable) tick u32, origin key, count u8, count x mob record (see put_mob)
-const S_STATS := 27      # health u8, food u8, dead u8, kills u16: the server owns these
+const S_STATS := 27      # health u8, max health u8, food u8, dead u8, kills u16: the server owns these
 const S_HURT := 28       # amount u8, from 3xf32 (all 0 = no knockback): flash, sound, knockback
 const S_CRACKS := 29     # count u16, count x (block pos, stage u8): zombies chipping at blocks
 const S_BACKPACKS := 42  # count u8, count x (block pos, seconds left u16): your own backpacks
@@ -55,6 +55,9 @@ const S_PINS := 56       # count u8, count x (x s32, z s32, name): your map pins
 const S_SOCIAL := 58     # players u8 x (name, net id u16 (0 offline), ping u16, rel u8 (R_*)),
                          # tribe u8 (0 none, 1: id u32, name, leader name),
                          # invites u8 x (tribe id u32, tribe name, from name)
+# M4.5: experience and perks, and the armor you wear.
+const S_PROGRESS := 60   # experience u32 (in all), count u8 x (perk id u8, rank u8)
+const S_ARMOR := 61      # 4 x item u16: head, chest, legs, feet (0 = none)
 # Client -> server
 const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8, hotbar slot u8
 const C_READY := 31      # my chunks are loaded, count me as online
@@ -81,6 +84,9 @@ const C_PICKUP := 54     # seq, ground id u16 (E on a spear or arrow lying in th
 # M4.4
 const C_PIN := 57        # action u8 (0 add: x s32, z s32, name; 1 remove: index u8)
 const C_SOCIAL := 59     # action u8 (SOC_*), name (a player), text (a tribe name, or a tribe id)
+# M4.5
+const C_PERK := 62       # perk id u8: spend a skill point on its next rank
+const C_EQUIP := 63      # seq, action u8 (0 wear the armor in inventory slot, 1 take off armor slot), slot u8
 const HIT_MOB := 1
 const HIT_HEAD := 2
 const HIT_KILL := 3
@@ -415,13 +421,31 @@ static func get_ground(b: StreamPeerBuffer) -> Dictionary:
 
 
 ## 19 bytes: net id u16, position 3xf32, yaw u16, pitch s16, flags u8.
-static func put_player_record(b: StreamPeerBuffer, net_id: int, pos: Vector3, yaw: float, pitch: float, flags: int, held := 0) -> void:
+static func put_player_record(b: StreamPeerBuffer, net_id: int, pos: Vector3, yaw: float, pitch: float, flags: int, held := 0, armor := 0) -> void:
 	b.put_u16(net_id)
 	put_vec3(b, pos)
 	b.put_u16(yaw_to_u16(yaw))
 	b.put_16(clampi(int(pitch * 10000.0), -32767, 32767))
 	b.put_u8(flags)
 	b.put_u8(held)  # the item in their hand (from the server's copy of their inventory)
+	b.put_u16(armor)  # what they wear (M4.5, armor_bits)
+
+
+## The armor worn (4 item ids) as 3 bits per slot: its tier + 1, 0 for none.
+static func armor_bits(worn: Array) -> int:
+	var bits := 0
+	for i in 4:
+		var t := Items.armor_tier(int(worn[i])) if i < worn.size() else -1
+		bits |= (t + 1) << (i * 3)
+	return bits
+
+
+## The tier worn in each slot (-1 for none) from armor_bits.
+static func armor_tiers(bits: int) -> Array:
+	var out := []
+	for i in 4:
+		out.append(((bits >> (i * 3)) & 7) - 1)
+	return out
 
 
 static func get_player_record(b: StreamPeerBuffer) -> Dictionary:
@@ -430,7 +454,8 @@ static func get_player_record(b: StreamPeerBuffer) -> Dictionary:
 	var yaw := u16_to_yaw(b.get_u16())
 	var pitch := b.get_16() / 10000.0
 	var flags := b.get_u8()
-	return {"id": id, "pos": pos, "yaw": yaw, "pitch": pitch, "flags": flags, "held": b.get_u8()}
+	var held := b.get_u8()
+	return {"id": id, "pos": pos, "yaw": yaw, "pitch": pitch, "flags": flags, "held": held, "armor": b.get_u16()}
 
 
 static func _sha(s: String) -> PackedByteArray:

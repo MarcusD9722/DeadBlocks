@@ -585,6 +585,41 @@ func _item_icon(id: int) -> Image:
 			_line(img, 7, 14, 9, 2, _c(120, 150, 60), 1)
 			_line(img, 10, 14, 12, 3, _c(170, 180, 90), 1)
 			_line(img, 5, 9, 11, 9, _c(110, 90, 50), 1)
+		Items.BOAR_HIDE:
+			# A stretched, ragged pelt.
+			for y in range(3, 14):
+				for x in range(2, 14):
+					var dx := (x + 0.5 - 8.0) / (5.6 + sin(y * 1.7) * 0.6)
+					var dy := (y + 0.5 - 8.5) / 5.4
+					if dx * dx + dy * dy < 1.0:
+						img.set_pixel(x, y, _c(132, 92, 60) if (x + y) % 3 else _c(110, 74, 48))
+			_disc(img, 7, 7, 1.6, _c(160, 118, 80))
+		_ when Items.armor_slot(id) >= 0:
+			var col: Color = [_c(196, 176, 126), _c(124, 80, 48), _c(196, 200, 208), _c(150, 172, 194), _c(176, 30, 42)][Items.armor_tier(id)]
+			match Items.armor_slot(id):
+				0:  # a helmet
+					for y in range(4, 12):
+						for x in range(3, 13):
+							if Vector2(x + 0.5 - 8.0, (y + 0.5 - 10.0) * 1.25).length() < 6.0:
+								img.set_pixel(x, y, col if y > 5 else col.lightened(0.25))
+					_line(img, 2, 11, 13, 11, col.darkened(0.3), 1)
+				1:  # a chest piece with shoulders
+					for y in range(3, 14):
+						for x in range(2, 14):
+							var w := 6 if y < 6 else 4
+							if absi(x - 8) < w and not (y < 5 and absi(x - 8) < 2):
+								img.set_pixel(x, y, col if x != 8 else col.darkened(0.2))
+				2:  # leggings
+					for y in range(2, 14):
+						for x in range(3, 13):
+							if y < 6 or absi(x - 8) > 1:
+								img.set_pixel(x, y, col if y > 2 else col.darkened(0.3))
+				_:  # boots
+					for b in 2:
+						var ox := 2 + b * 7
+						for y in range(5, 13):
+							for x in range(ox, ox + 4 + (2 if y > 10 else 0)):
+								img.set_pixel(x, y, col if y < 12 else col.darkened(0.35))
 		_:
 			var info := Items.info(id)
 			var tool: String = str(info.get("tool", ""))

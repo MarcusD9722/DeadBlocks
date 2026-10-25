@@ -22,6 +22,9 @@ signal shot_hit(kind: int)
 signal map_grew(keys: Array)
 signal pins_changed
 signal social_changed
+## M4.5: experience or perks changed (`xp`, `perks`), and the armor worn (`armor`).
+signal progress_changed(gained: int)
+signal armor_changed
 
 const SEND_EVERY := 4          # physics ticks per movement update: 60 / 4 = 15 Hz
 const INTERP_DELAY := 0.1      # seconds remote players are drawn in the past
@@ -88,6 +91,11 @@ var pins: Array = []
 var social: Array = []
 var tribe := {}
 var invites: Array = []
+## M4.5: experience in all, perks (key -> rank) and the armor worn (head, chest, legs, feet ids).
+var xp := 0
+var perks := {}
+var armor: Array = [0, 0, 0, 0]
+var _progress_known := false
 var _req_seq := 0
 var _guesses: Array = []
 var _deadline := 0.0
@@ -333,6 +341,22 @@ func request_social(action: int, who := "", text := "") -> void:
 	m.put_u8(action)
 	m.put_utf8_string(who)
 	m.put_utf8_string(text)
+	_send(m.data_array)
+
+
+## M4.5: spend a skill point on a perk's next rank.
+func request_perk(id: int) -> void:
+	var m := Proto.writer(Proto.C_PERK)
+	m.put_u8(id)
+	_send(m.data_array)
+
+
+## M4.5: wear the armor in inventory slot `slot` (action 0), or take off armor slot `slot` (1).
+func request_equip(action: int, slot: int) -> void:
+	var m := Proto.writer(Proto.C_EQUIP)
+	m.put_u16(_next_seq())
+	m.put_u8(action)
+	m.put_u8(slot)
 	_send(m.data_array)
 
 
@@ -694,6 +718,7 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			bed = Vector3i.MIN
 			explored.clear()  # (the server sends the map, pins and players again)
 			pins.clear()
+			_progress_known = false
 			if reconnecting:
 				reconnecting = false
 				print("NET reconnected after %.1f s" % (_now() - _lost_at))
@@ -720,6 +745,7 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 					others[r["id"]] = o
 				o["samples"].append([now, r["pos"], r["yaw"], r["pitch"], r["flags"]])
 				o["held"] = r["held"]
+				o["armor"] = r["armor"]
 				if o["samples"].size() > 16:
 					o["samples"].pop_front()
 		Proto.S_TIME:
@@ -777,11 +803,29 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 						smp.pop_front()
 		Proto.S_STATS:
 			var hp := b.get_u8()
+			var hp_max := b.get_u8()
 			var food := b.get_u8()
 			var dead := b.get_u8() == 1
 			var kills := b.get_u16()
 			if G.player != null and is_instance_valid(G.player) and G.mode == "client":
-				G.player.apply_stats(hp, food, dead, kills)
+				G.player.apply_stats(hp, food, dead, kills, hp_max)
+		Proto.S_PROGRESS:
+			var total := b.get_u32()
+			var got := {}
+			for i in b.get_u8():
+				var p := Skills.perk_by_id(b.get_u8())
+				var rank := b.get_u8()
+				if not p.is_empty():
+					got[p["key"]] = rank
+			var gained := total - xp if _progress_known else 0
+			xp = total
+			perks = got
+			_progress_known = true
+			progress_changed.emit(gained)
+		Proto.S_ARMOR:
+			for i in 4:
+				armor[i] = b.get_u16()
+			armor_changed.emit()
 		Proto.S_HURT:
 			var amount := b.get_u8()
 			var from := Proto.get_vec3(b)
