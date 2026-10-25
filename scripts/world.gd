@@ -13,6 +13,8 @@ const VISUAL_LAYER := 8
 class Chunk:
 	var key := Vector2i.ZERO
 	var data := PackedByteArray()
+	## Block state besides the id (Blocks.META_*), only where it isn't 0: block index -> meta.
+	var meta := {}
 	var has_data := false
 	var generating := false
 	var meshing := false
@@ -109,6 +111,38 @@ class MeshBuf:
 		for dir in 6:
 			var tile: int = tl[0] if dir == 0 else (tl[2] if dir == 1 else tl[1])
 			box_face(dir, Vector3(x, y, z), lo, hi, tile, solid, lit)
+
+	## A ramp: a wedge rising towards facing f (Blocks.rot_point), with the side tile on every face.
+	func ramp(x: int, y: int, z: int, tl: Array, f: int, lit: float) -> void:
+		var o := Vector3(x, y, z)
+		var col := Color(1, 1, 1, lit)
+		var layer := Vector2(Tex.block_layer(tl[1]), 0.0)
+		var quads := [
+			[[Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 0, 1), Vector3(0, 0, 1)], Vector3.DOWN],
+			[[Vector3(0, 0, 1), Vector3(1, 0, 1), Vector3(1, 1, 1), Vector3(0, 1, 1)], Vector3.BACK],
+			[[Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 1, 1), Vector3(0, 1, 1)], Vector3(0, 1, -1).normalized()],
+		]
+		for q in quads:
+			var base := verts.size()
+			var n: Vector3 = Blocks.rot_point(q[1] + Vector3(0.5, 0, 0.5), f) - Vector3(0.5, 0, 0.5)
+			for c in q[0]:
+				verts.append(o + Blocks.rot_point(c, f))
+				norms.append(n)
+				cols.append(col)
+				uvs.append(Vector2(c.x, 1.0 - (c.z if q[1] != Vector3.BACK else c.y)))
+				uv2s.append(layer)
+			_wind_outward(base, n)
+		for side in [[Vector3(0, 0, 0), Vector3(0, 0, 1), Vector3(0, 1, 1), Vector3.LEFT], [Vector3(1, 0, 0), Vector3(1, 0, 1), Vector3(1, 1, 1), Vector3.RIGHT]]:
+			var base := verts.size()
+			var n: Vector3 = Blocks.rot_point(side[3] + Vector3(0.5, 0, 0.5), f) - Vector3(0.5, 0, 0.5)
+			for k in 3:
+				var c: Vector3 = side[k]
+				verts.append(o + Blocks.rot_point(c, f))
+				norms.append(n)
+				cols.append(col)
+				uvs.append(Vector2(c.z, 1.0 - c.y))
+				uv2s.append(layer)
+			_tri_outward(base, n)
 
 	## A log as a round (eight-sided) trunk, with a cut end where no log continues it.
 	func trunk(x: int, y: int, z: int, tl: Array, cap_top: bool, cap_bottom: bool, lit: float, lit_top: float) -> void:
@@ -545,6 +579,7 @@ func _neighbours(k: Vector2i) -> Array:
 			if nc == null or not nc.has_data:
 				return []
 			nb[(dz + 1) * 3 + dx + 1] = nc.data
+	nb.append(chunks[k].meta.duplicate())  # nb[9]: this chunk's block states (a copy for the worker)
 	return nb
 
 
@@ -565,6 +600,7 @@ func _gen_done(k: Vector2i, d: PackedByteArray) -> void:
 	if remote and (c.has_data or sub_state.get(k, 0) != SUB_FRESH):
 		return  # the server's copy arrived meanwhile, or we're no longer subscribed
 	c.data = d
+	c.meta = {}
 	c.has_data = true
 	gen_count += 1
 	_apply_pending(c)
@@ -578,13 +614,14 @@ func _make_buf(nb: Array) -> MeshBuf:
 	if render:
 		return _build(nb)
 	var buf := MeshBuf.new()
-	buf.faces = _build_collision(nb[4], nb[5], nb[3], nb[7], nb[1])
+	buf.faces = _build_collision(nb[4], nb[5], nb[3], nb[7], nb[1], nb[9])
 	return buf
 
 
 ## Server mode: the same scan as _build, but only the collision triangles of solid blocks.
-## Faces between two full cubes are left out; a solid box (a bed) has all six of its own.
-func _build_collision(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> PackedVector3Array:
+## Faces between two full cubes are left out; a solid box (a bed, a half block, a closed door)
+## has all six of each of its boxes.
+func _build_collision(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray, meta: Dictionary) -> PackedVector3Array:
 	var out := PackedVector3Array()
 	var sol: Array = Blocks.FULL
 	var shp: Array = Blocks.SHAPE
@@ -595,10 +632,10 @@ func _build_collision(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArr
 			for x in CH:
 				var i := x + zo
 				if not sol[d[i]]:
-					if Blocks.SOLID[d[i]] and shp[d[i]] == Blocks.SH_BOX:
-						var bx: Array = Blocks.BOX[d[i]]
-						for dir in 6:
-							_quad(out, Vector3(x, y, z), dir, bx[0], bx[1])
+					if Blocks.SOLID[d[i]] and shp[d[i]] >= Blocks.SH_BOX:
+						for bx in Blocks.boxes_of(d[i], int(meta.get(i, 0))):
+							for dir in 6:
+								_quad(out, Vector3(x, y, z), dir, bx[0], bx[1])
 					continue
 				var o := Vector3(x, y, z)
 				if y == H - 1 or not sol[d[i + CH2]]:
@@ -637,8 +674,9 @@ func _build(nb: Array) -> MeshBuf:
 	var nx: PackedByteArray = nb[3]
 	var pz: PackedByteArray = nb[7]
 	var nz: PackedByteArray = nb[1]
+	var meta: Dictionary = nb[9]
 	# Collision is whole blocks, the same as on the server (the rounding is only drawn).
-	buf.faces = _build_collision(d, px, nx, pz, nz)
+	buf.faces = _build_collision(d, px, nx, pz, nz, meta)
 	var opq: Array = Blocks.OPAQUE
 	var shp: Array = Blocks.SHAPE
 	var tiles: Array = Blocks.TILES
@@ -659,9 +697,14 @@ func _build(nb: Array) -> MeshBuf:
 					if b == Blocks.TORCH or b == Blocks.CAMPFIRE:
 						buf.lights.append(Vector3i(x, y, z))
 					continue
-				if shp[b] == Blocks.SH_BOX:
-					var bx: Array = Blocks.BOX[b]
-					buf.box(x, y, z, tl, bx[0], bx[1], Blocks.SOLID[b], SmoothMesher.sky_at(sky, x, y + 1, z))
+				if shp[b] == Blocks.SH_RAMP:
+					buf.ramp(x, y, z, tl, int(meta.get(i, 0)) & Blocks.META_FACING, SmoothMesher.sky_at(sky, x, y + 1, z))
+					continue
+				if shp[b] >= Blocks.SH_BOX:
+					if shp[b] == Blocks.SH_DOOR and (int(meta.get(i, 0)) & Blocks.META_UPPER) != 0:
+						tl = [tl[0] + Blocks.DOOR_UPPER_TILES, tl[1] + Blocks.DOOR_UPPER_TILES, tl[2] + Blocks.DOOR_UPPER_TILES]
+					for bx in Blocks.boxes_of(b, int(meta.get(i, 0))):
+						buf.box(x, y, z, tl, bx[0], bx[1], Blocks.SOLID[b], SmoothMesher.sky_at(sky, x, y + 1, z))
 					if b == Blocks.BACKPACK:
 						buf.beacons.append(Vector3i(x, y, z))
 					continue
@@ -928,24 +971,25 @@ static func pos_of(k: Vector2i, idx: int) -> Vector3i:
 
 
 ## Server start: an edited chunk from the save files (it is never generated).
-func preload_chunk(k: Vector2i, data: PackedByteArray) -> void:
+func preload_chunk(k: Vector2i, data: PackedByteArray, meta := {}) -> void:
 	var c := Chunk.new()
 	c.key = k
 	c.data = data
+	c.meta = meta
 	c.has_data = true
 	c.modified = true
 	chunks[k] = c
 	sched_dirty = true
 
 
-## Server saving: the edited chunks changed since the last save, as [[key, data], ...] (the data
-## arrays are copies: later edits don't change them). Forgets them as saved.
+## Server saving: the edited chunks changed since the last save, as [[key, data, meta], ...]
+## (copies: later edits don't change them). Forgets them as saved.
 func take_unsaved() -> Array:
 	var out := []
 	for k in save_dirty:
 		var c: Chunk = chunks.get(k)
 		if c != null and c.has_data:
-			out.append([k, c.data.duplicate()])
+			out.append([k, c.data.duplicate(), c.meta.duplicate()])
 	save_dirty.clear()
 	return out
 
@@ -965,7 +1009,22 @@ func chunk_data(k: Vector2i) -> PackedByteArray:
 	return c.data if c != null and c.has_data else PackedByteArray()
 
 
-func set_block(p: Vector3i, id: int) -> bool:
+func chunk_meta(k: Vector2i) -> Dictionary:
+	var c: Chunk = chunks.get(k)
+	return c.meta if c != null and c.has_data else {}
+
+
+## The block state of the block at p besides its id (Blocks.META_*; 0 for most blocks).
+func block_meta(p: Vector3i) -> int:
+	if p.y < 0 or p.y >= H:
+		return 0
+	var c: Chunk = chunks.get(Vector2i(p.x >> 4, p.z >> 4))
+	if c == null or c.meta.is_empty():
+		return 0
+	return int(c.meta.get((p.x & 15) + (p.z & 15) * CH + p.y * CH2, 0))
+
+
+func set_block(p: Vector3i, id: int, meta := 0) -> bool:
 	if p.y < 0 or p.y >= H:
 		return false
 	var k := Vector2i(p.x >> 4, p.z >> 4)
@@ -974,10 +1033,15 @@ func set_block(p: Vector3i, id: int) -> bool:
 		return false
 	var lx := p.x & 15
 	var lz := p.z & 15
-	c.data[lx + lz * CH + p.y * CH2] = id
+	var i := lx + lz * CH + p.y * CH2
+	c.data[i] = id
+	if meta != 0:
+		c.meta[i] = meta
+	else:
+		c.meta.erase(i)
 	c.modified = true
 	if record_edits:
-		edits_out.append([p, id])
+		edits_out.append([p, id, meta])
 		save_dirty[k] = true
 	_clear_damage(p)
 	_dirty(k)
@@ -1007,6 +1071,28 @@ func _dirty(k: Vector2i) -> void:
 		urgent.append(k)
 
 
+## The other half of a door (two blocks tall), or Vector3i.MIN if p isn't a door's.
+func door_partner(p: Vector3i) -> Vector3i:
+	var id := get_blockv(p)
+	if not Blocks.is_door(id):
+		return Vector3i.MIN
+	var q := p + (Vector3i.DOWN if block_meta(p) & Blocks.META_UPPER else Vector3i.UP)
+	return q if get_blockv(q) == id else Vector3i.MIN
+
+
+## Take a block out, and the other half with it if it was a door's.
+func clear_block(p: Vector3i) -> void:
+	var q := door_partner(p)
+	set_block(p, Blocks.AIR)
+	if q != Vector3i.MIN:
+		set_block(q, Blocks.AIR)
+
+
+## Server: blocks zombies (or spikes) broke this tick, as [pos, id] (NetServer turns a broken
+## storage box into a bag with its things).
+var destroyed: Array = []
+
+
 ## Zombies (and spikes wearing down) chip away at blocks. Returns true if it broke.
 func damage_block(p: Vector3i, amount: float) -> bool:
 	var id := get_blockv(p)
@@ -1015,7 +1101,9 @@ func damage_block(p: Vector3i, amount: float) -> bool:
 	var hp: float = Blocks.ZHP[id]
 	var d: float = float(damage.get(p, 0.0)) + amount
 	if d >= hp:
-		set_block(p, 0)
+		clear_block(p)
+		if record_edits:
+			destroyed.append([p, id])
 		return true
 	damage[p] = d
 	_show_crack(p, d / hp)
@@ -1038,6 +1126,21 @@ func _show_crack(p: Vector3i, frac: float) -> void:
 		n.position = Vector3(p) + Vector3(0.5, 0.5, 0.5)
 		crack_nodes[p] = n
 	n.material_override = crack_mats[stage]
+
+
+## A hammer's repair: the block is whole again.
+func repair_block(p: Vector3i) -> void:
+	if record_edits and crack_stage.has(p):
+		cracks_out.append([p, -1])
+	_clear_damage(p)
+
+
+## How damaged the block at p is (0 whole, 1 about to break).
+func damage_of(p: Vector3i) -> float:
+	var id := get_blockv(p)
+	if not damage.has(p) or id <= 0:
+		return 0.0
+	return float(damage[p]) / float(Blocks.ZHP[id])
 
 
 func _clear_damage(p: Vector3i) -> void:
@@ -1082,7 +1185,7 @@ func net_unsubscribe(keys: Array) -> void:
 
 
 ## S_CHUNK: the server's copy of an edited chunk, including every edit batch up to seq.
-func net_chunk(seq: int, k: Vector2i, data: PackedByteArray) -> void:
+func net_chunk(seq: int, k: Vector2i, data: PackedByteArray, meta := {}) -> void:
 	if not sub_state.has(k) or data.size() != CH2 * H:
 		return
 	var c: Chunk = chunks.get(k)
@@ -1091,6 +1194,7 @@ func net_chunk(seq: int, k: Vector2i, data: PackedByteArray) -> void:
 		c.key = k
 		chunks[k] = c
 	c.data = data
+	c.meta = meta
 	c.has_data = true
 	c.modified = true
 	sub_state[k] = SUB_FRESH
@@ -1102,7 +1206,7 @@ func net_chunk(seq: int, k: Vector2i, data: PackedByteArray) -> void:
 	sched_dirty = true
 
 
-## S_EDITS: one batch of block changes, grouped by chunk ([key, [[index, id], ...]]).
+## S_EDITS: one batch of block changes, grouped by chunk ([key, [[index, id, meta], ...]]).
 func net_edits(seq: int, groups: Array) -> void:
 	for g in groups:
 		var k: Vector2i = g[0]
@@ -1113,12 +1217,12 @@ func net_edits(seq: int, groups: Array) -> void:
 			if not pending.has(k):
 				pending[k] = []
 			for e in g[1]:
-				pending[k].append([seq, e[0], e[1]])
+				pending[k].append([seq, e[0], e[1], e[2]])
 			continue
 		if seq <= int(sub_seq.get(k, -1)):
 			continue  # already in our copy
 		for e in g[1]:
-			set_block(pos_of(k, e[0]), e[1])
+			set_block(pos_of(k, e[0]), e[1], e[2])
 
 
 ## Edits that arrived before the chunk's data: apply the ones newer than the data.
@@ -1129,13 +1233,22 @@ func _apply_pending(c: Chunk) -> void:
 	for e in list:
 		if e[0] > base:
 			c.data[e[1]] = e[2]
+			if e[3] != 0:
+				c.meta[e[1]] = e[3]
+			else:
+				c.meta.erase(e[1])
 			c.modified = true
 
 
-## S_CRACKS: a zombie is chipping at this block.
+## S_CRACKS: a zombie is chipping at this block (stage 255: it was repaired).
 func net_crack(p: Vector3i, stage: int) -> void:
-	if get_blockv(p) == Blocks.AIR:
+	if stage == 255:
+		_clear_damage(p)
 		return
+	var id := get_blockv(p)
+	if id == Blocks.AIR:
+		return
+	damage[p] = (stage + 0.5) / 4.0 * float(Blocks.ZHP[id])  # (about: a hammer can see it needs a repair)
 	_show_crack(p, (stage + 0.5) / 4.0)
 	if G.sfx != null:
 		G.sfx.play_at("thud", Vector3(p) + Vector3(0.5, 0.5, 0.5), -2.0)
@@ -1160,6 +1273,8 @@ func region_hash(cx: int, cz: int, r: int) -> String:
 				ctx.update(("missing %d %d" % [cx + dx, cz + dz]).to_utf8_buffer())
 			else:
 				ctx.update(c.data)
+				if not c.meta.is_empty():
+					ctx.update(Proto.meta_bytes(c.meta))  # (doors' and ramps' facings too)
 	return ctx.finish().hex_encode().left(16)
 
 

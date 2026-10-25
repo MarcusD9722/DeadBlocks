@@ -135,7 +135,9 @@ func walk(dir: Vector3, spd: float, delta: float) -> bool:
 	return true
 
 
-## The block in the way: the highest solid cell the body needs in front of it.
+## The block in the way: the highest solid cell the body needs in front of it. Failing that, a
+## thin block the body is pressed against inside its own cells (a door or hatch closed across
+## the far side of the cell the mob has walked into).
 func blocking_cell(dir: Vector3) -> Vector3i:
 	var f := feet_cell()
 	var ahead := global_position + dir * (half + 0.45)
@@ -144,7 +146,25 @@ func blocking_cell(dir: Vector3) -> Vector3i:
 	for k in range(tall - 1, -1, -1):
 		if Blocks.is_solid(w.get_blockv(fp + Vector3i(0, k, 0))):
 			return fp + Vector3i(0, k, 0)
+	var near := global_position + dir * (half + 0.05)
+	var np := Vector3i(floori(near.x), f.y, floori(near.z))
+	for k in range(tall - 1, -1, -1):
+		var c := np + Vector3i(0, k, 0)
+		var id: int = w.get_blockv(c)
+		if Blocks.is_solid(id) and _shape_at(c, id, w.block_meta(c), near):
+			return c
 	return Vector3i(0, -999, 0)
+
+
+## One of the cell's boxes is where the body pushes at `at` (not just a slab under its feet).
+func _shape_at(c: Vector3i, id: int, meta: int, at: Vector3) -> bool:
+	var feet := global_position.y + 0.05
+	for b in Blocks.boxes_of(id, meta):
+		var lo: Vector3 = Vector3(c) + b[0]
+		var hi: Vector3 = Vector3(c) + b[1]
+		if hi.y > feet and lo.y < feet + tall and at.x > lo.x - 0.1 and at.x < hi.x + 0.1 and at.z > lo.z - 0.1 and at.z < hi.z + 0.1:
+			return true
+	return false
 
 
 func _tick_flash(delta: float) -> void:

@@ -377,6 +377,9 @@ func _handle_mining(delta: float) -> void:
 		mine_pos = p
 		mine_progress = 0.0
 	var id: int = target["id"]
+	if Items.tool_type(cur_id()) == "hammer":
+		_hammer(p, delta)
+		return
 	var bt := _break_time(id)
 	if bt < 0.0:
 		return
@@ -390,6 +393,25 @@ func _handle_mining(delta: float) -> void:
 		mine_progress = 0.0
 
 
+## Holding the button with a hammer: work on the block (repair or upgrade, hammer_text), then
+## ask the server, which does it if we have the materials.
+func _hammer(p: Vector3i, delta: float) -> void:
+	var ht := hammer_text()
+	if not ht[1]:
+		mine_progress = 0.0
+		return
+	mine_progress += delta / Items.hammer_time(cur_id())
+	dig_snd -= delta
+	if dig_snd <= 0.0:
+		dig_snd = 0.35
+		G.sfx.play("hit", -8.0)
+		swing = 1.0
+	if mine_progress >= 1.0:
+		mine_progress = 0.0
+		G.net.request_upgrade(p, selected)
+		G.sfx.play("place", -4.0)
+
+
 func attack(mob: Node) -> void:
 	G.net.request_attack(mob.net_id, selected)  # the server checks reach and deals the damage
 	attack_cd = 0.45
@@ -398,7 +420,7 @@ func attack(mob: Node) -> void:
 
 
 func break_block(p: Vector3i, id: int) -> void:
-	G.world.set_block(p, Blocks.AIR)
+	G.world.clear_block(p)  # (and a door's other half)
 	G.sfx.play("break", -4.0)
 	# The block is gone on our screen right away; the server decides what drops (or puts the
 	# block back if someone else got there first).
@@ -408,15 +430,42 @@ func break_block(p: Vector3i, id: int) -> void:
 		G.hud.msg("Press %s for your inventory and crafting. Make Planks, then a Workbench." % Controls.key_name(Controls.key_of("inventory")), Color(0.7, 1, 0.7))
 
 
-## E (interact): open the station we look at, or pick up a bag.
+## The block state for placing `id` where we look: doors, hatches and ramps face our way; a half
+## block or hatch goes in the top of its cell when placed against a ceiling or the upper half of
+## a side.
+func place_meta(id: int) -> int:
+	var fwd := -cam.global_transform.basis.z
+	var meta := 0
+	if Blocks.has_facing(id):
+		meta |= Blocks.facing_of(Vector3(fwd.x, 0, fwd.z))
+	if Blocks.SHAPE[id] == Blocks.SH_HALF or Blocks.SHAPE[id] == Blocks.SH_HATCH:
+		var n: Vector3i = target.get("normal", Vector3i.UP)
+		var hit_y: float = cam.global_position.y + fwd.y * float(target.get("dist", 0.0))
+		if n == Vector3i.DOWN or (n.y == 0 and hit_y - floorf(hit_y) > 0.5):
+			meta |= Blocks.META_UPPER
+	return meta
+
+
+## E (interact): open the station we look at, open or close a door or hatch, open a storage box
+## or a bag.
 func interact() -> void:
 	if not target.get("hit", false):
 		return
 	var id: int = target["id"]
+	var p: Vector3i = target["pos"]
 	if Blocks.is_station(id):
 		G.game.open_inventory(Blocks.STATIONS[id])
-	elif id == Blocks.BACKPACK:
-		break_block(target["pos"], id)
+	elif Blocks.is_openable(id):
+		# Shown at once (both halves of a door); the server confirms or undoes it.
+		var to: int = Blocks.OPENS.get(id, Blocks.CLOSED.get(id, id))
+		var q: Vector3i = G.world.door_partner(p)
+		G.world.set_block(p, to, G.world.block_meta(p))
+		if q != Vector3i.MIN:
+			G.world.set_block(q, to, G.world.block_meta(q))
+		G.net.request_use(p)
+		G.sfx.play("place", -6.0)
+	elif Blocks.is_container(id):
+		G.game.open_box(p)
 
 
 ## What E would do on what we look at ("" for nothing), for the prompt by the crosshair.
@@ -426,9 +475,36 @@ func interact_text() -> String:
 	var id: int = target["id"]
 	if Blocks.is_station(id):
 		return "Open " + Blocks.NAMES[id]
+	if Blocks.OPENS.has(id):
+		return "Open the " + Blocks.NAMES[id].to_lower()
+	if Blocks.CLOSED.has(id):
+		return "Close the " + Blocks.NAMES[Blocks.CLOSED[id]].to_lower()
 	if id == Blocks.BACKPACK:
-		return "Pick up the bag"
+		return "Open the bag"
+	if Blocks.is_container(id):
+		return "Open the " + Blocks.NAMES[id].to_lower()
 	return ""
+
+
+## Holding a hammer and looking at a block: what it would do ("" when it can't), and whether we
+## have what it costs.
+func hammer_text() -> Array:
+	if Items.tool_type(cur_id()) != "hammer" or not target.get("hit", false):
+		return ["", false]
+	var id: int = target["id"]
+	var p: Vector3i = target["pos"]
+	if G.world.damage_of(p) > 0.0 and Blocks.REPAIR.has(id):
+		var c: Array = Blocks.REPAIR[id]
+		return ["Repair: %d %s (have %d)" % [c[1], Items.name_of(c[0]), inv.count(c[0])], inv.count(c[0]) >= c[1]]
+	if not Blocks.UPGRADE.has(id):
+		return ["%s can't be upgraded" % Blocks.NAMES[id], false]
+	var up: Array = Blocks.UPGRADE[id]
+	var ok := true
+	var parts := []
+	for item in up[1]:
+		parts.append("%d %s (have %d)" % [int(up[1][item]), Items.name_of(int(item)), inv.count(int(item))])
+		ok = ok and inv.count(int(item)) >= int(up[1][item])
+	return ["Upgrade to %s: %s" % [Blocks.NAMES[up[0]], ", ".join(parts)], ok]
 
 
 func use_item() -> void:
@@ -468,24 +544,33 @@ func place(id: int) -> bool:
 	return try_place(target["pos"] + n, id)
 
 
-## Place block `id` (from the selected slot) at p, if nothing is in the way.
-func try_place(p: Vector3i, id: int) -> bool:
+## Place block `id` (from the selected slot) at p, if nothing is in the way. meta: its state
+## (facing, upper half); -1 works it out from where we look.
+func try_place(p: Vector3i, id: int, meta := -1) -> bool:
 	if G.world.get_blockv(p) != Blocks.AIR or p.y < 1 or p.y >= 63:
 		return false
+	var door := Blocks.is_door(id)
+	if door and (p.y >= 62 or G.world.get_blockv(p + Vector3i.UP) != Blocks.AIR):
+		G.hud.msg("A door needs two blocks of room.")
+		return false
+	if meta < 0:
+		meta = place_meta(id)
 	if Blocks.SHAPE[id] == Blocks.SH_CROSS and not Blocks.is_solid(G.world.get_blockv(p + Vector3i.DOWN)):
 		G.hud.msg("That needs solid ground under it.")
 		return false
 	if Blocks.SOLID[id]:
 		var bmin := Vector3(p)
-		var bmax := bmin + Vector3.ONE
+		var bmax := bmin + Vector3(1, 2 if door else 1, 1)
 		if _overlap(global_position + Vector3(-0.3, 0, -0.3), global_position + Vector3(0.3, 1.8, 0.3), bmin, bmax):
 			return false
 		for m in get_tree().get_nodes_in_group("mobs"):
 			var mp: Vector3 = m.global_position
 			if _overlap(mp + Vector3(-0.4, 0, -0.4), mp + Vector3(0.4, 1.9, 0.4), bmin, bmax):
 				return false
-	G.world.set_block(p, id)
-	G.net.request_place(p, id, selected)  # shown now; the server confirms or undoes it
+	G.world.set_block(p, id, meta)
+	if door:
+		G.world.set_block(p + Vector3i.UP, id, meta | Blocks.META_UPPER)
+	G.net.request_place(p, id, selected, meta)  # shown now; the server confirms or undoes it
 	G.sfx.play("place", -4.0)
 	swing = 1.0
 	if id == Blocks.WORKBENCH and not hints.has("bench"):

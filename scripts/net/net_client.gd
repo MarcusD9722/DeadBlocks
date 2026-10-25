@@ -12,6 +12,8 @@ extends Node
 signal status(text: String, is_error: bool)
 signal chat(from: String, text: String)
 signal notice(text: String, col: Color)
+## S_BOX arrived (the box screen shows it).
+signal box_changed
 
 const SEND_EVERY := 4          # physics ticks per movement update: 60 / 4 = 15 Hz
 const INTERP_DELAY := 0.1      # seconds remote players are drawn in the past
@@ -61,6 +63,11 @@ var bytes_in := {}
 ## Our own backpacks (S_BACKPACKS): [[block pos, seconds left], ...], counted down while the
 ## world runs, for the marker on screen.
 var my_backpacks: Array = []
+## The storage box or bag we have open (S_BOX): where, whether it is still open, its name, slots.
+var box_pos := Vector3i.MIN
+var box_open := false
+var box_title := ""
+var box_slots: Array = []
 ## Our bed (S_BED), Vector3i.MIN without one: the death screen offers to wake up there.
 var bed := Vector3i.MIN
 var _req_seq := 0
@@ -187,13 +194,14 @@ func request_break(p: Vector3i, expect: int, slot: int) -> void:
 	_send(m.data_array)
 
 
-func request_place(p: Vector3i, id: int, slot: int) -> void:
+func request_place(p: Vector3i, id: int, slot: int, meta := 0) -> void:
 	var seq := _next_seq()
 	var m := Proto.writer(Proto.C_PLACE)
 	m.put_u16(seq)
 	Proto.put_bpos(m, p)
 	m.put_u8(id)
 	m.put_u8(slot)
+	m.put_u8(meta)
 	_send(m.data_array)
 	_guesses.append([seq, "remove", slot])
 	_apply_inventory()
@@ -216,6 +224,44 @@ func request_craft(recipe: int, times: int) -> void:
 	m.put_u8(recipe)
 	m.put_u8(times)
 	_send(m.data_array)
+
+
+## M4.2: open or close a door or hatch (E).
+func request_use(p: Vector3i) -> void:
+	var m := Proto.writer(Proto.C_USE)
+	m.put_u16(_next_seq())
+	Proto.put_bpos(m, p)
+	_send(m.data_array)
+
+
+## M4.2: the hammer's work on a block (repair, or upgrade to the next tier).
+func request_upgrade(p: Vector3i, slot: int) -> void:
+	var m := Proto.writer(Proto.C_UPGRADE)
+	m.put_u16(_next_seq())
+	Proto.put_bpos(m, p)
+	m.put_u8(slot)
+	_send(m.data_array)
+
+
+## M4.2: open a storage box or bag; S_BOX answers (box_* below).
+func request_open(p: Vector3i) -> void:
+	var m := Proto.writer(Proto.C_OPEN)
+	m.put_u16(_next_seq())
+	Proto.put_bpos(m, p)
+	_send(m.data_array)
+
+
+## action: 0 take box slot `slot`, 1 put inventory slot `slot` in, 2 take everything.
+func request_box(action: int, slot: int) -> void:
+	var m := Proto.writer(Proto.C_BOX)
+	m.put_u16(_next_seq())
+	m.put_u8(action)
+	m.put_u8(slot)
+	_send(m.data_array)
+
+
+func request_close_box() -> void:
+	_send(Proto.writer(Proto.C_CLOSE).data_array)
 
 
 func request_attack(mob_id: int, slot: int) -> void:
@@ -333,7 +379,7 @@ func _on_world_packet(data: PackedByteArray) -> void:
 			var k := Proto.get_key(b)
 			var size := b.get_u32()
 			var packed: PackedByteArray = b.get_data(size)[1]
-			w.net_chunk(seq, k, Proto.unpack_chunk(packed))
+			w.net_chunk(seq, k, Proto.unpack_chunk(packed), Proto.get_states(b))
 		Proto.S_EDITS:
 			var seq := b.get_u32()
 			var groups := []
@@ -342,7 +388,8 @@ func _on_world_packet(data: PackedByteArray) -> void:
 				var list := []
 				for j in b.get_u16():
 					var idx := b.get_u16()
-					list.append([idx, b.get_u8()])
+					var id := b.get_u8()
+					list.append([idx, id, b.get_u8()])
 				groups.append([k, list])
 			w.net_edits(seq, groups)
 
@@ -670,6 +717,16 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			for i in b.get_u8():
 				var p := Proto.get_bpos(b)
 				my_backpacks.append([p, float(b.get_u16())])
+		Proto.S_BOX:
+			box_pos = Proto.get_bpos(b)
+			box_open = b.get_u8() == 1
+			box_title = b.get_utf8_string()
+			box_slots = []
+			for i in b.get_u8():
+				var id := b.get_u16()
+				var n := b.get_u8()
+				box_slots.append(null if id == 0 or n == 0 else {"id": id, "n": n})
+			box_changed.emit()
 		Proto.S_BED:
 			var has := b.get_u8() == 1
 			var bp := Proto.get_bpos(b)

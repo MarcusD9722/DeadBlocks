@@ -92,14 +92,21 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - Possible later: treasure maps, a trader at a safe outpost.
 
 ## Crafting & tools (decided 0.13.0, Marcus)
-- **E** opens what you look at (stations; later doors, boxes); **I** opens your own inventory, where only the basics are made by hand (planks, sticks, torches, bandages, campfire, workbench, the wooden tools).
+- **E** opens what you look at (stations, doors, hatches, boxes, bags); **I** opens your own inventory, where only the basics are made by hand (planks, sticks, torches, bandages, campfire, workbench, the wooden tools).
 - Stone, iron and steel tools and weapons, building blocks and the other stations at the **Workbench**; smelting at the **Forge**; cooking at the **Campfire**; Blood Steel tools and weapons and Blood Brick at the **Blood Forge**.
 - Tool tiers: wood, stone, iron, steel, Blood Steel. Every tier has a pickaxe, an axe and a shovel.
 - Blood Moon zombies drop Blood Shards to their killer (Brutes 3, Screamers and Spitters 2, half the others 1).
 - Controller support (Xbox layout), and every key can be changed in Settings.
 
+## Building (decided 0.14.0, from Marcus's list)
+- Structure tiers like 7 Days to Die: **Wood Frame → Wooden (planks) → Reinforced Wood → Iron → Steel → Blood-forged**, each tougher against zombies (25, 60, 200, 400, 700, 1300). Every tier as a full block, half block, ramp and pillar.
+- Frames are made by hand and placed quickly; a **hammer** (Wooden Mallet by hand, Stone/Iron/Steel at the workbench, Blood Steel at the Blood Forge) held on a block upgrades it one tier with the materials in your inventory, or repairs zombie damage with its own material. Better hammers work faster.
+- **Doors** (two tall) and **hatches** in wood, iron and steel, opened with E; zombies smash them like walls.
+- **Storage boxes** (wood 18 slots, iron 27) opened with E; shared by everyone. A broken box leaves its things in a bag; dropped bags open into the same screen.
+- Block ids stay one byte; facing and upper/lower half are a small per-chunk state (save format 3, protocol 9).
+
 ## Bases & ownership
-- Chests and doors are **open to everyone by default**.
+- Boxes and doors are **open to everyone by default** (as built in 0.14.0).
 - A player can add a **lock / PIN code** to a door or chest to restrict it.
 
 ## Look (graphics overhaul, after 0.9.0)
@@ -192,5 +199,6 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
 - **V — Graphics overhaul** (plan: `docs/V-plan.md`): V1 renderer and lighting, V2 smooth terrain and rounded models (0.10.0), V3 CC0 textures (0.11.0), V4 CC0 animated models (0.12.0).
 - **M4 — Survival depth** (plan: `docs/M4-plan.md`; Marcus's list after 0.12.0, which takes in the old "exploration & loot" milestone):
   - M4.1 (0.13.0, built): controls (E interacts, I inventory, keys in Settings, controller), crafting by station, tools in five tiers with shovels, Steel and Blood Steel, the Blood Forge, Blood Shards, Blood Brick, rounder ground and blocks.
-  - M4.2 building tiers, hammer, doors, storage boxes; M4.3 thrown spears, bow, crossbow; M4.4 the deep world (taller, caves, cave zombies, clouds); M4.5 roads, towns, loot containers; M4.6 villages, farming, traders.
+  - M4.2 (0.14.0, built): structure tiers in four shapes, hammers that upgrade and repair, doors and hatches, storage boxes, bags opened with E, block states (facing, upper half).
+  - M4.3 thrown spears, bow, crossbow; M4.4 the deep world (taller, caves, cave zombies, clouds); M4.5 roads, towns, loot containers; M4.6 villages, farming, traders.
 - **M5 — Smarter zombies**: pathfinding toward the weakest part of a base.

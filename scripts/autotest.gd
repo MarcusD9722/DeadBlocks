@@ -128,6 +128,8 @@ func _play() -> void:
 	G.net.request_craft(_recipe(Blocks.SPIKES), 1)
 	check(await _until(func(): return _count(Blocks.SPIKES) == 2, 5.0), "spikes at the workbench")
 
+	await _building()
+
 	# The controller (M4.1): the right stick looks, RB turns the hotbar, Y opens the inventory and
 	# B closes it, the left stick walks.
 	var yaw0: float = p.head.rotation.y
@@ -528,3 +530,99 @@ func _continue_later() -> void:
 	await _wait(3.0)
 	check(not p.dead and p.global_position.y > 1.0, "and still fine 3 s later")
 	await _wait(1.0)
+
+
+## Building (M4.2): a door both halves of which open and close with E, a storage box things go
+## into and come back out of, and a mallet that upgrades a wood frame to planks and repairs the
+## damage zombies (an admin's /damage) did.
+func _building() -> void:
+	var p = G.player
+	var w = G.world
+	var g = G.game
+	for give in ["wooden_door", "wooden_box", "wood_frame 2", "wooden_mallet", "planks 10"]:
+		G.net.send_chat("/give " + give)
+	check(await _until(func(): return _count(Blocks.WOOD_DOOR) == 1 and _count(Blocks.WOOD_BOX) == 1 and _count(Blocks.WOOD_FRAME) == 2 \
+		and _count(Items.WOOD_MALLET) == 1, 10.0), "/give the building things")
+	# A door: two blocks tall, both halves open and close together.
+	var door := _free_spot([])
+	check(door != Vector3i.MIN, "room for a door (%s)" % door)
+	if door == Vector3i.MIN:
+		return
+	await _hold(Blocks.WOOD_DOOR)
+	_look_at(Vector3(door) + Vector3(0.5, 0.5, 0.5))
+	check(p.try_place(door, Blocks.WOOD_DOOR), "placed a door")
+	var up := door + Vector3i.UP
+	check(await _until(func(): return _server_count(Blocks.WOOD_DOOR) == 0 and w.get_blockv(door) == Blocks.WOOD_DOOR and w.get_blockv(up) == Blocks.WOOD_DOOR \
+		and (w.block_meta(up) & Blocks.META_UPPER) != 0, 5.0), "the server placed both halves of the door")
+	await _until(func(): return p.target.get("pos", Vector3i.MIN) in [door, up], 2.0)
+	check(p.interact_text() == "Open the wooden door", "looking at it offers E (%s)" % p.interact_text())
+	await _press(KEY_E)
+	check(await _until(func(): return w.get_blockv(door) == Blocks.WOOD_DOOR_OPEN and w.get_blockv(up) == Blocks.WOOD_DOOR_OPEN, 3.0), "E opens it, both halves")
+	await _wait(1.0)
+	check(w.get_blockv(door) == Blocks.WOOD_DOOR_OPEN, "and the server agrees")
+	await _shot("03_door_open")
+	await _press(KEY_E)
+	check(await _until(func(): return w.get_blockv(door) == Blocks.WOOD_DOOR and w.get_blockv(up) == Blocks.WOOD_DOOR, 3.0), "E closes it again")
+	await _wait(1.0)
+	await _hash_check("doors and their facings match the server's", _chunk_of(door))
+	# A storage box: put the planks in, take them out again.
+	var box := _free_spot([door])
+	check(box != Vector3i.MIN, "room for a box (%s)" % box)
+	if box == Vector3i.MIN:
+		return
+	await _hold(Blocks.WOOD_BOX)
+	check(p.try_place(box, Blocks.WOOD_BOX), "placed a storage box")
+	await _until(func(): return _server_count(Blocks.WOOD_BOX) == 0 and w.get_blockv(box) == Blocks.WOOD_BOX, 5.0)
+	_look_at(Vector3(box) + Vector3(0.5, 0.4, 0.5))
+	await _until(func(): return p.target.get("pos", Vector3i.MIN) == box, 2.0)
+	await _press(KEY_E)
+	check(await _until(func(): return g.state == "menu" and G.net.box_open and G.net.box_pos == box and G.net.box_slots.size() == 18, 5.0),
+		"E opens the box (%d slots)" % G.net.box_slots.size())
+	var planks0 := _server_count(Blocks.PLANKS)
+	G.hud._on_slot(_slot_of(Blocks.PLANKS))
+	var in_box := func(): return G.net.box_slots.filter(func(st): return st != null and int(st["id"]) == Blocks.PLANKS).size()
+	check(await _until(func(): return in_box.call() > 0 and _server_count(Blocks.PLANKS) < planks0, 5.0), "put planks in the box")
+	await _shot("03_box")
+	for i in G.net.box_slots.size():
+		if G.net.box_slots[i] != null:
+			G.hud._on_slot(-1 - i)
+			break
+	check(await _until(func(): return in_box.call() == 0 and _server_count(Blocks.PLANKS) == planks0, 5.0), "and took them out again")
+	await _press(KEY_E)
+	check(g.state == "playing", "E closes the box")
+	# The mallet: a wood frame upgraded to planks (2 planks), then repaired (1 plank).
+	var fr := _free_spot([door, box])
+	check(fr != Vector3i.MIN, "room for a frame (%s)" % fr)
+	if fr == Vector3i.MIN:
+		return
+	await _hold(Blocks.WOOD_FRAME)
+	check(p.try_place(fr, Blocks.WOOD_FRAME), "placed a wood frame")
+	await _until(func(): return w.get_blockv(fr) == Blocks.WOOD_FRAME and _server_count(Blocks.WOOD_FRAME) == 1, 5.0)
+	await _hold(Items.WOOD_MALLET)
+	_look_at(Vector3(fr) + Vector3(0.5, 0.5, 0.5))
+	await _until(func(): return p.target.get("pos", Vector3i.MIN) == fr, 2.0)
+	check(p.hammer_text()[1], "the mallet offers an upgrade (%s)" % p.hammer_text()[0])
+	planks0 = _server_count(Blocks.PLANKS)
+	check(await _hammer_until(fr, func(): return w.get_blockv(fr) == Blocks.PLANKS), "the mallet upgrades the frame to planks")
+	check(await _until(func(): return _server_count(Blocks.PLANKS) == planks0 - 2, 3.0), "for 2 planks (%d -> %d)" % [planks0, _server_count(Blocks.PLANKS)])
+	G.net.send_chat("/damage %d %d %d 30" % [fr.x, fr.y, fr.z])
+	check(await _until(func(): return w.damage_of(fr) > 0.0, 5.0), "zombie damage shows on it")
+	check(p.hammer_text()[0].begins_with("Repair"), "the mallet offers a repair (%s)" % p.hammer_text()[0])
+	planks0 = _server_count(Blocks.PLANKS)
+	check(await _hammer_until(fr, func(): return w.damage_of(fr) == 0.0), "the mallet repairs it")
+	check(await _until(func(): return _server_count(Blocks.PLANKS) == planks0 - 1 and w.get_blockv(fr) == Blocks.PLANKS, 3.0), "for 1 plank")
+
+
+## Work on a block with the hammer in hand until done() or 8 s: one full blow per hammer time,
+## as holding the button does (the player's mining loop resets the progress while no button is
+## held, so each blow is given at once).
+func _hammer_until(b: Vector3i, done: Callable) -> bool:
+	var p = G.player
+	var secs: float = Items.hammer_time(p.cur_id())
+	var t0 := Time.get_ticks_msec()
+	while not done.call() and Time.get_ticks_msec() - t0 < 8000:
+		if p.target.get("pos", Vector3i.MIN) == b:
+			p._hammer(b, secs + 0.01)
+		await _wait(secs)
+	return done.call()
+

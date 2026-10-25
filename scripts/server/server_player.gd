@@ -38,6 +38,9 @@ var inv_dirty := false
 ## Latest request seq handled; S_INV acknowledges it so the client can drop its guesses.
 var last_seq := 0
 var last_break_ms := 0
+var last_hammer_ms := 0
+## The storage box or bag this player has open (M4.2), or Vector3i.MIN.
+var open_box := Vector3i.MIN
 ## Requests this session, and how many were refused (shown in the log when the player leaves).
 var requests := 0
 var refused := 0

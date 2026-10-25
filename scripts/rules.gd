@@ -38,8 +38,16 @@ static func collect(id: int, tool: int, rng: RandomNumberGenerator) -> Dictionar
 		Blocks.BERRY_BUSH:
 			drops = [[Items.BERRIES, 2], [Items.FIBER, 1]]
 		_:
-			drops = [[id, 1]]
+			drops = [[Blocks.item_of(id), 1]]  # (an open door or hatch gives the door)
 	return {"items": drops, "need_tier": 0}
+
+
+## "2 Planks, 1 Iron Ingot" for a cost {item: count}.
+static func cost_text(needs: Dictionary) -> String:
+	var parts := []
+	for item in needs:
+		parts.append("%d %s" % [int(needs[item]), Items.name_of(int(item))])
+	return ", ".join(parts)
 
 
 static func too_hard_text(tier: int) -> String:

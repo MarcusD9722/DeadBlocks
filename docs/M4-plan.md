@@ -46,7 +46,7 @@ The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays a
 | Jump / sprint | Space / Shift | A / click the left stick |
 | Mine, hit | left mouse (hold) | right trigger (hold) |
 | Place, eat, use | right mouse | left trigger |
-| **Interact**: open or close a workbench, forge, campfire or Blood Forge; pick up a bag (later: doors, boxes) | **E** | X |
+| **Interact**: open or close a workbench, forge, campfire or Blood Forge; open a bag (M4.2: doors, hatches, boxes) | **E** | X |
 | **Inventory** with basic crafting | **I** | Y |
 | Hotbar | 1–9, mouse wheel | LB / RB |
 | Flashlight | F | D-pad up |
@@ -82,7 +82,7 @@ The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays a
 - Every tier has a pickaxe, an axe and a **shovel** (new: digs grass, dirt and sand faster).
 - Weapons: Wooden Club (7 damage), Stone Sword (11), Iron Sword (16), **Steel Sword** (19),
   **Blood Steel Sword** (24).
-- The hammer comes in M4.2 together with the upgrades it does.
+- The hammer came in M4.2 together with the upgrades it does.
 
 ### Blood Moon loot (from the M3 plan)
 - Horde zombies drop **Blood Shards** to whoever kills them: half of the ordinary ones drop one,
@@ -105,19 +105,71 @@ The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays a
 - The mesh test still finds no holes in the rounder ground.
 - `--scenery --only=screens` takes pictures of the new screens.
 
-## M4.2 Building (0.14.0) — outline
-- **Block format:** blocks become 16-bit (room for thousands of block kinds) with a few bits for
-  facing and open/closed; chunk saves, chunk messages and edits change with it (save format 3,
-  protocol bump; old saves are converted when loaded).
-- **Structure tiers** (each takes more punishment than the one before): Wood Frame (cheap, quick
-  to place) → Wood → Reinforced Wood → Iron → Steel → Blood-forged. Each tier in several shapes:
-  full block, half block, ramp, pillar.
-- **Hammer** (stone, iron, steel, Blood Steel): hit a block to upgrade it to the next tier using
-  the materials in your inventory, or to repair zombie damage with its own material.
-- **Doors and hatches** (wood, iron, steel), opened and closed with E; zombies smash them like
-  walls. Locks and PIN codes (DESIGN.md) come later.
-- **Storage boxes** (wood, iron), opened with E, shared like the rest of the world.
-- **Dropped bags** open with E into the same box screen (take one thing or everything).
+## M4.2 Building (0.14.0) — built
+
+### Block format
+- Block ids stay one byte (61 of 256 used, room enough until much later). A block can carry a
+  little **state** besides its id: its facing (four ways) and whether it is the upper half (a
+  door's top, a half block or hatch in the top of its cell). The states are kept per chunk only
+  for the blocks that have one, so plain land costs nothing.
+- An open door or hatch is its own block id, so whether something is solid follows from the id
+  alone: zombies, collision and the server's checks did not change.
+- Chunk saves (`DBC2`, save format 3) and the chunk and edit messages (protocol 9) carry the
+  states. Old saves load as they are (`DBC1` chunks have no states).
+
+### Structure tiers
+| Tier | Full block | Zombie punishment | Upgrade to it costs (full block, ramp / half block, pillar) | Repair costs |
+|---|---|---|---|---|
+| 0 | Wood Frame | 25 | (made by hand: 1 plank + 2 sticks gives 2 frames) | 1 plank |
+| 1 | Planks (Wooden) | 60 | 2 planks / 1 plank | 1 plank |
+| 2 | Reinforced Wood | 200 | 4 planks / 2 planks | 2 planks |
+| 3 | Iron Wall | 400 | 2 iron ingots / 1 iron ingot | 1 iron ingot |
+| 4 | Steel Wall | 700 | 2 steel ingots / 1 steel ingot | 1 steel ingot |
+| 5 | Blood-forged Wall | 1300 | 1 Blood Steel ingot | 1 Blood Shard |
+
+- Every tier comes in four shapes: **full block, half block, ramp and pillar**, made as frames by
+  hand (frame half blocks and pillars 4 at a time) and upgraded with a hammer. A shape takes as
+  much punishment as its tier's full block.
+- A ramp faces the way you look when you place it and you walk up it; a half block goes in the
+  top of its cell when you place it against a ceiling or the upper half of a side.
+- Mining an Iron block back needs a stone pickaxe or better to get it, Steel an iron one,
+  Blood-forged a steel one (the same rule as the ores).
+- The stone chain upgrades too: Cobblestone → Stone Bricks (1 cobblestone) → Reinforced Wall
+  (1 iron ingot) → Blood Brick (3 Blood Shards).
+
+### Hammers
+- **Wooden Mallet** (by hand: 2 planks + 2 sticks), **Stone, Iron and Steel Hammers**
+  (workbench), **Blood Steel Hammer** (Blood Forge). A better hammer works faster: one blow takes
+  1.5 s with the mallet, 0.5 s with the Blood Steel hammer.
+- Hold the mine button on a block: a damaged block is **repaired** (all its damage, for its repair
+  cost); otherwise it is **upgraded** to the next tier with the materials from your inventory. The
+  line under the crosshair says which, what it costs and what you have.
+- The server checks the hammer, the reach, the materials and the time between blows.
+
+### Doors, hatches, boxes
+- **Doors** (wood, iron, steel; two blocks tall) and **hatches** (wood, iron, steel), made at the
+  workbench. **E** opens and closes them, both halves together; a door won't close on another
+  player. The closed panel sits on your side of the cell, an open one swings back against its
+  side. Hammers upgrade wood → iron → steel.
+- Zombies smash closed doors and hatches like walls (wood 120, iron 350, steel 650); breaking one
+  half takes the whole door.
+- **Storage boxes**: Wooden Box (18 slots, workbench: 6 planks + 2 sticks), Iron Box (27 slots;
+  4 iron ingots, or a wooden box upgraded with 2). **E** opens the box screen next to your
+  inventory: click a box slot to take it, an inventory slot to put it in, or Take everything.
+  Boxes are the server's and shared: everyone sees the same contents at once. A box that is
+  broken (by a player or a zombie) leaves its things in a bag on the spot.
+- **Dropped bags** open with E into the same screen. A bag that is emptied is gone.
+
+### Tests
+- The autotest places a door (both halves, the E prompt, E opens and closes it, the server
+  agrees), puts planks in a box and takes them out, upgrades a frame with the mallet and repairs
+  it after `/damage`.
+- The multiplayer test: a second player sees the builder's open door, opens the box and takes the
+  planks, and the builder's open box screen empties at once.
+- The zombie-type test: a walker smashes through a closed wooden door (12 blows; a plank wall
+  takes 6).
+- The mesh test builds random land full of every shape and facing and finds no holes; the save
+  test round-trips block states and boxes and still reads `DBC1` chunks.
 
 ## M4.3 Ranged weapons (0.15.0) — outline
 - **Spears** (wood, stone, iron): stab, or hold right-click to throw; a thrown spear sticks where

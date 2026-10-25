@@ -545,8 +545,11 @@ func _on_packet(id: int, data: PackedByteArray) -> void:
 					_msg(sp, "Your things are in your backpack where you died. Follow the marker!", Color(1, 0.9, 0.5))
 		Proto.C_CHAT:
 			_on_chat(sp, b.get_utf8_string().strip_edges().left(Proto.MAX_CHAT))
-		Proto.C_BREAK, Proto.C_PLACE, Proto.C_SWAP, Proto.C_CRAFT, Proto.C_EAT, Proto.C_ATTACK:
+		Proto.C_BREAK, Proto.C_PLACE, Proto.C_SWAP, Proto.C_CRAFT, Proto.C_EAT, Proto.C_ATTACK, \
+				Proto.C_USE, Proto.C_UPGRADE, Proto.C_OPEN, Proto.C_BOX:
 			_on_request(sp, data[0], b)
+		Proto.C_CLOSE:
+			sp.open_box = Vector3i.MIN
 
 
 # ------------------------------------------------------------ building, crafting, eating
@@ -567,7 +570,18 @@ func _on_request(sp, type: int, b: StreamPeerBuffer) -> void:
 		Proto.C_PLACE:
 			var p := Proto.get_bpos(b)
 			var id := b.get_u8()
-			_req_place(sp, p, id, b.get_u8())
+			var slot := b.get_u8()
+			_req_place(sp, p, id, slot, b.get_u8())
+		Proto.C_USE:
+			_req_use(sp, Proto.get_bpos(b))
+		Proto.C_UPGRADE:
+			var p := Proto.get_bpos(b)
+			_req_upgrade(sp, p, b.get_u8())
+		Proto.C_OPEN:
+			_req_open(sp, Proto.get_bpos(b))
+		Proto.C_BOX:
+			var action := b.get_u8()
+			_req_box(sp, action, b.get_u8())
 		Proto.C_SWAP:
 			var a := b.get_u8()
 			var c := b.get_u8()
@@ -597,6 +611,9 @@ func _refuse(sp, p: Vector3i, why: String) -> void:
 	sp.refuse_why[why] = int(sp.refuse_why.get(why, 0)) + 1
 	if G.world.has_block_data(p):
 		sp.fixes.append(p)
+		# A door's other half, and the cell above a door the client thinks it placed.
+		var q: Vector3i = G.world.door_partner(p)
+		sp.fixes.append(q if q != Vector3i.MIN else p + Vector3i.UP)
 
 
 func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
@@ -619,7 +636,7 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 	if id == Blocks.BACKPACK:
 		_take_backpack(sp, p)
 		return
-	w.set_block(p, Blocks.AIR)
+	w.clear_block(p)  # (a door's other half goes too; a box's things go into a bag, see _flush_world)
 	var got := Rules.collect(id, tool, _rng)
 	if int(got["need_tier"]) > 0:
 		_msg(sp, Rules.too_hard_text(got["need_tier"]), Color(1, 0.8, 0.5))
@@ -629,15 +646,18 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 			_msg(sp, "Inventory full!", Color(1, 0.5, 0.4))
 
 
-func _req_place(sp, p: Vector3i, id: int, slot: int) -> void:
+func _req_place(sp, p: Vector3i, id: int, slot: int, meta := 0) -> void:
 	var w = G.world
 	var why := _common_refusal(sp, p, slot)
 	if why == "" and (sp.inv.id_at(slot) != id or not Items.is_block(id)):
 		why = "not in that slot"
-	elif why == "" and id == Blocks.BACKPACK:
+	elif why == "" and (id == Blocks.BACKPACK or Blocks.CLOSED.has(id)):
 		why = "not placeable"
 	elif why == "" and (p.y < 1 or p.y >= 63 or w.get_blockv(p) != Blocks.AIR):
 		why = "space taken"
+	elif why == "" and Blocks.is_door(id) and (p.y >= 62 or w.get_blockv(p + Vector3i.UP) != Blocks.AIR):
+		why = "no room for the door"
+	meta = _clean_meta(id, meta)
 	var touching := false
 	for d in [Vector3i.UP, Vector3i.DOWN, Vector3i.LEFT, Vector3i.RIGHT, Vector3i.FORWARD, Vector3i.BACK]:
 		if w.get_blockv(p + d) != Blocks.AIR:
@@ -659,9 +679,236 @@ func _req_place(sp, p: Vector3i, id: int, slot: int) -> void:
 					_refuse(sp, p, "player in the way")
 					return
 	sp.inv.remove_at(slot, 1)
-	w.set_block(p, id)
+	w.set_block(p, id, meta)
+	if Blocks.is_door(id):
+		w.set_block(p + Vector3i.UP, id, meta | Blocks.META_UPPER)
+	if Blocks.BOX_SLOTS.has(id):
+		_new_box(p, id)
 	if id == Blocks.BED:
 		_set_bed(sp, p)
+
+
+## Only the block state a block can have: a facing for doors, hatches and ramps, the upper half
+## for half blocks and hatches (a door's upper half is the server's to set).
+static func _clean_meta(id: int, meta: int) -> int:
+	var out := 0
+	if Blocks.has_facing(id):
+		out |= meta & Blocks.META_FACING
+	if Blocks.SHAPE[id] == Blocks.SH_HALF or Blocks.SHAPE[id] == Blocks.SH_HATCH:
+		out |= meta & Blocks.META_UPPER
+	return out
+
+
+# ------------------------------------------------------------ doors, hammers, storage boxes (M4.2)
+
+## E on a door or hatch: open it, or close it (both halves of a door).
+func _req_use(sp, p: Vector3i) -> void:
+	var w = G.world
+	var id: int = w.get_blockv(p)
+	var why := "" if not sp.dead and w.has_block_data(p) and _in_reach(sp, p) else "out of reach"
+	if why == "" and not Blocks.is_openable(id):
+		why = "nothing to open"
+	var to: int = Blocks.OPENS.get(id, Blocks.CLOSED.get(id, id))
+	if why == "" and Blocks.SOLID[to] and _someone_in(p, sp):
+		why = "player in the way"
+	if why != "":
+		_refuse(sp, p, why)
+		return
+	var q: Vector3i = w.door_partner(p)
+	w.set_block(p, to, w.block_meta(p))
+	if q != Vector3i.MIN:
+		w.set_block(q, to, w.block_meta(q))
+
+
+## True if a player other than `except` stands in the cell (a door closing on them).
+func _someone_in(p: Vector3i, except) -> bool:
+	for o in players.values():
+		if o != except and o.is_ready and not o.dead:
+			var op: Vector3 = o.global_position
+			if op.x + 0.3 > p.x and op.x - 0.3 < p.x + 1.0 and op.z + 0.3 > p.z and op.z - 0.3 < p.z + 1.0 \
+					and op.y + 1.8 > p.y and op.y < p.y + 1.0:
+				return true
+	return false
+
+
+## The hammer: repair zombie damage with the block's own material, or else upgrade the block
+## to its next tier with what that costs (Blocks.REPAIR / UPGRADE). A door's both halves change.
+func _req_upgrade(sp, p: Vector3i, slot: int) -> void:
+	var w = G.world
+	var id: int = w.get_blockv(p)
+	var tool: int = sp.inv.id_at(slot)
+	var why := _common_refusal(sp, p, slot)
+	var now := Time.get_ticks_msec()
+	if why == "" and Items.tool_type(tool) != "hammer":
+		why = "no hammer"
+	elif why == "" and now - sp.last_hammer_ms < Items.hammer_time(tool) * 350.0:
+		why = "too fast"
+	if why != "":
+		_refuse(sp, p, why)
+		return
+	sp.last_hammer_ms = now
+	if w.damage_of(p) > 0.0 and Blocks.REPAIR.has(id):
+		var cost: Array = Blocks.REPAIR[id]
+		if not sp.inv.remove(cost[0], cost[1]):
+			_msg(sp, "Repairing it takes %d %s." % [cost[1], Items.name_of(cost[0])], Color(1, 0.8, 0.5))
+			return
+		w.repair_block(p)
+		return
+	if not Blocks.UPGRADE.has(id):
+		_refuse(sp, p, "can't be upgraded")
+		return
+	var up: Array = Blocks.UPGRADE[id]
+	var needs: Dictionary = up[1]
+	for item in needs:
+		if sp.inv.count(item) < int(needs[item]):
+			_msg(sp, "Upgrading to %s takes %s." % [Blocks.NAMES[up[0]], Rules.cost_text(needs)], Color(1, 0.8, 0.5))
+			_refuse(sp, p, "missing materials")
+			return
+	for item in needs:
+		sp.inv.remove(item, int(needs[item]))
+	var q: Vector3i = w.door_partner(p)
+	w.set_block(p, up[0], w.block_meta(p))
+	if q != Vector3i.MIN:
+		w.set_block(q, up[0], w.block_meta(q))
+	if boxes.has(p):
+		(boxes[p]["slots"] as Array).resize(Blocks.BOX_SLOTS.get(up[0], 18))  # a bigger box
+		_send_box_viewers(p)
+
+
+## A storage box's things: block pos -> {"slots": [...]} (saved in world.json).
+var boxes := {}
+
+
+func _new_box(p: Vector3i, id: int) -> void:
+	var slots := []
+	slots.resize(Blocks.BOX_SLOTS.get(id, 18))
+	boxes[p] = {"slots": slots}
+
+
+## The slots of the box or bag at p ([] if there is none).
+func _container(p: Vector3i) -> Array:
+	if boxes.has(p):
+		return boxes[p]["slots"]
+	if backpacks.has(p):
+		return backpacks[p]["slots"]
+	return []
+
+
+## E on a storage box or bag: show it (S_BOX) while the player is near.
+func _req_open(sp, p: Vector3i) -> void:
+	var w = G.world
+	if sp.dead or not w.has_block_data(p) or not _in_reach(sp, p) or not Blocks.is_container(w.get_blockv(p)):
+		_send_box(sp, p, false)
+		return
+	if w.get_blockv(p) != Blocks.BACKPACK and not boxes.has(p):
+		_new_box(p, w.get_blockv(p))  # (its record was lost: an empty box)
+	sp.open_box = p
+	_send_box(sp, p, true)
+
+
+## The box screen: take one stack (0), put an inventory stack in (1), take everything (2).
+func _req_box(sp, action: int, slot: int) -> void:
+	var p: Vector3i = sp.open_box
+	var slots := _container(p)
+	if slots.is_empty() or sp.dead or not _in_reach(sp, p):
+		sp.open_box = Vector3i.MIN
+		_send_box(sp, p, false)
+		return
+	match action:
+		0, 2:
+			for i in slots.size():
+				if (action == 0 and i != slot) or slots[i] == null:
+					continue
+				var st: Dictionary = slots[i]
+				var rest: int = sp.inv.add(int(st["id"]), int(st["n"]))
+				if rest > 0:
+					st["n"] = rest
+					_msg(sp, "Your inventory is full.", Color(1, 0.6, 0.5))
+				else:
+					slots[i] = null
+		1:
+			if slot < Inventory.SIZE and sp.inv.slots[slot] != null:
+				var st: Dictionary = sp.inv.slots[slot]
+				var rest := Inventory.add_to(slots, int(st["id"]), int(st["n"]))
+				sp.inv.remove_at(slot, int(st["n"]) - rest)
+				if rest > 0:
+					_msg(sp, "The box is full.", Color(1, 0.6, 0.5))
+	if backpacks.has(p) and slots.all(func(s): return s == null):
+		_take_backpack(sp, p)  # emptied: the bag is gone
+	_send_box_viewers(p)
+
+
+func _send_box_viewers(p: Vector3i) -> void:
+	var still := not _container(p).is_empty()
+	for o in players.values():
+		if o.open_box == p:
+			if not still:
+				o.open_box = Vector3i.MIN
+			_send_box(o, p, still)
+
+
+## S_BOX: what the box or bag at p holds, or that it is closed.
+func _send_box(sp, p: Vector3i, open: bool) -> void:
+	var list: Array = _container(p) if open else []
+	var m := Proto.writer(Proto.S_BOX)
+	Proto.put_bpos(m, p)
+	m.put_u8(1 if not list.is_empty() else 0)
+	var title := ""
+	if backpacks.has(p):
+		var nm: String = backpacks[p]["name"]
+		title = "Bag" if nm == "" else "%s's backpack" % nm
+	elif not list.is_empty():
+		title = Blocks.NAMES[G.world.get_blockv(p)]
+	m.put_utf8_string(title)
+	m.put_u8(list.size())
+	for st in list:
+		m.put_u16(0 if st == null else int(st["id"]))
+		m.put_u8(0 if st == null else int(st["n"]))
+	_send_to(sp.peer_id, m.data_array)
+
+
+## A storage box that was broken (by a player or by zombies): what was in it lies there in a bag.
+func _box_gone(p: Vector3i) -> void:
+	var slots: Array = boxes[p]["slots"]
+	boxes.erase(p)
+	var full := slots.filter(func(s): return s != null)
+	if not full.is_empty() and G.world.get_blockv(p) == Blocks.AIR:
+		var bag := []
+		bag.resize(Inventory.SIZE)
+		for i in mini(full.size(), Inventory.SIZE):
+			bag[i] = full[i]
+		G.world.set_block(p, Blocks.BACKPACK)
+		backpacks[p] = {"owner": "", "name": "", "slots": bag, "left": backpack_s, "warned": false}
+	_send_box_viewers(p)
+
+
+## world.json's "boxes".
+func boxes_json() -> Array:
+	var out := []
+	for p in boxes:
+		var inv := []
+		for st in boxes[p]["slots"]:
+			inv.append(null if st == null else [int(st["id"]), int(st["n"])])
+		out.append({"pos": [p.x, p.y, p.z], "inv": inv})
+	return out
+
+
+## Server start: the boxes saved in world.json whose block is still there.
+func load_boxes(list: Array) -> void:
+	for e in list:
+		if not (e is Dictionary and e.get("pos") is Array and (e["pos"] as Array).size() == 3):
+			continue
+		var p := Vector3i(int(e["pos"][0]), int(e["pos"][1]), int(e["pos"][2]))
+		var id: int = G.world.get_blockv(p)
+		if not Blocks.BOX_SLOTS.has(id):
+			continue
+		_new_box(p, id)
+		var slots: Array = boxes[p]["slots"]
+		var inv: Array = e.get("inv", []) if e.get("inv") is Array else []
+		for i in mini(inv.size(), slots.size()):
+			var sl = inv[i]
+			if sl is Array and sl.size() == 2 and int(sl[1]) > 0:
+				slots[i] = {"id": int(sl[0]), "n": int(sl[1])}
 
 
 func _common_refusal(sp, p: Vector3i, slot: int) -> String:
@@ -832,10 +1079,13 @@ func _take_backpack(sp, p: Vector3i) -> void:
 		return
 	G.world.set_block(p, Blocks.AIR)
 	backpacks.erase(p)
+	_send_box_viewers(p)
 	var own: bool = bp["owner"] == sp.player_name.to_lower()
-	var oid := _peer_of_name(bp["owner"])
-	print("SERVER %s picked up %s backpack" % [sp.player_name, "their" if own else bp["name"] + "'s"])
-	if own:
+	var oid := _peer_of_name(bp["owner"]) if bp["owner"] != "" else 0
+	print("SERVER %s picked up %s" % [sp.player_name, "a bag" if bp["owner"] == "" else ("their backpack" if own else bp["name"] + "'s backpack")])
+	if bp["owner"] == "":
+		_msg(sp, "You picked up the bag.", Color(0.8, 0.9, 1))
+	elif own:
 		_msg(sp, "You got your things back.", Color(0.7, 1, 0.7))
 	else:
 		_msg(sp, "You picked up %s's backpack." % bp["name"], Color(0.8, 0.9, 1))
@@ -859,6 +1109,7 @@ func _tick_backpacks(delta: float) -> void:
 				_msg(players[wid], "Your backpack falls apart in a minute!", Color(1, 0.7, 0.4))
 		if float(bp["left"]) <= 0.0:
 			backpacks.erase(p)
+			_send_box_viewers(p)
 			if G.world.get_blockv(p) == Blocks.BACKPACK:
 				G.world.set_block(p, Blocks.AIR)
 			print("SERVER %s's backpack fell apart" % bp["name"])
@@ -1073,16 +1324,23 @@ func _msg(sp, text: String, col: Color) -> void:
 func _flush_world() -> void:
 	var w = G.world
 	_edit_seq += 1
-	var groups := {}  # chunk key -> [[block index, id], ...] in the order they happened
+	var groups := {}  # chunk key -> [[block index, id, state], ...] in the order they happened
+	var gone_boxes := []
 	for e in w.edits_out:
 		var p: Vector3i = e[0]
 		if beds.has(p) and e[1] != Blocks.BED:
 			_lose_bed(p)
+		if boxes.has(p) and not Blocks.BOX_SLOTS.has(e[1]):
+			gone_boxes.append(p)
 		var k := Vector2i(p.x >> 4, p.z >> 4)
 		if not groups.has(k):
 			groups[k] = []
-		groups[k].append([(p.x & 15) + (p.z & 15) * 16 + p.y * 256, e[1]])
+		groups[k].append([(p.x & 15) + (p.z & 15) * 16 + p.y * 256, e[1], e[2]])
 	w.edits_out.clear()
+	w.destroyed.clear()
+	for p in gone_boxes:
+		if boxes.has(p):
+			_box_gone(p)  # (its bag goes out with the next tick's edits)
 	var cracks: Array = w.cracks_out
 	w.cracks_out = []
 	for sp in players.values():
@@ -1150,6 +1408,7 @@ func _send_chunks(sp) -> void:
 		Proto.put_key(m, k)
 		m.put_u32(packed.size())
 		m.put_data(packed)
+		Proto.put_states(m, G.world.chunk_meta(k))
 		_send_to(sp.peer_id, m.data_array, MultiplayerPeer.TRANSFER_MODE_RELIABLE, Proto.CH_BULK)
 		sent += 1
 
@@ -1162,7 +1421,7 @@ func _send_cracks(sp, cracks: Array) -> void:
 	m.put_u16(mine.size())
 	for c in mine:
 		Proto.put_bpos(m, c[0])
-		m.put_u8(c[1])
+		m.put_u8(255 if c[1] < 0 else c[1])  # (255: repaired)
 	_send_to(sp.peer_id, m.data_array)
 
 
@@ -1177,7 +1436,7 @@ func _send_edits(sp, groups: Dictionary) -> void:
 		if sp.subs.has(k):
 			if not mine.has(k):
 				mine[k] = []
-			mine[k].append([(p.x & 15) + (p.z & 15) * 16 + p.y * 256, G.world.get_blockv(p)])
+			mine[k].append([(p.x & 15) + (p.z & 15) * 16 + p.y * 256, G.world.get_blockv(p), G.world.block_meta(p)])
 	sp.fixes.clear()
 	if mine.is_empty():
 		return
@@ -1190,6 +1449,7 @@ func _send_edits(sp, groups: Dictionary) -> void:
 		for e in mine[k]:
 			m.put_u16(e[0])
 			m.put_u8(e[1])
+			m.put_u8(e[2])
 	_send_to(sp.peer_id, m.data_array)
 
 
@@ -1304,6 +1564,10 @@ func _command(sp, text: String) -> void:
 			print("SERVER %s used /clear (%d mobs)" % [sp.player_name, n])
 			_send_to(sp.peer_id, _notice_bytes("Removed %d zombies and animals." % n, Color(0.8, 0.9, 1)))
 			return
+		"/damage":
+			# Tests: a zombie's punishment for the block at x y z (cracks, then it breaks).
+			if parts.size() >= 5:
+				G.world.damage_block(Vector3i(int(parts[1]), int(parts[2]), int(parts[3])), float(parts[4]))
 		"/save":
 			save_world(false)
 			_send_to(sp.peer_id, _notice_bytes("Saving the world.", Color(0.8, 0.9, 1)))
@@ -1333,7 +1597,7 @@ func _command(sp, text: String) -> void:
 			_send_to(sp.peer_id, _notice_bytes("Gave you %d %s." % [n - left, Items.name_of(id)], Color(0.8, 0.9, 1)))
 			return
 		_:
-			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|night|horde|runner|brute|crawler|screamer|spitter|boar> [count] /clear /save", Color(0.8, 0.9, 1)))
+			_send_to(sp.peer_id, _notice_bytes("Commands: /players /kill /dusk /bloodmoon /time <hour> /kick <name> /give <item> [count] /spawn <zombie|night|horde|runner|brute|crawler|screamer|spitter|boar> [count] /clear /damage <x y z amount> /save", Color(0.8, 0.9, 1)))
 			return
 	print("SERVER %s used %s" % [sp.player_name, text])
 	_broadcast(_time_bytes())
@@ -1559,7 +1823,7 @@ func save_world(now: bool) -> bool:
 		return false  # the next autosave picks these up
 	_acc_dirty.clear()
 	var chunks: Array = G.world.take_unsaved()
-	var meta := {"backpacks": backpacks_json()}
+	var meta := {"backpacks": backpacks_json(), "boxes": boxes_json()}
 	if now:
 		return saver.save_now(G.game.day, G.game.time, chunks, accs, meta)
 	_last_job_chunks = chunks

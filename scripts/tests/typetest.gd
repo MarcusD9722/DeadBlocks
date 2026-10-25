@@ -64,6 +64,7 @@ func _run() -> void:
 	var b_walk: int = await _wall("walker")
 	check(b_brute == 2, "a Brute breaks a plank in %d blows (2 expected)" % b_brute)
 	check(b_walk == 6, "a walker needs %d blows (6 expected)" % b_walk)
+	await _door()
 	await _screamer()
 	await _spitter()
 	_blood_loot()
@@ -208,11 +209,41 @@ func _wall(type: String) -> int:
 	return -1
 
 
+## A closed wooden door across a corridor (M4.2): a walker smashes it like a wall, but it takes
+## more blows than a plank, and both halves go together.
+func _door() -> void:
+	var o := _arena()
+	_corridor(o, 14, 2)
+	var lo := o + Vector3i(5, 1, 0)
+	var f: int = Blocks.facing_of(Vector3(-1, 0, 0))
+	G.world.set_block(lo, Blocks.WOOD_DOOR, f)
+	G.world.set_block(lo + Vector3i.UP, Blocks.WOOD_DOOR, f | Blocks.META_UPPER)
+	var vp := _stand_in(Vector3(o) + Vector3(10.5, 1.0, 0.5))
+	_zombie("walker", Vector3(o) + Vector3(1.5, 1.02, 0.5))
+	var gone := func(): return G.world.get_blockv(lo) == Blocks.AIR and G.world.get_blockv(lo + Vector3i.UP) == Blocks.AIR
+	await _ticks(60.0, func(): return vp.hits > 0)
+	var blows: int = G.sim.edit_log.filter(func(e): return Vector3i(e[0], e[1], e[2]) in [lo, lo + Vector3i.UP]).size()
+	check(gone.call() and vp.hits > 0 and blows > 6, "a walker smashes a wooden door, both halves (%d blows, %d hits)" % [blows, vp.hits])
+
+
+## Every chunk within r m of c (on the ground plane) has loaded.
+func _land_ready(c: Vector3, r: float) -> bool:
+	for dz in range(-int(r), int(r) + 1, 8):
+		for dx in range(-int(r), int(r) + 1, 8):
+			if not G.world.is_ready_at(c + Vector3(dx, 0, dz)):
+				return false
+	return true
+
+
 ## A Screamer that sees a player calls zombies.
 func _screamer() -> void:
 	var o := _arena()
 	_fill(o + Vector3i(-2, 0, -3), o + Vector3i(16, 0, 3), Blocks.STONE)
 	_stand_in(Vector3(o) + Vector3(12.5, 1.0, 0.5))
+	# Called zombies come up only on land that has loaded (18-28 m around the stand-in).
+	var t0 := Time.get_ticks_msec()
+	while not _land_ready(Vector3(o) + Vector3(12.5, 0, 0.5), 30.0) and Time.get_ticks_msec() - t0 < 30000:
+		await _wait(0.25)
 	var called0: int = G.sim.zombies_called
 	_zombie("screamer", Vector3(o) + Vector3(1.5, 1.02, 0.5))
 	await _ticks(8.0, func(): return G.sim.zombies_called > called0)

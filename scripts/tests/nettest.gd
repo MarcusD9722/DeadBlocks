@@ -642,6 +642,38 @@ func _pad_axis(axis: JoyAxis, value: float) -> void:
 	Input.parse_input_event(e)
 
 
+## The first inventory slot holding id, or -1.
+func _slot_of(id: int) -> int:
+	for i in Inventory.SIZE:
+		if G.player.inv.id_at(i) == id:
+			return i
+	return -1
+
+
+## A free cell on the ground near us (with room above it for a door), not in `exclude`, that the
+## camera sees without another block in the way.
+func _free_spot(exclude: Array) -> Vector3i:
+	var w = G.world
+	var b := _base()
+	for r in range(2, 5):
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if maxi(absi(dx), absi(dz)) != r:
+					continue
+				var top: int = w.surface_y(b.x + dx, b.z + dz)
+				var c := Vector3i(b.x + dx, top + 1, b.z + dz)
+				if top < 0 or absi(c.y - b.y) > 1 or exclude.has(c) or exclude.has(c + Vector3i.UP):
+					continue
+				if w.get_blockv(c) == Blocks.AIR and w.get_blockv(c + Vector3i.UP) == Blocks.AIR and w.get_blockv(c + Vector3i(0, 2, 0)) == Blocks.AIR \
+						and Blocks.FULL[w.get_blockv(c + Vector3i.DOWN)]:
+					var eye: Vector3 = G.player.cam.global_position
+					var d: Vector3 = Vector3(c) + Vector3(0.5, 0.4, 0.5) - eye
+					var hit: Dictionary = w.raycast(eye, d.normalized(), d.length())
+					if not hit.get("hit", false) and d.length() < 4.5:
+						return c
+	return Vector3i.MIN
+
+
 ## The recipes the inventory screen lists now.
 func _recipes_shown() -> Array:
 	return Crafting.recipes_for(G.hud.inv_station)
@@ -773,6 +805,44 @@ func _run_builder() -> void:
 	var theirs := int(_chat_from(other, "NT racegot ").split(" ")[2])
 	check(mine + theirs == 1, "two players broke the same block: exactly one got it (us %d, them %d)" % [mine, theirs])
 	check(G.world.get_blockv(race) == Blocks.AIR, "the raced block is gone")
+
+	# Building (M4.2): a door left open and a box with planks in it. The watcher sees the door
+	# open, opens the box and takes the planks; our box screen, still open, shows it empty.
+	var planks0 := _count(Blocks.PLANKS)
+	G.net.send_chat("/give wooden_door")
+	G.net.send_chat("/give wooden_box")
+	G.net.send_chat("/give planks 5")
+	check(await _until(func(): return _count(Blocks.WOOD_DOOR) == 1 and _count(Blocks.WOOD_BOX) == 1 and _count(Blocks.PLANKS) == planks0 + 5, 10.0),
+		"admin /give a door, a box and planks")
+	var door := _free_spot([])
+	await _hold(Blocks.WOOD_DOOR)
+	_look_at(Vector3(door) + Vector3(0.5, 0.5, 0.5))
+	check(door != Vector3i.MIN and p.try_place(door, Blocks.WOOD_DOOR), "placed a door")
+	check(await _until(func(): return _server_count(Blocks.WOOD_DOOR) == 0 and G.world.get_blockv(door + Vector3i.UP) == Blocks.WOOD_DOOR, 5.0),
+		"the server placed both halves")
+	G.net.request_use(door)
+	check(await _until(func(): return G.world.get_blockv(door) == Blocks.WOOD_DOOR_OPEN, 5.0), "opened the door")
+	var box := _free_spot([door])
+	await _hold(Blocks.WOOD_BOX)
+	_look_at(Vector3(box) + Vector3(0.5, 0.4, 0.5))
+	check(box != Vector3i.MIN and p.try_place(box, Blocks.WOOD_BOX), "placed a box")
+	await _until(func(): return _server_count(Blocks.WOOD_BOX) == 0, 5.0)
+	G.game.open_box(box)  # (the box screen, as E opens it)
+	check(await _until(func(): return G.net.box_open and G.net.box_pos == box and G.hud.box_at == box, 5.0), "opened the box")
+	var total := _count(Blocks.PLANKS)
+	var ps := _slot_of(Blocks.PLANKS)
+	var planks: int = int(G.player.inv.slots[ps]["n"]) if ps >= 0 else 0
+	G.net.request_box(1, ps)
+	var in_box := func(): return G.net.box_slots.reduce(func(a, st): return a + (int(st["n"]) if st != null and int(st["id"]) == Blocks.PLANKS else 0), 0)
+	check(planks > 0 and await _until(func(): return in_box.call() == planks and _server_count(Blocks.PLANKS) == total - planks, 5.0), "put %d planks in it" % planks)
+	await _wait(0.5)
+	await _shot("box")
+	await _hash_check("the door and box match the server's", chunk)
+	G.net.send_chat("NT box %d %d %d %d %d %d %d" % [box.x, box.y, box.z, door.x, door.y, door.z, planks])
+	check(await _until(func(): return _chat_from(other, "NT boxgot ") != "", 30.0), "the watcher opened the box")
+	check(int(_chat_from(other, "NT boxgot ").split(" ")[2]) == planks, "the watcher took the %d planks" % planks)
+	check(await _until(func(): return in_box.call() == 0, 5.0), "our open box screen shows it empty now")
+	G.game.close_inventory()
 	await _hash_check("still the same blocks as the server", chunk)
 	G.net.send_chat("NT done")
 	await _wait(1.0)
@@ -805,6 +875,22 @@ func _run_watcher() -> void:
 	await _wait(2.0)
 	G.net.send_chat("NT racegot %d" % (_count(drop) - before))
 	check(G.world.get_blockv(race) == Blocks.AIR, "the raced block is gone here too")
+	# The builder's door (left open) and box (M4.2).
+	check(await _until(func(): return _chat_from(other, "NT box ") != "", 60.0), "the builder made a box")
+	var bx := _chat_from(other, "NT box ").split(" ")
+	var box := Vector3i(int(bx[2]), int(bx[3]), int(bx[4]))
+	var door := Vector3i(int(bx[5]), int(bx[6]), int(bx[7]))
+	var want := int(bx[8])
+	check(await _until(func(): return G.world.get_blockv(door) == Blocks.WOOD_DOOR_OPEN and G.world.get_blockv(door + Vector3i.UP) == Blocks.WOOD_DOOR_OPEN, 5.0),
+		"sees the builder's door open")
+	var planks0 := _count(Blocks.PLANKS)
+	G.net.request_open(box)
+	var in_box := func(): return G.net.box_slots.reduce(func(a, st): return a + (int(st["n"]) if st != null and int(st["id"]) == Blocks.PLANKS else 0), 0)
+	check(await _until(func(): return G.net.box_open and in_box.call() == want, 5.0), "opens the box and sees the %d planks in it" % want)
+	G.net.request_box(2, 0)
+	await _until(func(): return _count(Blocks.PLANKS) == planks0 + want, 5.0)
+	G.net.request_close_box()
+	G.net.send_chat("NT boxgot %d" % (_count(Blocks.PLANKS) - planks0))
 	check(await _until(func(): return _chat_from(other, "NT done") != "", 60.0), "the builder finished")
 
 
@@ -908,9 +994,16 @@ func _mine_backpack(bp: Vector3i, secs := 30.0, with_e := false) -> void:
 	if G.world.get_blockv(bp) != Blocks.BACKPACK:
 		return
 	if with_e:
+		# E opens the bag's screen (M4.2); "Take everything" empties it, and an empty bag is gone.
 		await _until(func(): return G.player.target.get("pos", Vector3i.MIN) == bp, 2.0)
-		check(G.player.interact_text() == "Pick up the bag", "looking at the bag offers E (%s)" % G.player.interact_text())
+		check(G.player.interact_text() == "Open the bag", "looking at the bag offers E (%s)" % G.player.interact_text())
 		await _press(KEY_E)
+		check(await _until(func(): return G.game.state == "menu" and G.net.box_open and G.net.box_pos == bp, 5.0), "E opens the bag (%d slots)" % G.net.box_slots.size())
+		await _shot("bag")
+		G.net.request_box(2, 0)
+		await _until(func(): return G.world.get_blockv(bp) == Blocks.AIR, 5.0)
+		if G.game.state == "menu":
+			await _press(KEY_E)
 	else:
 		G.player.break_block(bp, Blocks.BACKPACK)
 

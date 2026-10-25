@@ -17,16 +17,21 @@ static func run(seed_v: int) -> void:
 	for z in range(-2, 3):
 		for x in range(-2, 3):
 			base[Vector2i(x, z)] = gen.generate(x, z)
-	fails += _check("generated land", base)
+	fails += _check("generated land", base, {})
 	# Built and natural blocks mixed at random around the surface (walls, floors, logs, tunnels).
 	var ids := [Blocks.AIR, Blocks.AIR, Blocks.AIR, Blocks.DIRT, Blocks.STONE, Blocks.GRASS, Blocks.PLANKS,
-		Blocks.COBBLE, Blocks.LOG, Blocks.STONE_BRICK, Blocks.LEAVES, Blocks.TORCH, Blocks.BED, Blocks.SAND]
+		Blocks.COBBLE, Blocks.LOG, Blocks.STONE_BRICK, Blocks.LEAVES, Blocks.TORCH, Blocks.BED, Blocks.SAND,
+		# M4.2 shapes, in random states: half blocks, ramps, pillars, doors, hatches, boxes.
+		Blocks.FRAME_HALF + 2, Blocks.FRAME_RAMP + 3, Blocks.FRAME_PILLAR + 1, Blocks.WOOD_DOOR, Blocks.IRON_DOOR_OPEN,
+		Blocks.STEEL_HATCH, Blocks.WOOD_HATCH_OPEN, Blocks.WOOD_BOX, Blocks.IRON_WALL, Blocks.WOOD_FRAME]
 	for trial in 3:
 		var rng := RandomNumberGenerator.new()
 		rng.seed = 77 + trial
 		var mixed := {}
+		var metas := {}
 		for k in base:
 			mixed[k] = (base[k] as PackedByteArray).duplicate()
+			metas[k] = {}
 		for k in mixed:
 			var d: PackedByteArray = mixed[k]
 			for z in CH:
@@ -34,14 +39,17 @@ static func run(seed_v: int) -> void:
 					var h := gen.height_at(k.x * CH + x, k.y * CH + z)
 					for y in range(maxi(1, h - 5), mini(63, h + 4)):
 						if rng.randf() < 0.35:
-							d[x + z * CH + y * CH * CH] = ids[rng.randi() % ids.size()]
-		fails += _check("mixed blocks %d" % trial, mixed)
+							var i := x + z * CH + y * CH * CH
+							d[i] = ids[rng.randi() % ids.size()]
+							if Blocks.SHAPE[d[i]] >= Blocks.SH_HALF:
+								metas[k][i] = rng.randi_range(0, 7)
+		fails += _check("mixed blocks %d" % trial, mixed, metas)
 	print("MESHTEST DONE fails=%d" % fails)
 
 
 ## Meshes the 3x3 chunks in the middle of `data` (5x5) as a drawn game would, then checks the
 ## middle chunk's surface. Returns the number of failed checks.
-static func _check(what: String, data: Dictionary) -> int:
+static func _check(what: String, data: Dictionary, metas: Dictionary) -> int:
 	var w = WorldScript.new()
 	var edges := {}
 	var folded := 0
@@ -52,6 +60,7 @@ static func _check(what: String, data: Dictionary) -> int:
 			for dz in range(-1, 2):
 				for dx in range(-1, 2):
 					nb.append(data[Vector2i(cx + dx, cz + dz)])
+			nb.append(metas.get(Vector2i(cx, cz), {}))
 			var buf = w._build(nb)
 			var o := Vector3(cx * CH, 0, cz * CH)
 			var f: PackedVector3Array = buf.vfaces

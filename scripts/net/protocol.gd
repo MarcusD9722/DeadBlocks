@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 8
+const PROTOCOL := 9
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -32,8 +32,8 @@ const S_BYE := 18        # reason: the server is about to close this connection 
 # World sync (see "Chunk subscriptions" below)
 const S_SUB := 19        # seq u32, fresh count u16 + keys, wait count u16 + keys
 const S_UNSUB := 20      # count u16 + keys
-const S_CHUNK := 21      # (bulk channel) seq u32, key, size u32, zstd(16 KB block array)
-const S_EDITS := 22      # seq u32, chunk count u16, per chunk: key, count u16, count x (index u16, block u8)
+const S_CHUNK := 21      # (bulk channel) seq u32, key, size u32, zstd(16 KB block array), block states (see put_states)
+const S_EDITS := 22      # seq u32, chunk count u16, per chunk: key, count u16, count x (index u16, block u8, state u8)
 const S_INV := 23        # ack u16 (last request seq handled), 36 x (item u16, count u8)
 const S_MSG := 24        # text, colour rgb u8 x3: a message in the middle of the screen
 const S_ATE := 25        # item u16: the server took the food (plays the eating sound)
@@ -43,13 +43,15 @@ const S_HURT := 28       # amount u8, from 3xf32 (all 0 = no knockback): flash, 
 const S_CRACKS := 29     # count u16, count x (block pos, stage u8): zombies chipping at blocks
 const S_BACKPACKS := 42  # count u8, count x (block pos, seconds left u16): your own backpacks
 const S_BED := 43        # has u8, block pos: your bed (the death screen offers it)
+const S_BOX := 44        # block pos, open u8 (0: closed, it's gone or out of reach), title, count u8,
+                         # count x (item u16, count u8): a storage box or bag you have open (M4.2)
 # Client -> server
 const C_MOVE := 30       # move id u8, seq u16, pos 3xf32, yaw u16, pitch s16, flags u8, hotbar slot u8
 const C_READY := 31      # my chunks are loaded, count me as online
 const C_CHAT := 32       # text (a leading "/" is a command)
 # Requests the server checks. Each carries a seq u16; S_INV acknowledges the latest one handled.
 const C_BREAK := 33      # seq, block pos, block id the client sees u8, hotbar slot u8 (the tool)
-const C_PLACE := 34      # seq, block pos, block id u8, slot u8
+const C_PLACE := 34      # seq, block pos, block id u8, slot u8, block state u8 (facing, upper half)
 const C_SWAP := 35       # seq, slot a u8, slot b u8
 const C_CRAFT := 36      # seq, recipe index u8, times u8
 const C_EAT := 37        # seq, slot u8
@@ -57,6 +59,12 @@ const C_ATTACK := 38     # seq, mob id u16, slot u8 (the weapon)
 const C_FALL := 39       # damage u8 from a fall (movement is the client's)
 const C_RESPAWN := 40    # where u8 (0 = at your bed, 1 = somewhere random), after dying
 const C_PAUSE := 41      # paused u8: the pause menu is open (a solo game's server stops its world)
+# M4.2 (requests with a seq, like the ones above)
+const C_USE := 45        # seq, block pos: open or close a door or hatch (E)
+const C_UPGRADE := 46    # seq, block pos, slot u8 (the hammer): repair it, or upgrade it to the next tier
+const C_OPEN := 47       # seq, block pos: open a storage box or bag (E); S_BOX answers
+const C_BOX := 48        # seq, action u8 (0 take a box slot, 1 put an inventory slot in, 2 take everything), slot u8
+const C_CLOSE := 49      # the box screen was closed
 
 # Player record flags
 const F_SPRINT := 1
@@ -258,6 +266,33 @@ static func get_inventory(b: StreamPeerBuffer) -> Array:
 		var n := b.get_u8()
 		out.append(null if id == 0 or n == 0 else {"id": id, "n": n})
 	return out
+
+
+## Block states (M4.2): count u16, count x (index u16, state u8).
+static func put_states(b: StreamPeerBuffer, meta: Dictionary) -> void:
+	b.put_u16(meta.size())
+	for i in meta:
+		b.put_u16(int(i))
+		b.put_u8(int(meta[i]))
+
+
+static func get_states(b: StreamPeerBuffer) -> Dictionary:
+	var meta := {}
+	for i in b.get_u16():
+		var idx := b.get_u16()
+		meta[idx] = b.get_u8()
+	return meta
+
+
+## Block states as plain bytes, (index u16, state u8) each in index order (save files, hashes).
+static func meta_bytes(meta: Dictionary) -> PackedByteArray:
+	var b := StreamPeerBuffer.new()
+	var keys := meta.keys()
+	keys.sort()
+	for i in keys:
+		b.put_u16(int(i))
+		b.put_u8(int(meta[i]))
+	return b.data_array
 
 
 static func pack_chunk(data: PackedByteArray) -> PackedByteArray:

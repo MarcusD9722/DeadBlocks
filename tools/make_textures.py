@@ -161,6 +161,64 @@ def leaves_tile(size, rng):
     return tile, height_to_normal(h * 0.6 + np.asarray(tile.convert("L")).astype(np.float32) / 255.0 * 0.4, 3.0)
 
 
+def paint(alb, nrm, mask, col, height):
+    """Paint a mask (0-1, h x w) in a colour (or a picture) and set the height under it."""
+    m = mask[:, :, None]
+    alb = alb * (1 - m) + np.asarray(col, np.float32) * m
+    nrm = nrm.copy()
+    nrm[:, :, 2] = nrm[:, :, 2] * (1 - mask) + height * mask
+    return alb, nrm
+
+
+def rect(size, x0, y0, x1, y1):
+    m = np.zeros((size, size), np.float32)
+    m[int(y0 * size):int(y1 * size), int(x0 * size):int(x1 * size)] = 1
+    return m
+
+
+def discs(size, pts, r):
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32) / size
+    m = np.zeros((size, size), np.float32)
+    for (cx, cy) in pts:
+        d = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / r
+        m = np.maximum(m, np.clip(1.5 - d * 1.5, 0, 1))
+    return m
+
+
+def door_pair(base, size, rim, dark):
+    """A door two blocks tall from one material: (upper, lower), one border around both."""
+    alb = np.concatenate([base[0], base[0]], axis=0)
+    nrm = np.concatenate([base[1], base[1]], axis=0)
+    m = np.zeros(alb.shape[:2], np.float32)
+    m[:rim, :] = m[-rim:, :] = m[:, :rim] = m[:, -rim:] = 1
+    alb = alb * (1 - m[:, :, None] * dark)
+    nrm = nrm.copy()
+    nrm[:, :, 2] = nrm[:, :, 2] * (1 - m * 0.5) + m * 0.9
+    return (alb[:size], nrm[:size]), (alb[size:], nrm[size:])
+
+
+def metal(steel, col, lum_gain=1.6):
+    """Corrugated steel turned into flat plates of a colour (iron, steel, blood-forged)."""
+    lum = steel[0].mean(axis=2, keepdims=True)
+    lum = 0.6 + (lum - lum.mean()) * 0.5  # (flatter: plates, not corrugation)
+    alb = np.clip(lum * np.array(col, np.float32) * lum_gain, 0, 1)
+    nrm = steel[1].copy()
+    nrm[:, :, :2] = 0.5 + (nrm[:, :, :2] - 0.5) * 0.25
+    nrm[:, :, 2] = 0.5 + (nrm[:, :, 2] - 0.5) * 0.3
+    return alb, nrm
+
+
+def plates(base, size, rivet_col, seam=True):
+    """Riveted plates: a frame, seams across the middle and rivets in the corners."""
+    alb, nrm = frame(base[0], base[1], size // 20, 0.35)
+    if seam:
+        m = np.maximum(rect(size, 0.49, 0, 0.51, 1), rect(size, 0, 0.49, 1, 0.51))
+        alb, nrm = paint(alb, nrm, m, alb * 0.55, 0.1)
+    pts = [(x, y) for x in (0.08, 0.92) for y in (0.08, 0.92)] + [(0.5, 0.08), (0.5, 0.92), (0.08, 0.5), (0.92, 0.5)]
+    alb, nrm = paint(alb, nrm, discs(size, pts, 0.025), rivet_col, 0.95)
+    return alb, nrm
+
+
 def save_strip(layers, name, quality):
     strip = np.concatenate(layers, axis=1)
     Image.fromarray((np.clip(strip, 0, 1) * 255 + 0.5).astype(np.uint8), "RGB").save(
@@ -218,8 +276,49 @@ def main():
     bfs_alb = blood_bricks[0].copy()
     bfs_alb[mouth] = np.stack([np.ones_like(glow), 0.16 * glow, 0.12 * glow], axis=2)[mouth]
     bf_side = (bfs_alb, bricks[1])
+    # M4.2: the structure tiers, doors, hatches and boxes (tex.gd tiles 30-44).
+    xx01, yy01 = np.mgrid[0:B, 0:B].astype(np.float32)[::-1] / B
+    border = 1 - rect(B, 0.11, 0.11, 0.89, 0.89)
+    diag = (np.abs(xx01 - yy01) < 0.07).astype(np.float32)
+    wood_frame = paint(planks[0] * 0.8, planks[1], 1 - np.maximum(border, diag), planks[0] * 0.22, 0.05)
+    bands = np.maximum(rect(B, 0, 0.18, 1, 0.3), rect(B, 0, 0.7, 1, 0.82))
+    iron_col = (0.36, 0.36, 0.38)
+    iron = metal(steel, iron_col)
+    rwood = paint(planks[0], planks[1], bands, iron[0] * 0.8, 0.8)
+    rwood = paint(rwood[0], rwood[1], discs(B, [(x, y) for x in (0.1, 0.5, 0.9) for y in (0.24, 0.76)], 0.025), (0.62, 0.6, 0.58), 0.95)
+    iron_wall = plates(iron, B, (0.55, 0.5, 0.45))
+    steel_m = metal(steel, (0.6, 0.64, 0.7))
+    steel_wall = plates(steel_m, B, (0.8, 0.82, 0.85))
+    blood_m = metal(steel, (0.36, 0.07, 0.08))
+    blood_wall = plates(blood_m, B, (0.75, 0.3, 0.3))
+    vplanks = (np.rot90(planks[0]), np.rot90(planks[1]))
+    # Doors: the lower half has the handle (near its top, about 0.8 m up), the upper half the
+    # steel door's window (tex.gd tiles 35-37 lower, 45-47 upper).
+    handle = discs(B, [(0.82, 0.2)], 0.045)
+    wood_door_up, wood_door = door_pair(vplanks, B, B // 14, 0.45)
+    wood_door = paint(wood_door[0], wood_door[1], handle, (0.25, 0.24, 0.23), 0.95)
+    iron_door_up = plates(iron, B, (0.55, 0.5, 0.45), seam=False)
+    iron_door = paint(*plates(iron, B, (0.55, 0.5, 0.45), seam=False), handle, (0.2, 0.2, 0.2), 0.95)
+    steel_door_up = plates(steel_m, B, (0.8, 0.82, 0.85), seam=False)
+    steel_door_up = paint(steel_door_up[0], steel_door_up[1], rect(B, 0.3, 0.3, 0.7, 0.55), (0.08, 0.1, 0.12), 0.1)
+    steel_door = plates(steel_m, B, (0.8, 0.82, 0.85), seam=False)
+    steel_door = paint(steel_door[0], steel_door[1], handle, (0.25, 0.25, 0.27), 0.95)
+    wood_hatch = frame(planks[0], planks[1], B // 12, 0.45)
+    wood_hatch = paint(wood_hatch[0], wood_hatch[1], diag, planks[0] * 0.7, 0.9)
+    iron_hatch = plates(iron, B, (0.55, 0.5, 0.45))
+    steel_hatch = plates(steel_m, B, (0.8, 0.82, 0.85))
+    box_side = frame(planks_old[0] * 0.9, planks_old[1], B // 10, 0.5)
+    box_side = paint(box_side[0], box_side[1], np.maximum(diag, (np.abs(xx01 + yy01 - 1) < 0.07).astype(np.float32)) * (1 - border), planks_old[0] * 0.65, 0.9)
+    box_top = frame(planks_old[0], planks_old[1], B // 10, 0.5)
+    box_top = paint(box_top[0], box_top[1], rect(B, 0, 0.48, 1, 0.52), planks_old[0] * 0.4, 0.1)
+    ibox_side = plates(iron, B, (0.55, 0.5, 0.45), seam=False)
+    ibox_side = paint(ibox_side[0], ibox_side[1], rect(B, 0.42, 0.1, 0.58, 0.3), (0.62, 0.55, 0.3), 0.95)
+    ibox_top = plates(iron, B, (0.55, 0.5, 0.45))
     blocks = [cobble, bark, ltop, planks, bench_top, bench_side, forge_top, forge_side, bricks, steel,
-        bed_top, bed_side, pack_top, pack_side, bf_top, bf_side, blood_bricks]
+        bed_top, bed_side, pack_top, pack_side, bf_top, bf_side, blood_bricks,
+        wood_frame, rwood, iron_wall, steel_wall, blood_wall, wood_door, iron_door, steel_door,
+        wood_hatch, iron_hatch, steel_hatch, box_side, box_top, ibox_side, ibox_top,
+        wood_door_up, iron_door_up, steel_door_up]
     save_strip([b[0] for b in blocks], "blocks_albedo.jpg", 90)
     save_strip([b[1] for b in blocks], "blocks_normal.jpg", 95)
     # Leaves.

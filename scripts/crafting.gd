@@ -18,6 +18,12 @@ const RECIPES := [
 	{"out": Items.WOOD_PICK, "n": 1, "needs": {Blocks.PLANKS: 3, Items.STICK: 2}, "st": ""},
 	{"out": Items.WOOD_AXE, "n": 1, "needs": {Blocks.PLANKS: 3, Items.STICK: 2}, "st": ""},
 	{"out": Items.WOOD_SHOVEL, "n": 1, "needs": {Blocks.PLANKS: 2, Items.STICK: 2}, "st": ""},
+	# M4.2 building: frames to place quickly and upgrade with a hammer, and the first hammer.
+	{"out": Blocks.WOOD_FRAME, "n": 2, "needs": {Blocks.PLANKS: 1, Items.STICK: 2}, "st": ""},
+	{"out": Blocks.FRAME_HALF, "n": 4, "needs": {Blocks.PLANKS: 1, Items.STICK: 2}, "st": ""},
+	{"out": Blocks.FRAME_RAMP, "n": 2, "needs": {Blocks.PLANKS: 1, Items.STICK: 2}, "st": ""},
+	{"out": Blocks.FRAME_PILLAR, "n": 4, "needs": {Blocks.PLANKS: 1, Items.STICK: 1}, "st": ""},
+	{"out": Items.WOOD_MALLET, "n": 1, "needs": {Blocks.PLANKS: 2, Items.STICK: 2}, "st": ""},
 	# Workbench: stone, iron and steel tools and weapons, building blocks, the other stations.
 	{"out": Items.STONE_PICK, "n": 1, "needs": {Blocks.COBBLE: 3, Items.STICK: 2}, "st": "workbench"},
 	{"out": Items.STONE_AXE, "n": 1, "needs": {Blocks.COBBLE: 3, Items.STICK: 2}, "st": "workbench"},
@@ -31,6 +37,17 @@ const RECIPES := [
 	{"out": Items.STEEL_AXE, "n": 1, "needs": {Items.STEEL_INGOT: 3, Items.STICK: 2}, "st": "workbench"},
 	{"out": Items.STEEL_SHOVEL, "n": 1, "needs": {Items.STEEL_INGOT: 2, Items.STICK: 2}, "st": "workbench"},
 	{"out": Items.STEEL_SWORD, "n": 1, "needs": {Items.STEEL_INGOT: 2, Items.STICK: 1}, "st": "workbench"},
+	{"out": Items.STONE_HAMMER, "n": 1, "needs": {Blocks.COBBLE: 2, Items.STICK: 2}, "st": "workbench"},
+	{"out": Items.IRON_HAMMER, "n": 1, "needs": {Items.IRON_INGOT: 2, Items.STICK: 2}, "st": "workbench"},
+	{"out": Items.STEEL_HAMMER, "n": 1, "needs": {Items.STEEL_INGOT: 2, Items.STICK: 2}, "st": "workbench"},
+	{"out": Blocks.WOOD_DOOR, "n": 1, "needs": {Blocks.PLANKS: 6}, "st": "workbench"},
+	{"out": Blocks.WOOD_HATCH, "n": 1, "needs": {Blocks.PLANKS: 4}, "st": "workbench"},
+	{"out": Blocks.WOOD_BOX, "n": 1, "needs": {Blocks.PLANKS: 6, Items.STICK: 2}, "st": "workbench"},
+	{"out": Blocks.IRON_DOOR, "n": 1, "needs": {Items.IRON_INGOT: 4, Blocks.PLANKS: 2}, "st": "workbench"},
+	{"out": Blocks.IRON_HATCH, "n": 1, "needs": {Items.IRON_INGOT: 3}, "st": "workbench"},
+	{"out": Blocks.IRON_BOX, "n": 1, "needs": {Items.IRON_INGOT: 4}, "st": "workbench"},
+	{"out": Blocks.STEEL_DOOR, "n": 1, "needs": {Items.STEEL_INGOT: 4}, "st": "workbench"},
+	{"out": Blocks.STEEL_HATCH, "n": 1, "needs": {Items.STEEL_INGOT: 3}, "st": "workbench"},
 	{"out": Blocks.SPIKES, "n": 2, "needs": {Items.STICK: 4, Blocks.PLANKS: 1}, "st": "workbench"},
 	{"out": Blocks.BED, "n": 1, "needs": {Blocks.PLANKS: 3, Items.FIBER: 3}, "st": "workbench"},
 	{"out": Blocks.STONE_BRICK, "n": 4, "needs": {Blocks.COBBLE: 4}, "st": "workbench"},
@@ -48,6 +65,7 @@ const RECIPES := [
 	{"out": Items.BLOOD_AXE, "n": 1, "needs": {Items.BLOOD_INGOT: 3, Items.STICK: 2}, "st": "bloodforge"},
 	{"out": Items.BLOOD_SHOVEL, "n": 1, "needs": {Items.BLOOD_INGOT: 2, Items.STICK: 2}, "st": "bloodforge"},
 	{"out": Items.BLOOD_SWORD, "n": 1, "needs": {Items.BLOOD_INGOT: 2, Items.STICK: 1}, "st": "bloodforge"},
+	{"out": Items.BLOOD_HAMMER, "n": 1, "needs": {Items.BLOOD_INGOT: 2, Items.STICK: 2}, "st": "bloodforge"},
 	{"out": Blocks.BLOOD_BRICK, "n": 4, "needs": {Blocks.STONE_BRICK: 4, Items.BLOOD_INGOT: 1}, "st": "bloodforge"},
 ]
 

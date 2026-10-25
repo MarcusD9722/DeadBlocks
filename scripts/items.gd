@@ -34,6 +34,15 @@ const STONE_SHOVEL := 128
 const IRON_SHOVEL := 129
 const STEEL_SHOVEL := 130
 const BLOOD_SHOVEL := 131
+## M4.2: hammers upgrade blocks to the next tier and repair zombie damage (hold to work).
+const WOOD_MALLET := 132
+const STONE_HAMMER := 133
+const IRON_HAMMER := 134
+const STEEL_HAMMER := 135
+const BLOOD_HAMMER := 136
+## How fast each hammer tier works (seconds = HAMMER_S / speed).
+const HAMMER_SPEED := [1.0, 1.0, 1.5, 2.0, 2.6, 3.2]
+const HAMMER_S := 1.5
 
 ## Mining speed multiplier per tool tier (0 = bare hands): wood, stone, iron, steel, Blood Steel.
 const TIER_MULT := [1.0, 2.5, 4.0, 6.5, 9.0, 12.0]
@@ -71,6 +80,11 @@ const DATA := {
 	129: {"name": "Iron Shovel", "tool": "shovel", "tier": 3, "dmg": 6.0},
 	130: {"name": "Steel Shovel", "tool": "shovel", "tier": 4, "dmg": 7.0},
 	131: {"name": "Blood Steel Shovel", "tool": "shovel", "tier": 5, "dmg": 8.0},
+	132: {"name": "Wooden Mallet", "tool": "hammer", "tier": 1, "dmg": 5.0},
+	133: {"name": "Stone Hammer", "tool": "hammer", "tier": 2, "dmg": 7.0},
+	134: {"name": "Iron Hammer", "tool": "hammer", "tier": 3, "dmg": 9.0},
+	135: {"name": "Steel Hammer", "tool": "hammer", "tier": 4, "dmg": 11.0},
+	136: {"name": "Blood Steel Hammer", "tool": "hammer", "tier": 5, "dmg": 13.0},
 }
 
 
@@ -113,6 +127,11 @@ static func tier(id: int) -> int:
 
 static func damage(id: int) -> float:
 	return float(info(id).get("dmg", 3.0))
+
+
+## Seconds a hammer takes for one upgrade or repair.
+static func hammer_time(id: int) -> float:
+	return HAMMER_S / HAMMER_SPEED[clampi(tier(id), 0, 5)]
 
 
 static func is_consumable(id: int) -> bool:

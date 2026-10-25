@@ -1,7 +1,8 @@
 extends Node
 ## Pictures of the world for judging the graphics: `-- --scenery --shots=DIR [--gfx=0-3]` with a
 ## real renderer. A view over the land at noon, at dusk, at night with the flashlight and under a
-## Blood Moon, a cave, and a little plank hut lit by torches at night.
+## Blood Moon, a cave, a little plank hut lit by torches at night, and the building blocks (every
+## tier in every shape; doors, hatches and boxes).
 
 const ZombieScript := preload("res://scripts/zombie.gd")
 
@@ -103,6 +104,7 @@ func _run() -> void:
 	await _cave(p, w, sp)
 	await _hut(p, w, best)
 	await _slope_and_death(p, w, best)
+	await _building(p, w, best)
 	await _settings()
 	get_tree().quit()
 
@@ -169,6 +171,10 @@ func _hut(p, w, best: Vector3i) -> void:
 				var door := dz == 0 and dx == 2 and dy < 2
 				w.set_block(o + Vector3i(dx, dy, dz), Blocks.PLANKS if wall and not door else (Blocks.STONE_BRICK if dy == 3 else 0))
 	w.set_block(o + Vector3i(1, 0, 3), Blocks.WORKBENCH)
+	w.set_block(o + Vector3i(3, 0, 1), Blocks.WOOD_BOX)
+	# (the door faces the way someone outside looks in: +Z)
+	w.set_block(o + Vector3i(2, 0, 0), Blocks.WOOD_DOOR, 0)
+	w.set_block(o + Vector3i(2, 1, 0), Blocks.WOOD_DOOR, Blocks.META_UPPER)
 	w.set_block(o + Vector3i(3, 0, 3), Blocks.TORCH)
 	w.set_block(o + Vector3i(1, 0, -1), Blocks.TORCH)
 	w.set_block(o + Vector3i(3, 0, -1), Blocks.CAMPFIRE)
@@ -180,6 +186,8 @@ func _hut(p, w, best: Vector3i) -> void:
 	print("SCENERY hut at %s (wall block %d), camera at %s looking %s" % [o, w.get_blockv(o + Vector3i(0, 1, 0)), p.global_position, -p.cam.global_transform.basis.z])
 	await _shot("08_hut_night")
 	_clock(11.0)
+	w.set_block(o + Vector3i(2, 0, 0), Blocks.WOOD_DOOR_OPEN, 0)
+	w.set_block(o + Vector3i(2, 1, 0), Blocks.WOOD_DOOR_OPEN, Blocks.META_UPPER)
 	await _shot("09_hut_day")
 
 
@@ -239,6 +247,52 @@ func _slope_and_death(p, w, best: Vector3i) -> void:
 
 
 ## The Settings screen over the game.
+## M4.2's building blocks at noon: the six tiers as pillars, ramps, half blocks and full blocks
+## (front to back), then the doors, hatches and boxes in a plank wall.
+func _building(p, w, best: Vector3i) -> void:
+	w.sync_mesh = true
+	var o := best + Vector3i(-14, 0, 6)
+	o.y = w.surface_y(o.x + 5, o.z + 3) + 1
+	for dz in range(-10, 12):
+		for dx in range(-3, 15):
+			w.set_block(o + Vector3i(dx, -1, dz), Blocks.COBBLE)
+			for dy in range(0, 12):
+				if w.get_blockv(o + Vector3i(dx, dy, dz)) != 0:
+					w.set_block(o + Vector3i(dx, dy, dz), 0)
+	for t in 6:
+		var x := t * 2
+		w.set_block(o + Vector3i(x, 0, 0), Blocks.FRAME_PILLAR + t)
+		w.set_block(o + Vector3i(x, 0, 2), Blocks.FRAME_RAMP + t, 0)
+		w.set_block(o + Vector3i(x, 0, 4), Blocks.FRAME_HALF + t)
+		w.set_block(o + Vector3i(x, 1, 4), Blocks.FRAME_HALF + t, Blocks.META_UPPER)
+		w.set_block(o + Vector3i(x, 0, 6), Blocks.TIER_BLOCKS[t])
+		w.set_block(o + Vector3i(x, 1, 6), Blocks.TIER_BLOCKS[t])
+	_clock(12.0)
+	_place(p, Vector3(o) + Vector3(5.5, 2.5, -6.0), PI, -0.32)
+	await _wait(2.0)
+	await _shot("16_build_tiers")
+	# Doors (wood closed, iron open, steel closed), hatches in the floor in front, two boxes.
+	for t in 6:
+		for dz in range(0, 7):
+			for dy in range(0, 2):
+				w.set_block(o + Vector3i(t * 2, dy, dz), 0)
+	for dx in range(0, 11):
+		for dy in range(0, 3):
+			w.set_block(o + Vector3i(dx, dy, 4), Blocks.STONE_BRICK)
+	var doors := [[Blocks.WOOD_DOOR, 1], [Blocks.IRON_DOOR_OPEN, 4], [Blocks.STEEL_DOOR, 7]]
+	for d in doors:
+		w.set_block(o + Vector3i(d[1], 0, 4), d[0], 0)
+		w.set_block(o + Vector3i(d[1], 1, 4), d[0], Blocks.META_UPPER)
+	var hatches := [[Blocks.WOOD_HATCH, 1], [Blocks.IRON_HATCH, 4], [Blocks.STEEL_HATCH_OPEN, 7]]
+	for h in hatches:
+		w.set_block(o + Vector3i(h[1], -1, 1), h[0], Blocks.META_UPPER)  # (flush with the floor)
+	w.set_block(o + Vector3i(9, 0, 2), Blocks.WOOD_BOX)
+	w.set_block(o + Vector3i(10, 0, 2), Blocks.IRON_BOX)
+	_place(p, Vector3(o) + Vector3(5.5, 1.2, -4.0), PI, -0.22)
+	await _wait(2.0)
+	await _shot("17_build_doors")
+
+
 func _settings() -> void:
 	G.hud.settings.open()
 	await _shot("15_settings")
@@ -246,7 +300,8 @@ func _settings() -> void:
 
 
 ## `--only=screens`: the inventory (hand crafting), a workbench's and a Blood Forge's screens
-## with the new tools in the bag, the Settings screen at its controls, and the E prompt.
+## with the new tools in the bag, a storage box, the mallet's line under the crosshair, the
+## Settings screen at its controls, and the E prompt.
 func _screens(p, w, best: Vector3i) -> void:
 	for id in [Items.WOOD_SHOVEL, Items.STONE_SHOVEL, Items.IRON_SHOVEL, Items.STEEL_SHOVEL, Items.BLOOD_SHOVEL,
 			Items.STEEL_PICK, Items.STEEL_AXE, Items.STEEL_SWORD, Items.BLOOD_PICK, Items.BLOOD_AXE, Items.BLOOD_SWORD,
@@ -255,6 +310,7 @@ func _screens(p, w, best: Vector3i) -> void:
 	p.inv.add(Items.BLOOD_SHARD, 12)
 	p.inv.add(Blocks.PLANKS, 20)
 	p.inv.add(Items.STICK, 8)
+	w.sync_mesh = true  # the blocks set below show at once
 	var at := best + Vector3i(2, 1, 0)
 	w.set_block(at, Blocks.WORKBENCH)
 	w.set_block(at + Vector3i(0, 0, 2), Blocks.BLOOD_FORGE)
@@ -269,6 +325,36 @@ func _screens(p, w, best: Vector3i) -> void:
 		G.game.open_inventory(st)
 		await _shot("screens_2_%s" % ("inventory" if st == "" else st), 0.5)
 		G.game.close_inventory()
+	# The box screen (M4.2). No server runs here, so the box's contents are set as its answer would.
+	var box := at + Vector3i(0, 0, 4)
+	w.set_block(box, Blocks.WOOD_BOX)
+	G.game.state = "menu"
+	G.hud.show_box(true, box)
+	var slots := []
+	slots.resize(Blocks.BOX_SLOTS[Blocks.WOOD_BOX])
+	var things := [[Blocks.PLANKS, 20], [Blocks.COBBLE, 12], [Items.IRON_INGOT, 5], [Blocks.TORCH, 8], [Items.BERRIES, 3],
+		[Items.BLOOD_SHARD, 4], [Blocks.WOOD_DOOR, 1], [Items.STONE_HAMMER, 1]]
+	for i in things.size():
+		slots[i] = {"id": things[i][0], "n": things[i][1]}
+	G.net.box_pos = box
+	G.net.box_open = true
+	G.net.box_title = Blocks.NAMES[Blocks.WOOD_BOX]
+	G.net.box_slots = slots
+	G.net.box_changed.emit()
+	await _shot("screens_4_box", 0.5)
+	G.hud.show_inventory(false)
+	G.game.state = "playing"
+	# The mallet on a wood frame: the line under the crosshair says what an upgrade costs.
+	var fr := at + Vector3i(0, 0, -4)
+	w.set_block(fr, Blocks.WOOD_FRAME)
+	p.inv.slots[p.selected] = {"id": Items.WOOD_MALLET, "n": 1}
+	p.inv.changed.emit()
+	await _wait(0.5)
+	eye = p.cam.global_position
+	d = Vector3(fr) + Vector3(0.5, 0.5, 0.5) - eye
+	p.set_look(atan2(-d.x, -d.z), atan2(d.y, Vector2(d.x, d.z).length()))
+	await _wait(1.0)
+	await _shot("screens_5_hammer", 0.5)
 	G.hud.settings.open()
 	var sc: ScrollContainer = G.hud.settings.find_children("*", "ScrollContainer", true, false)[0]
 	await _wait(0.3)

@@ -1,9 +1,11 @@
 extends Node
 ## The server's save files (M1.5). Layout, under the data folder (--data=DIR, default user://server):
-##   worlds/<world>/world.json          format, versions, seed, day, time, backpacks (M2)
+##   worlds/<world>/world.json          format, versions, seed, day, time, backpacks (M2),
+##                                      storage boxes (M4.2)
 ##   worlds/<world>/players/<name>.json name, PIN hash, position, look, health, food, kills,
 ##                                      inventory, bed (M2), play time
 ##   worlds/<world>/chunks/<x>_<z>.bin  edited chunks: header + SHA-256 + zstd(16 KB of blocks)
+##                                      + block states (M4.2, "DBC2"; "DBC1" files have none)
 ##   worlds/<world>/world.lock          refuses a second server on the same world
 ##   worlds/<world>/damaged/            files that failed their check (moved, never loaded)
 ##   backups/<world>-<date>.zip         copies of the world folder
@@ -14,8 +16,10 @@ extends Node
 ## Zombies, animals, cracks and chat are not saved.
 
 ## 2 (M2): backpacks in world.json, and block ids older servers don't know.
-const FORMAT := 2
-const CHUNK_MAGIC := "DBC1"
+## 3 (M4.2): block states in the chunk files (DBC2), storage boxes in world.json.
+const FORMAT := 3
+const CHUNK_MAGIC := "DBC2"
+const CHUNK_MAGIC_V1 := "DBC1"
 const LOCK_STALE_S := 90
 const BACKUPS_KEEP := 20
 const BACKUP_DAYS := 14
@@ -28,8 +32,9 @@ var autosave_s := 60.0
 var seed_v := 0
 var day := 1
 var time := 7.0
-## world.json's "backpacks" as saved (NetServer.load_backpacks reads them).
+## world.json's "backpacks" and "boxes" as saved (NetServer reads them).
 var backpacks: Array = []
+var boxes: Array = []
 var is_new := false
 var error := ""
 var warnings: Array = []
@@ -108,6 +113,7 @@ func _open_world(new_seed: int, new_world: bool) -> bool:
 	day = int(meta.get("day", 1))
 	time = float(meta.get("time", 7.0))
 	backpacks = meta.get("backpacks", []) if meta.get("backpacks") is Array else []
+	boxes = meta.get("boxes", []) if meta.get("boxes") is Array else []
 	return true
 
 
@@ -117,7 +123,7 @@ func save_world_meta(d: int, t: float) -> bool:
 	return _write_files([[path("world.json"), _json_bytes(meta)]])
 
 
-## Every saved edited chunk, checked: [[key, data], ...]. Damaged ones are moved to damaged/.
+## Every saved edited chunk, checked: [[key, data, meta], ...]. Damaged ones are moved to damaged/.
 func load_chunks() -> Array:
 	var out := []
 	for f in DirAccess.get_files_at(path("chunks")):
@@ -237,7 +243,7 @@ func _run_job(job: Dictionary) -> void:
 	var t0 := Time.get_ticks_usec()
 	var files := []
 	for c in job["chunks"]:
-		files.append([path("chunks").path_join(chunk_file_name(c[0])), _chunk_bytes(c[0], c[1])])
+		files.append([path("chunks").path_join(chunk_file_name(c[0])), _chunk_bytes(c[0], c[1], c[2])])
 	for key in job["players"]:
 		files.append([player_file(key), _json_bytes(job["players"][key])])
 	var meta := {"format": FORMAT, "game": G.VERSION, "worldgen": WorldGen.VERSION, "seed": seed_v,
@@ -325,34 +331,63 @@ static func _read_json(file: String):
 	return v if v is Dictionary else null
 
 
-static func _chunk_bytes(k: Vector2i, data: PackedByteArray) -> PackedByteArray:
+## DBC2: magic, key x, z s32, block bytes u32, zstd length u32, state count u32, SHA-256 of the
+## blocks and the states, zstd(blocks), states (index u16, state u8 each).
+static func _chunk_bytes(k: Vector2i, data: PackedByteArray, meta: Dictionary) -> PackedByteArray:
+	var packed := data.compress(FileAccess.COMPRESSION_ZSTD)
+	var ms := Proto.meta_bytes(meta)
 	var b := StreamPeerBuffer.new()
 	b.put_data(CHUNK_MAGIC.to_ascii_buffer())
 	b.put_32(k.x)
 	b.put_32(k.y)
 	b.put_u32(data.size())
-	b.put_data(_sha(data))
-	b.put_data(data.compress(FileAccess.COMPRESSION_ZSTD))
+	b.put_u32(packed.size())
+	b.put_u32(meta.size())
+	b.put_data(_sha(data + ms))
+	b.put_data(packed)
+	b.put_data(ms)
 	return b.data_array
 
 
-## [key, data] from a chunk file, or [] if it is damaged.
+## [key, data, meta] from a chunk file (DBC2, or DBC1 from before M4.2), or [] if it is damaged.
 static func _read_chunk(file: String) -> Array:
 	var raw := FileAccess.get_file_as_bytes(file)
-	if raw.size() < 48 or raw.slice(0, 4).get_string_from_ascii() != CHUNK_MAGIC:
+	if raw.size() < 48:
 		return []
+	var magic := raw.slice(0, 4).get_string_from_ascii()
 	var b := StreamPeerBuffer.new()
 	b.data_array = raw
 	b.seek(4)
+	if magic == CHUNK_MAGIC_V1:
+		var k1 := Vector2i(b.get_32(), b.get_32())
+		var size1 := b.get_u32()
+		var sha1: PackedByteArray = b.get_data(32)[1]
+		if size1 != 16384:
+			return []
+		var data1 := raw.slice(48).decompress(size1, FileAccess.COMPRESSION_ZSTD)
+		if data1.size() != size1 or _sha(data1) != sha1:
+			return []
+		return [k1, data1, {}]
+	if magic != CHUNK_MAGIC or raw.size() < 56:
+		return []
 	var k := Vector2i(b.get_32(), b.get_32())
 	var size := b.get_u32()
+	var zlen := b.get_u32()
+	var count := b.get_u32()
 	var sha: PackedByteArray = b.get_data(32)[1]
-	if size != 16384:
+	if size != 16384 or 56 + zlen + count * 3 != raw.size():
 		return []
-	var data := raw.slice(48).decompress(size, FileAccess.COMPRESSION_ZSTD)
-	if data.size() != size or _sha(data) != sha:
+	var data := raw.slice(56, 56 + zlen).decompress(size, FileAccess.COMPRESSION_ZSTD)
+	var ms := raw.slice(56 + zlen)
+	if data.size() != size or _sha(data + ms) != sha:
 		return []
-	return [k, data]
+	var meta := {}
+	var mb := StreamPeerBuffer.new()
+	mb.data_array = ms
+	for i in count:
+		var idx := mb.get_u16()
+		meta[idx] = mb.get_u8()
+	return [k, data, meta]
 
 
 func _quarantine(file: String) -> void:

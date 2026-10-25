@@ -256,6 +256,7 @@ func _micro() -> void:
 		for dz in range(-1, 2):
 			for dx in range(-1, 2):
 				nb.append(datas[k + Vector2i(dx, dz)])
+		nb.append({})  # (no block states)
 		bufs.append(w._make_buf(nb))
 	var build_ms := (Time.get_ticks_usec() - t0) / 1000.0 / float(n)
 	# The main-thread part (world.apply_mesh): render mesh, collision shape and lights, built far

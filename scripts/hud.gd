@@ -57,6 +57,14 @@ var ctl_labels: Array[Label] = []
 var inv_station := ""
 var inv_help: Label
 var inv_title: Label
+## The right side of the inventory screen: crafting, or (M4.2) a storage box or bag.
+var craft_panel: VBoxContainer
+var box_panel: VBoxContainer
+var box_title_lbl: Label
+var box_btns: Array[Button] = []
+var box_lbls: Array[Label] = []
+## The box or bag shown (Vector3i.MIN: the screen shows crafting).
+var box_at := Vector3i.MIN
 
 
 func _ready() -> void:
@@ -82,6 +90,7 @@ func _ready() -> void:
 	G.net.status.connect(_on_net_status)
 	G.net.chat.connect(_on_chat)
 	G.net.notice.connect(_on_notice)
+	G.net.box_changed.connect(_on_box_changed)
 
 
 func _style(bg: Color, border: Color, w: int) -> StyleBoxFlat:
@@ -657,6 +666,7 @@ func _build_inventory() -> void:
 	var right := VBoxContainer.new()
 	right.add_theme_constant_override("separation", 8)
 	hb.add_child(right)
+	craft_panel = right
 	inv_title = _label("CRAFTING", 22, Color(0.85, 0.95, 0.7))
 	right.add_child(inv_title)
 	station_lbl = _label("", 14, Color(0.75, 0.8, 0.85))
@@ -667,12 +677,37 @@ func _build_inventory() -> void:
 	sc.custom_minimum_size = Vector2(500, 440)
 	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	right.add_child(sc)
+	var pad := MarginContainer.new()  # (room for the scroll bar beside the Craft buttons)
+	pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pad.add_theme_constant_override("margin_right", 16)
+	sc.add_child(pad)
 	recipe_box = VBoxContainer.new()
 	recipe_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	recipe_box.add_theme_constant_override("separation", 6)
-	sc.add_child(recipe_box)
+	pad.add_child(recipe_box)
 	inv_help = _label("", 14, Color(0.7, 0.7, 0.7))
 	right.add_child(inv_help)
+
+	# A storage box or bag (M4.2): its slots; click one to take it, click your own to put it in.
+	box_panel = VBoxContainer.new()
+	box_panel.add_theme_constant_override("separation", 8)
+	box_panel.custom_minimum_size = Vector2(500, 0)
+	box_panel.visible = false
+	hb.add_child(box_panel)
+	box_title_lbl = _label("", 22, Color(0.85, 0.95, 0.7))
+	box_panel.add_child(box_title_lbl)
+	var bgrid := GridContainer.new()
+	bgrid.columns = 9
+	box_panel.add_child(bgrid)
+	for i in 36:
+		var b := _make_slot(-1 - i)
+		bgrid.add_child(b)
+	var take := _button("Take everything", func(): G.net.request_box(2, 0))
+	take.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	box_panel.add_child(take)
+	var bhelp := _label("Click something in the box to take it, or something of yours to put it in.\n%s or Esc to close." % "E", 14, Color(0.7, 0.7, 0.7))
+	bhelp.name = "BoxHelp"
+	box_panel.add_child(bhelp)
 
 
 func _make_slot(i: int) -> Button:
@@ -697,6 +732,10 @@ func _make_slot(i: int) -> Button:
 	l.add_theme_color_override("font_outline_color", Color(0, 0, 0))
 	b.add_child(l)
 	b.pressed.connect(_on_slot.bind(i))
+	if i < 0:
+		box_btns.append(b)  # (a box slot: -1 - its index)
+		box_lbls.append(l)
+		return b
 	if slot_btns.size() < 36:
 		slot_btns.resize(36)
 		slot_lbls.resize(36)
@@ -707,7 +746,11 @@ func _make_slot(i: int) -> Button:
 
 func _on_slot(i: int) -> void:
 	var p = G.player
-	if i < 9:
+	if i < 0:
+		G.net.request_box(0, -1 - i)  # take it out of the box
+	elif box_at != Vector3i.MIN:
+		G.net.request_box(1, i)  # put it in
+	elif i < 9:
 		p.select(i)
 	else:
 		G.net.request_swap(i, p.selected)
@@ -715,9 +758,49 @@ func _on_slot(i: int) -> void:
 	refresh_inventory()
 
 
+## The box screen (M4.2): your inventory beside the storage box or bag at p, filled in when the
+## server's S_BOX arrives.
+func show_box(on: bool, p := Vector3i.MIN) -> void:
+	box_at = p if on else Vector3i.MIN
+	craft_panel.visible = not on
+	box_panel.visible = on
+	inv_root.visible = on
+	if on:
+		box_title_lbl.text = "Opening..."
+		for b in box_btns:
+			b.visible = false
+		(box_panel.get_node("BoxHelp") as Label).text = "Click something in the box to take it, or something of yours to put it in.\n%s or Esc to close." % Controls.key_name(Controls.key_of("interact"))
+		refresh_inventory()
+		slot_btns[G.player.selected].grab_focus.call_deferred()
+
+
+## S_BOX arrived: show what the box holds (or close the screen if it is gone).
+func _on_box_changed() -> void:
+	if box_at == Vector3i.MIN or G.net.box_pos != box_at:
+		return
+	if not G.net.box_open:
+		G.game.close_inventory()
+		msg("It's gone.", Color(1, 0.8, 0.5))
+		return
+	box_title_lbl.text = G.net.box_title.to_upper()
+	for i in box_btns.size():
+		var b: Button = box_btns[i]
+		b.visible = i < G.net.box_slots.size()
+		if not b.visible:
+			continue
+		var st = G.net.box_slots[i]
+		b.icon = null if st == null else G.tex.icon(int(st["id"]))
+		box_lbls[i].text = "" if st == null or int(st["n"]) <= 1 else str(st["n"])
+		b.tooltip_text = "" if st == null else Items.name_of(int(st["id"]))
+	refresh_inventory()
+
+
 ## station: "" for your own inventory (hand crafting), or the station opened with E.
 func show_inventory(on: bool, station := "") -> void:
 	inv_root.visible = on
+	box_at = Vector3i.MIN
+	craft_panel.visible = true
+	box_panel.visible = false
 	if on:
 		inv_station = station
 		inv_title.text = "HAND CRAFTING" if station == "" else Crafting.STATION_NAMES[station].to_upper()
@@ -744,6 +827,8 @@ func refresh_inventory() -> void:
 			l.text = str(s["n"]) if int(s["n"]) > 1 else ""
 			b.tooltip_text = Items.name_of(int(s["id"]))
 		b.add_theme_stylebox_override("normal", style_sel if i == p.selected else style_slot)
+	if box_at != Vector3i.MIN:
+		return  # (the box screen has no recipes)
 	var stations: Array = G.game.nearby_stations()
 	if inv_station == "":
 		station_lbl.text = "Look at a Workbench, Forge, Campfire or Blood Forge and press %s for what it makes." % Controls.key_name(Controls.key_of("interact"))
@@ -918,6 +1003,10 @@ func _draw_hud() -> void:
 		if it != "":
 			var key := "X" if Controls.pad_in_use else Controls.key_name(Controls.key_of("interact"))
 			_text(Vector2(0, c.y + 50), "[%s]  %s" % [key, it], 18, Color(1, 1, 0.85, 0.95), HORIZONTAL_ALIGNMENT_CENTER, vs.x)
+		var ht: Array = p.hammer_text()
+		if ht[0] != "":
+			# Holding a hammer: what holding the button on this block does, and its cost.
+			_text(Vector2(0, c.y + 74), ht[0], 17, Color(0.75, 1, 0.75, 0.95) if ht[1] else Color(1, 0.7, 0.5, 0.95), HORIZONTAL_ALIGNMENT_CENTER, vs.x)
 		if p.mine_progress > 0.0:
 			canvas.draw_rect(Rect2(c + Vector2(-32, 18), Vector2(64, 6)), Color(0, 0, 0, 0.6))
 			canvas.draw_rect(Rect2(c + Vector2(-31, 19), Vector2(62 * clampf(p.mine_progress, 0, 1), 4)), Color(1, 1, 1, 0.9))

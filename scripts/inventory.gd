@@ -13,23 +13,30 @@ func _init() -> void:
 
 
 func add(id: int, n: int) -> int:
+	n = add_to(slots, id, n)
+	changed.emit()
+	return n
+
+
+## Put n of id into a list of slots (an inventory's, or a storage box's): onto stacks of the
+## same thing first, then into empty slots. Returns how many didn't fit.
+static func add_to(list: Array, id: int, n: int) -> int:
 	var mx := Items.stack_max(id)
-	for i in SIZE:
+	for i in list.size():
 		if n <= 0:
 			break
-		var s = slots[i]
+		var s = list[i]
 		if s != null and int(s["id"]) == id and int(s["n"]) < mx:
 			var k := mini(n, mx - int(s["n"]))
 			s["n"] = int(s["n"]) + k
 			n -= k
-	for i in SIZE:
+	for i in list.size():
 		if n <= 0:
 			break
-		if slots[i] == null:
+		if list[i] == null:
 			var k := mini(n, mx)
-			slots[i] = {"id": id, "n": k}
+			list[i] = {"id": id, "n": k}
 			n -= k
-	changed.emit()
 	return n
 
 

@@ -42,12 +42,17 @@ static func run() -> void:
 		d.resize(16384)
 		for i in d.size():
 			d[i] = rng.randi_range(0, 3) if i % 64 < 30 else 0  # stone-ish below, air above
-		chunks.append([k, d])
+		# Block states (M4.2): a few doors' facings and upper halves.
+		var meta := {}
+		for j in 5:
+			meta[rng.randi_range(0, 16383)] = rng.randi_range(1, 7)
+		chunks.append([k, d, meta])
 	var bob := _account("Bob", rng)
 	var reset := _account("Ann", rng)
 	reset["pin_key"] = PackedByteArray()  # after `dbctl reset-pin`
 	var packs := [{"pos": [5, 20, -7], "owner": "Bob", "left": 412.5, "inv": [[7, 5], null, [110, 1]]}]
-	check(s.save_now(3, 19.5, chunks, {"bob": bob, "ann": reset}, {"backpacks": packs}), "save_now wrote the world")
+	var boxes := [{"pos": [1, 30, 2], "inv": [null, [Items.IRON_INGOT, 4]]}]
+	check(s.save_now(3, 19.5, chunks, {"bob": bob, "ann": reset}, {"backpacks": packs, "boxes": boxes}), "save_now wrote the world")
 	s.release_lock()
 	s.free()
 
@@ -55,12 +60,16 @@ static func run() -> void:
 	check(s.error == "" and not s.is_new and s.seed_v == 1234 and s.day == 3 and is_equal_approx(s.time, 19.5),
 		"reload: seed 1234 (not 999), day 3, 19:30 (%d, %d, %.2f)" % [s.seed_v, s.day, s.time])
 	var got := {}
+	var got_meta := {}
 	for c in s.load_chunks():
 		got[c[0]] = c[1]
+		got_meta[c[0]] = c[2]
 	var same := got.size() == chunks.size()
 	for c in chunks:
-		same = same and got.get(c[0], PackedByteArray()) == c[1]
-	check(same, "the 3 chunks came back identical (%d loaded)" % got.size())
+		same = same and got.get(c[0], PackedByteArray()) == c[1] and got_meta.get(c[0], {}) == c[2]
+	check(same, "the 3 chunks came back identical, block states too (%d loaded)" % got.size())
+	check(s.boxes.size() == 1 and s.boxes[0]["pos"].map(func(v): return int(v)) == [1, 30, 2] and int(s.boxes[0]["inv"][1][1]) == 4,
+		"the storage boxes came back (%s)" % str(s.boxes))
 	var players := s.load_players()
 	check(players.has("bob") and _same_account(players["bob"], bob), "Bob came back identical")
 	check(players.has("ann") and players["ann"]["pin_key"].is_empty(), "a reset PIN stays reset")
@@ -104,6 +113,22 @@ static func run() -> void:
 	var damaged := DirAccess.get_files_at(s.path("damaged"))
 	check(damaged.size() == 2 and s.warnings.size() == 2, "both damaged files are in damaged/ and reported (%s)" % ", ".join(damaged))
 	check(not FileAccess.file_exists(s.path("chunks").path_join("5_5.bin.tmp")), "a leftover .tmp file is removed")
+
+	# A chunk file from before M4.2 (DBC1: no block states) still loads.
+	var d1: PackedByteArray = chunks[2][1]
+	var b1 := StreamPeerBuffer.new()
+	b1.put_data("DBC1".to_ascii_buffer())
+	b1.put_32(40)
+	b1.put_32(41)
+	b1.put_u32(d1.size())
+	b1.put_data(SaveScript._sha(d1))
+	b1.put_data(d1.compress(FileAccess.COMPRESSION_ZSTD))
+	var f1 := s.path("chunks").path_join(SaveScript.chunk_file_name(Vector2i(40, 41)))
+	_write(f1, b1.data_array)
+	var old_chunk := SaveScript._read_chunk(f1)
+	check(old_chunk.size() == 3 and old_chunk[0] == Vector2i(40, 41) and old_chunk[1] == d1 and old_chunk[2].is_empty(),
+		"an old chunk file (no block states) loads")
+	DirAccess.remove_absolute(f1)
 
 	# Backups hold the world.
 	var zip := s.backup("test")

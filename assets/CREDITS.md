@@ -19,9 +19,13 @@ Combined into the files in `assets/textures/` by `tools/make_textures.py` (1K-JP
 | Cobblestone | PavingStones070 |
 | Stone bricks, forge front; Blood Brick and the Blood Forge (tinted red) | Bricks076A |
 | Reinforced wall | CorrugatedSteel009 |
+| Wood Frame, Reinforced Wood, wooden doors and hatches | Planks037A |
+| Iron, Steel and Blood-forged walls, doors and hatches; Iron Box (plates, tinted) | CorrugatedSteel009 |
+| Wooden Box | Planks023A |
 | Leaves (single leaves, arranged into a tile) | LeafSet024 |
 
-The ore spots, log rings, fabric (bed, backpack) and forge glow are painted by the script.
+The ore spots, log rings, fabric (bed, backpack), forge glow, frame struts, iron bands, rivets,
+plate seams, handles and locks are painted by the script.
 
 ## Models — Quaternius (https://quaternius.com), CC0 1.0
 

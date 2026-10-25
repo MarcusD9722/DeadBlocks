@@ -4,7 +4,7 @@ extends RefCounted
 
 const TS := 16
 const COLS := 8
-const NUM_TILES := 30
+const NUM_TILES := 48
 
 var atlas_img: Image
 var atlas: ImageTexture
@@ -23,7 +23,9 @@ var block_normal: TextureLayered
 var leaves_albedo: Texture2D
 var leaves_normal: Texture2D
 ## Atlas tile -> block array layer (the order of tools/make_textures.py's blocks list).
-const BLOCK_LAYERS := {4: 0, 5: 1, 6: 2, 8: 3, 13: 4, 14: 5, 15: 6, 16: 7, 20: 8, 22: 9, 25: 10, 26: 11, 23: 12, 24: 13, 27: 14, 28: 15, 29: 16}
+const BLOCK_LAYERS := {4: 0, 5: 1, 6: 2, 8: 3, 13: 4, 14: 5, 15: 6, 16: 7, 20: 8, 22: 9, 25: 10, 26: 11, 23: 12, 24: 13, 27: 14, 28: 15, 29: 16,
+	30: 17, 31: 18, 32: 19, 33: 20, 34: 21, 35: 22, 36: 23, 37: 24, 38: 25, 39: 26, 40: 27, 41: 28, 42: 29, 43: 30, 44: 31,
+	45: 32, 46: 33, 47: 34}
 static var layer_of_tile := PackedInt32Array()
 
 
@@ -37,6 +39,7 @@ func _init() -> void:
 		var tile: int = Blocks.TILES[id][1]
 		@warning_ignore("integer_division")
 		var img := atlas_img.get_region(Rect2i((tile % COLS) * TS, (tile / COLS) * TS, TS, TS))
+		_shape_icon(img, Blocks.SHAPE[id])
 		icons[id] = ImageTexture.create_from_image(img)
 	for id in Items.DATA.keys():
 		icons[int(id)] = ImageTexture.create_from_image(_item_icon(int(id)))
@@ -48,6 +51,26 @@ func _init() -> void:
 
 func icon(id: int) -> Texture2D:
 	return icons.get(id)
+
+
+## A block's icon in the outline of its shape (half block, ramp, pillar, door, hatch).
+func _shape_icon(img: Image, shape: int) -> void:
+	for y in TS:
+		for x in TS:
+			var keep := true
+			match shape:
+				Blocks.SH_HALF:
+					keep = y >= 8
+				Blocks.SH_RAMP:
+					keep = y >= x
+				Blocks.SH_PILLAR:
+					keep = x >= 5 and x <= 10
+				Blocks.SH_DOOR:
+					keep = x >= 3 and x <= 12
+				Blocks.SH_HATCH:
+					keep = y >= 10 and y <= 13
+			if not keep:
+				img.set_pixel(x, y, Color(0, 0, 0, 0))
 
 
 # ---------------------------------------------------------------- helpers
@@ -361,6 +384,80 @@ func _paint(t: int) -> void:
 			_bricks(t, r, _c(112, 30, 36), _c(42, 20, 22))
 
 
+		30:
+			# Wood frame: a plank border and a diagonal brace, dark between.
+			for y in TS:
+				for x in TS:
+					var c := _c(34, 26, 20)
+					if x <= 1 or y <= 1 or x >= 14 or y >= 14 or absi(x - y) <= 1:
+						c = _c(150, 112, 70)
+					_px(t, x, y, _var(r, c, 0.04))
+		31:
+			_planks(t, r)
+			for x in TS:
+				for y in [3, 4, 11, 12]:
+					_px(t, x, y, _var(r, _c(84, 84, 88), 0.04))
+			for x in [2, 8, 13]:
+				_px(t, x, 3, _c(170, 170, 176))
+				_px(t, x, 11, _c(170, 170, 176))
+		32, 33, 34:
+			var base: Color = {32: _c(92, 92, 98), 33: _c(160, 166, 176), 34: _c(110, 22, 26)}[t]
+			for y in TS:
+				for x in TS:
+					var c := base
+					if x == 0 or y == 0 or x == 15 or y == 15 or x == 8 or y == 8:
+						c = base.darkened(0.35)
+					_px(t, x, y, _var(r, c, 0.03))
+			for pt in [Vector2i(2, 2), Vector2i(13, 2), Vector2i(2, 13), Vector2i(13, 13)]:
+				_px(t, pt.x, pt.y, base.lightened(0.4))
+		35, 36, 37, 45, 46, 47:
+			# Doors: 35-37 the lower half (with the handle), 45-47 the upper half (the steel
+			# door's window); one border around both.
+			var upper := t >= 45
+			var k := t - 10 if upper else t
+			var base: Color = {35: _c(140, 104, 62), 36: _c(92, 92, 98), 37: _c(160, 166, 176)}[k]
+			for y in TS:
+				for x in TS:
+					var c := base
+					if x <= 1 or x >= 14 or (upper and y <= 1) or (not upper and y >= 14):
+						c = base.darkened(0.35)
+					elif k == 35 and x % 4 == 0:
+						c = base.darkened(0.2)
+					_px(t, x, y, _var(r, c, 0.03))
+			if t == 47:
+				for y in range(5, 9):
+					for x in range(5, 11):
+						_px(t, x, y, _c(20, 26, 32))
+			if not upper:
+				_px(t, 12, 3, _c(40, 40, 42))
+				_px(t, 12, 4, _c(40, 40, 42))
+		38, 39, 40:
+			var base: Color = {38: _c(140, 104, 62), 39: _c(92, 92, 98), 40: _c(160, 166, 176)}[t]
+			for y in TS:
+				for x in TS:
+					var c := base
+					if x <= 1 or x >= 14 or y <= 1 or y >= 14 or (t == 38 and absi(x - y) <= 1):
+						c = base.darkened(0.35)
+					_px(t, x, y, _var(r, c, 0.03))
+		41, 42:
+			_planks(t, r)
+			for y in TS:
+				for x in TS:
+					if x <= 1 or x >= 14 or y <= 1 or y >= 14 or (t == 41 and (absi(x - y) <= 1 or absi(x + y - 15) <= 1)) or (t == 42 and y == 8):
+						_px(t, x, y, _var(r, _c(96, 70, 42), 0.03))
+		43, 44:
+			for y in TS:
+				for x in TS:
+					var c := _c(92, 92, 98)
+					if x <= 1 or x >= 14 or y <= 1 or y >= 14:
+						c = _c(60, 60, 64)
+					_px(t, x, y, _var(r, c, 0.03))
+			if t == 43:
+				for y in range(2, 5):
+					for x in range(7, 9):
+						_px(t, x, y, _c(200, 176, 80))
+
+
 func _cobble(t: int, r: RandomNumberGenerator, lo: float, hi: float) -> void:
 	var pts: Array[Vector2] = []
 	var shades: Array[float] = []
@@ -500,6 +597,11 @@ func _item_icon(id: int) -> Image:
 				_disc(img, 11.5, 4.8, 3.4, col)
 				_disc(img, 12.3, 4.0, 1.4, col.lightened(0.2))
 				_line(img, 3, 13, 10, 6, handle, 2)
+			elif tool == "hammer":
+				# A handle and a block-shaped head across its top.
+				_line(img, 3, 13, 10, 6, handle, 2)
+				_line(img, 7, 3, 13, 9, col, 3)
+				_line(img, 8, 3, 13, 8, col.lightened(0.2), 1)
 			elif tool == "shovel":
 				# A long handle and a rounded blade at the top right.
 				_line(img, 2, 14, 9, 7, handle, 2)

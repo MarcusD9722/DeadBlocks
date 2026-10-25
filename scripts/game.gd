@@ -184,7 +184,7 @@ func _ready_server() -> void:
 	world.setup(seed_v, null)
 	var saved_chunks: Array = saver.load_chunks()
 	for c in saved_chunks:
-		world.preload_chunk(c[0], c[1])
+		world.preload_chunk(c[0], c[1], c[2])
 	mobs = Node3D.new()
 	mobs.name = "Mobs"
 	add_child(mobs)
@@ -199,6 +199,7 @@ func _ready_server() -> void:
 	add_child(ns)
 	G.net_server = ns
 	ns.load_backpacks(saver.backpacks)
+	ns.load_boxes(saver.boxes)
 	ns.load_beds()
 	state = "server"
 	print("SERVER world \"%s\" in %s: %s, seed %d, day %d %02d:%02d, %d edited chunks, %d players" % [
@@ -552,7 +553,19 @@ func open_inventory(station := "") -> void:
 	hud.show_inventory(true, station)
 
 
+## E on a storage box or bag (M4.2): the box screen; the server sends what's in it.
+func open_box(p: Vector3i) -> void:
+	if state != "playing":
+		return
+	state = "menu"
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	hud.show_box(true, p)
+	G.net.request_open(p)
+
+
 func close_inventory() -> void:
+	if hud.box_at != Vector3i.MIN:
+		G.net.request_close_box()
 	state = "playing"
 	hud.show_inventory(false)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
