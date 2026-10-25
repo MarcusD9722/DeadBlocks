@@ -1,6 +1,7 @@
 class_name Mob
 extends CharacterBody3D
-## Shared creature logic: box models with rounded edges, walking, hopping up ledges, taking hits.
+## Shared creature logic: models (downloaded and animated, `rig`, or boxes with rounded edges),
+## walking, hopping up ledges, taking hits.
 
 const GRAVITY := 26.0
 
@@ -13,6 +14,8 @@ var anim := 0.0
 var mats: Array[StandardMaterial3D] = []
 var base_cols: Array[Color] = []
 var model: Node3D
+## The downloaded animated model (client only), or null with the box model.
+var rig: Rig
 var height := 1.8
 var half := 0.3
 ## Cells of height the body needs: a crawler 1, most 2, a brute 3.
@@ -54,6 +57,18 @@ func _setup_body(w: float, h: float) -> void:
 	model = Node3D.new()
 	add_child(model)
 	add_to_group("mobs")
+
+
+## Put the downloaded model in (its materials join the hit flash). False if it isn't there.
+func _use_rig(r: Rig) -> bool:
+	if r == null:
+		return false
+	rig = r
+	model.add_child(r)
+	for m in r.mats:
+		mats.append(m)
+		base_cols.append(m.albedo_color)
+	return true
 
 
 func _box(parent: Node3D, size: Vector3, pos: Vector3, col: Color, glow := false) -> MeshInstance3D:
@@ -230,9 +245,10 @@ func _death_lift() -> float:
 	return 0.18
 
 
-## Limbs going limp while it falls (t: 0-1 through the fall).
-func _death_pose(_t: float) -> void:
-	pass
+## Limbs going limp while it falls (t: 0-1 through the fall), or the model's death animation.
+func _death_pose(_t: float, delta: float) -> void:
+	if rig != null:
+		rig.tick(delta)
 
 
 func _process(delta: float) -> void:
@@ -248,7 +264,7 @@ func _process(delta: float) -> void:
 	model.rotation = Vector3(_fall.x * (e - bounce), model.rotation.y, _fall.z * e)
 	var sink := maxf(0.0, die_t - FALL_S - LIE_S) / SINK_S
 	model.position.y = ground_off + _death_lift() * e - sink * 0.9
-	_death_pose(t)
+	_death_pose(t, delta)
 	_tick_flash(delta)
 	if die_t > FALL_S + LIE_S + SINK_S:
 		queue_free()

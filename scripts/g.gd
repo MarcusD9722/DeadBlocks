@@ -2,8 +2,8 @@ extends Node
 ## Global references shared by every system, the play mode, and the network connection.
 
 ## Shown on the title screen; client and server must run the same version to play together.
-const VERSION := "0.11.0"
-const BUILD_NAME := "New look"
+const VERSION := "0.12.0"
+const BUILD_NAME := "Real zombies"
 
 var game: Node = null
 var world: Node3D = null

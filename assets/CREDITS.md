@@ -22,3 +22,16 @@ Combined into the files in `assets/textures/` by `tools/make_textures.py` (1K-JP
 | Leaves (single leaves, arranged into a tile) | LeafSet024 |
 
 The ore spots, log rings, fabric (bed, backpack) and forge glow are painted by the script.
+
+## Models — Quaternius (https://quaternius.com), CC0 1.0
+
+In `assets/models/`, as downloaded (Godot imports them; `scripts/rig.gd` plays their animations
+and paints over palette cells of their textures for the zombie skins):
+
+| Used for | Pack | Files |
+|---|---|---|
+| Zombies: walker, runner, crawler, screamer | Zombie Apocalypse Kit (March 2024) | `zombies/Zombie_Basic.gltf` |
+| Brute | Zombie Apocalypse Kit | `zombies/Zombie_Arm.gltf` |
+| Spitter | Zombie Apocalypse Kit | `zombies/Zombie_Chubby.gltf` |
+| Other players | Zombie Apocalypse Kit | `survivors/Characters_{Matt,Lis,Sam,Shaun}_SingleWeapon.gltf` (their weapons are hidden) |
+| Boar (pig recoloured, tusks added) | Farm Animals | `animals/Pig.fbx` |

@@ -1,10 +1,18 @@
 extends Mob
 ## Wild boar. Wanders, runs when hurt, drops raw meat.
 
+## The model: Quaternius' pig (Farm Animals, CC0) in boar colours with tusks. It comes with an
+## idle animation only, so its legs are swung here when it walks.
+const PIG := "res://assets/models/animals/Pig.fbx"
+const PIG_LEGS := ["FrontUpLeg.R", "BackUpLeg.L", "FrontUpLeg.L", "BackUpLeg.R"]
+
 var wander_dir := Vector3.ZERO
 var wander_t := 0.0
 var flee_t := 0.0
 var legs: Array[Node3D] = []
+## The pig model's leg bones and their rest rotations.
+var _bones: Array[int] = []
+var _rests: Array[Quaternion] = []
 
 
 func _ready() -> void:
@@ -21,6 +29,18 @@ func _ready() -> void:
 
 func _build_model() -> void:
 	var fur := Color8(112, 74, 52).lerp(Color8(84, 60, 44), randf())
+	var r := Rig.make(PIG, Vector3.ONE * 0.2)
+	if r != null:
+		r.mats[0].albedo_color = fur.darkened(0.12)  # body
+		r.mats[1].albedo_color = Color8(52, 38, 30)  # snout and hooves
+		_add_tusks(r)
+		for b in PIG_LEGS:
+			var i := r.skeleton.find_bone(b)
+			_bones.append(i)
+			_rests.append(r.skeleton.get_bone_rest(i).basis.get_rotation_quaternion())
+		_use_rig(r)
+		rig.tick(randf() * 3.0)
+		return
 	_box(model, Vector3(0.66, 0.55, 1.05), Vector3(0, 0.62, 0), fur)
 	_box(model, Vector3(0.5, 0.12, 0.8), Vector3(0, 0.95, -0.05), fur.darkened(0.25))
 	_box(model, Vector3(0.44, 0.42, 0.4), Vector3(0, 0.7, 0.68), fur.lightened(0.05))
@@ -35,6 +55,21 @@ func _build_model() -> void:
 		var pv := _pivot(model, p)
 		_box(pv, Vector3(0.16, 0.36, 0.16), Vector3(0, -0.18, 0), fur.darkened(0.15))
 		legs.append(pv)
+
+
+## Two tusks by the snout, following the head as it moves.
+func _add_tusks(r: Rig) -> void:
+	var frame := r.attach("Head")
+	var ivory := StandardMaterial3D.new()
+	ivory.albedo_color = Color8(236, 228, 204)
+	ivory.roughness = 0.6
+	for side in [-1.0, 1.0]:
+		var t := MeshInstance3D.new()
+		t.mesh = RoundBox.mesh(Vector3(0.28, 1.0, 0.28))
+		t.material_override = ivory
+		frame.add_child(t)
+		t.position = Vector3(side * 0.5, 1.85, 4.15)
+		t.rotation = Vector3(-0.45, 0.0, side * -0.35)
 
 
 ## Dying (client view): a boar falls over onto its side.
@@ -68,18 +103,30 @@ func _physics_process(delta: float) -> void:
 		wander_t = 0.0
 	if not G.server_mode:
 		var rv := get_real_velocity()
-		_pose(Vector2(rv.x, rv.z).length())
+		_pose(Vector2(rv.x, rv.z).length(), delta)
 
 
-func _pose(spd: float) -> void:
+func _pose(spd: float, delta: float) -> void:
+	if rig != null:
+		if spd < 0.15:
+			rig.move("Armature|Idle")
+			rig.tick(delta)
+			return
+		# Walking: the idle animation waits (it would hold the legs still) and the legs swing.
+		rig.current = ""
+		var a := sin(anim * 1.4) * 0.5 * minf(1.0, spd)
+		for i in _bones.size():
+			var s := 1.0 if i < 2 else -1.0
+			rig.skeleton.set_bone_pose_rotation(_bones[i], _rests[i] * Quaternion(Vector3.RIGHT, a * s))
+		return
 	var mv := minf(1.0, spd)
 	for i in legs.size():
 		var s := 1.0 if i == 0 or i == 3 else -1.0
 		legs[i].rotation.x = sin(anim * 1.4) * 0.6 * mv * s
 
 
-func _view_animate(_delta: float, spd: float, _rising: int) -> void:
-	_pose(spd)
+func _view_animate(delta: float, spd: float, _rising: int) -> void:
+	_pose(spd, delta)
 
 
 func _on_hurt(_attacker: Node) -> void:

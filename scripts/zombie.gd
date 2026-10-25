@@ -23,6 +23,29 @@ const STATS := {
 	"screamer": {"w": 0.55, "h": 1.8, "hp": 22.0, "dmg": 4.0, "blk": 4.0, "spd": [1.8, 2.2, 2.8]},
 	"spitter": {"w": 0.6, "h": 1.8, "hp": 26.0, "dmg": 6.0, "blk": 6.0, "spd": [1.6, 2.0, 2.4]},
 }
+const BASIC := "res://assets/models/zombies/Zombie_Basic.gltf"
+const HULK := "res://assets/models/zombies/Zombie_Arm.gltf"
+const CHUBBY := "res://assets/models/zombies/Zombie_Chubby.gltf"
+## The downloaded models (assets/models/zombies, Quaternius, CC0) per type: the file, its size,
+## how much thinner, and the colours painted over its skin and clothes (one picked per zombie).
+const LOOKS := {
+	"walker": {"file": BASIC, "scale": 1.38, "skin": ["6f8a5a", "7a8c63", "849072", "6b7d5c"], "cloth": ["3f5363", "4a4a3e", "5a3f36", "3e4a3a"]},
+	"runner": {"file": BASIC, "scale": 1.34, "thin": 0.86, "skin": ["9aa39a", "a3a89b"], "cloth": ["6e2a26", "5c2622"]},
+	"brute": {"file": HULK, "scale": 1.5, "skin": ["5f6e52", "66705a"], "cloth": ["3b3a33"]},
+	"crawler": {"file": BASIC, "scale": 1.3, "skin": ["84906a", "7a845f"], "cloth": ["3f5363", "4a4a3e"]},
+	"screamer": {"file": BASIC, "scale": 1.32, "thin": 0.9, "skin": ["b9bcae", "aeb3a6"], "cloth": ["3c3846"]},
+	"spitter": {"file": CHUBBY, "scale": 1.12, "skin": ["8fa04a", "98a452"], "cloth": ["4b4636"]},
+}
+## Per model file: its palette cells (skin, clothes, eyes, the spitter's tongue) and how fast its
+## walk and run cycles move (m/s at size 1 and normal rate), so the feet keep up with the ground.
+## (The basic zombie's eye colour also outlines its shoes, so it gets glowing balls in its eye
+## sockets instead: EYE_SPOTS, in the model's own space.)
+const PARTS := {
+	BASIC: {"skin": Vector2i(1, 6), "cloth": Vector2i(10, 6), "walk": 0.6, "run": 2.9},
+	HULK: {"skin": Vector2i(1, 5), "cloth": Vector2i(2, 5), "eyes": Vector2i(0, 5), "walk": 0.6, "run": 2.9},
+	CHUBBY: {"skin": Vector2i(1, 7), "cloth": Vector2i(2, 7), "eyes": Vector2i(0, 7), "tongue": Vector2i(6, 7), "walk": 0.6, "run": 3.3},
+}
+const EYE_SPOTS := [Vector3(-0.13, 1.07, 0.27), Vector3(0.13, 1.07, 0.27)]
 const SCREAM_EVERY := 30.0
 const SCREAMS := 3
 const CALLED := 4          # zombies one scream calls
@@ -57,6 +80,10 @@ var leg_l: Node3D
 var leg_r: Node3D
 var voice: AudioStreamPlayer3D
 var _day := 1
+## Client: smoothed speed for the animations, and the last attack/scream level (a rise starts one).
+var _spd := 0.0
+var _last_attack := 0.0
+var _last_scream := 0.0
 
 ## Set by Sim: processing order, region membership, and this zombie's own random numbers
 ## (so its choices don't depend on the order zombies are processed in).
@@ -119,6 +146,9 @@ func _ready() -> void:
 
 
 func _build_model() -> void:
+	if _use_rig(_make_rig()):
+		rig.tick(randf() * 1.5)  # (not all in step)
+		return
 	var skin := Color8(120, 158, 86).lerp(Color8(96, 128, 74), randf())
 	var shirts := [Color8(104, 94, 122), Color8(88, 104, 120), Color8(120, 82, 70), Color8(70, 92, 70), Color8(130, 120, 96)]
 	var shirt: Color = shirts[randi() % shirts.size()]
@@ -173,6 +203,39 @@ func _build_model() -> void:
 		model.scale = Vector3(1.35, 1.2, 1.35)
 	elif blood:
 		model.scale = Vector3.ONE * 1.06
+
+
+## The downloaded model in this type's colours: Blood Moon zombies are redder and a little bigger
+## with glowing red eyes, night zombies' eyes glow dimly.
+func _make_rig() -> Rig:
+	var look: Dictionary = LOOKS[type]
+	var parts: Dictionary = PARTS[look["file"]]
+	var sc: float = look["scale"] * (1.06 if blood else 1.0)
+	var thin: float = look.get("thin", 1.0)
+	var r := Rig.make(look["file"], Vector3(sc * thin, sc, sc * thin))
+	if r == null:
+		return null
+	var skins: Array = look["skin"]
+	var cloths: Array = look["cloth"]
+	var skin := Color(skins[randi() % skins.size()])
+	if blood:
+		skin = skin.lerp(Color8(122, 58, 46), 0.4)
+	var paint := {parts["skin"]: skin, parts["cloth"]: Color(cloths[randi() % cloths.size()])}
+	var glows := {}
+	if parts.has("tongue"):
+		paint[parts["tongue"]] = Color8(150, 224, 58)
+		glows[parts["tongue"]] = Color8(70, 140, 10)
+	var eye := Color8(255, 30, 10) if blood else Color8(90, 90, 40)
+	if blood or kind != "day":
+		if parts.has("eyes"):
+			glows[parts["eyes"]] = eye
+		else:
+			r.glow_spots("Head", EYE_SPOTS, 0.045, eye, 2.2 if blood else 1.0)
+	r.recolor(paint)
+	if not glows.is_empty():
+		r.glow(glows, 2.2 if blood else 1.0)
+	r.move("Crawl" if type == "crawler" else "Idle", 0.0 if type == "crawler" else 1.0)
+	return r
 
 
 ## A crawler: the upper body lying flat, dragging itself on its arms.
@@ -360,12 +423,15 @@ func _spacing() -> Vector3:
 	return push
 
 
-func _animate(_delta: float) -> void:
+func _animate(delta: float) -> void:
 	var rv := get_real_velocity()
-	_pose(Vector2(rv.x, rv.z).length())
+	_pose(Vector2(rv.x, rv.z).length(), delta)
 
 
-func _pose(spd: float) -> void:
+func _pose(spd: float, delta: float) -> void:
+	if rig != null:
+		_pose_rig(spd, delta)
+		return
 	var mv := minf(1.0, spd)
 	var lift := sin(attack_anim * PI) * 0.9
 	if type == "crawler":
@@ -384,18 +450,56 @@ func _pose(spd: float) -> void:
 	model.rotation.x = 0.2 * mv if type == "runner" else 0.0
 
 
-## Dying (client view): a crawler rolls onto its side; the others fall flat, arms going limp.
+## The model's animation for how fast it goes: idle, walk or run (a crawler always crawls), each
+## played faster or slower to match the ground speed; attacks and screams play once over it.
+func _pose_rig(spd: float, delta: float) -> void:
+	_spd = lerpf(_spd, spd, minf(1.0, delta * 8.0))
+	var parts: Dictionary = PARTS[LOOKS[type]["file"]]
+	var sc: float = LOOKS[type]["scale"]
+	if attack_anim > _last_attack and type != "crawler":
+		rig.play_once("Idle_Attack" if type == "spitter" else "Punch", 1.8 if type == "spitter" else 1.3)
+	elif scream_anim > _last_scream:
+		rig.play_once("Idle_Attack", 1.0)
+	_last_attack = attack_anim
+	_last_scream = scream_anim
+	if type == "crawler":
+		rig.move("Crawl", clampf(_spd / (0.5 * sc), 0.0, 2.6))
+	elif _spd < 0.2:
+		rig.move("Idle")
+	elif _spd < 1.9:
+		rig.move("Walk", clampf(_spd / (parts["walk"] * sc), 0.6, 1.9))
+	else:
+		rig.move("Run", clampf(_spd / (parts["run"] * sc), 0.65, 1.6))
+	rig.tick(delta)
+
+
+## Dying (client view): the model plays its death animation (a crawler rolls onto its side); box
+## models fall flat, arms going limp.
+func _start_death() -> void:
+	super()
+	if rig != null:
+		if type == "crawler":
+			rig.move("Crawl", 0.0)
+		else:
+			rig.play_once("Death", 1.0, 0.1)
+
+
 func _death_tilt() -> Vector3:
 	if type == "crawler":
 		return Vector3(0.0, 0.0, PI * 0.45 * (1.0 if net_id % 2 == 0 else -1.0))
+	if rig != null:
+		return Vector3.ZERO
 	return super()
 
 
 func _death_lift() -> float:
+	if rig != null and type != "crawler":
+		return 0.0
 	return {"brute": 0.26, "crawler": 0.12}.get(type, 0.18)
 
 
-func _death_pose(_t: float) -> void:
+func _death_pose(t: float, delta: float) -> void:
+	super(t, delta)
 	if arm_l == null or type == "crawler":
 		return
 	arm_l.rotation.x = lerpf(arm_l.rotation.x, -0.25, 0.12)
@@ -455,4 +559,4 @@ func _view_animate(delta: float, spd: float, rising: int) -> void:
 		groan_t = randf_range(5.0, 12.0)
 		voice.pitch_scale = randf_range(0.8, 1.15) * (0.85 if blood else 1.0) * (0.7 if type == "brute" else 1.0)
 		voice.play()
-	_pose(spd)
+	_pose(spd, delta)

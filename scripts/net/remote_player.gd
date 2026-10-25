@@ -1,8 +1,16 @@
 extends Node3D
-## Another player as seen on this PC: a blocky figure with a name tag, drawn where NetClient's
-## snapshot history says they were 100 ms ago.
+## Another player as seen on this PC: a survivor (Quaternius' Zombie Apocalypse Kit, CC0; picked
+## by player id, the blocky figure if the model isn't there) with a name tag, drawn where
+## NetClient's snapshot history says they were 100 ms ago.
+
+const SURVIVORS := ["Matt", "Lis", "Sam", "Shaun"]
+## The survivors' walk and run cycles: ground speed (m/s) at normal rate, at the size used here.
+const SCALE := 1.25
+const WALK_SPEED := 1.55
+const RUN_SPEED := 4.1
 
 var net_id := 0
+var rig: Rig
 var model: Node3D
 var head: Node3D
 var leg_l: Node3D
@@ -17,6 +25,8 @@ var held_mat: StandardMaterial3D
 var held_id := 0
 var _swing := 0.0
 var _anim := 0.0
+var _spd := 0.0
+var _dead := false
 var _last_pos := Vector3.INF
 ## The drawn ground's height under the feet (game.gd), so the figure stands on what we see.
 var ground_target := 0.0
@@ -27,41 +37,43 @@ var snap_y := INF
 func _ready() -> void:
 	model = Node3D.new()
 	add_child(model)
-	# Colours vary per player so friends are easy to tell apart.
-	var rng := RandomNumberGenerator.new()
-	rng.seed = net_id * 7919
-	var shirt := Color.from_hsv(rng.randf(), 0.55, 0.75)
-	var skin := Color8(232, 190, 150).lerp(Color8(120, 80, 55), rng.randf())
-	var pants := Color8(50, 58, 82)
-	head = _pivot(model, Vector3(0, 1.42, 0))
-	_box(head, Vector3(0.48, 0.48, 0.48), Vector3(0, 0.22, 0), skin)
-	_box(head, Vector3(0.1, 0.06, 0.02), Vector3(-0.11, 0.26, 0.245), Color8(30, 30, 40))
-	_box(head, Vector3(0.1, 0.06, 0.02), Vector3(0.11, 0.26, 0.245), Color8(30, 30, 40))
-	_box(model, Vector3(0.5, 0.72, 0.28), Vector3(0, 1.04, 0), shirt)
-	leg_l = _pivot(model, Vector3(-0.125, 0.68, 0))
-	leg_r = _pivot(model, Vector3(0.125, 0.68, 0))
-	_box(leg_l, Vector3(0.24, 0.68, 0.26), Vector3(0, -0.34, 0), pants)
-	_box(leg_r, Vector3(0.24, 0.68, 0.26), Vector3(0, -0.34, 0), pants)
-	# The figure faces +Z, so its right hand is on the -X side.
-	arm_l = _pivot(model, Vector3(0.37, 1.36, 0))
-	arm_r = _pivot(model, Vector3(-0.37, 1.36, 0))
-	_box(arm_l, Vector3(0.22, 0.7, 0.22), Vector3(0, -0.33, 0), shirt.darkened(0.15))
-	_box(arm_r, Vector3(0.22, 0.7, 0.22), Vector3(0, -0.33, 0), shirt.darkened(0.15))
-	held = _pivot(arm_r, Vector3(0, -0.64, 0.14))  # in the hand, a little in front of it
+	var path := "res://assets/models/survivors/Characters_%s_SingleWeapon.gltf" % SURVIVORS[net_id % SURVIVORS.size()]
+	rig = Rig.make(path, Vector3.ONE * SCALE, ["Slash"])
+	var icon_parent: Node3D
+	if rig != null:
+		model.add_child(rig)
+		rig.move("Idle")
+		head = _pivot(model, Vector3(0, 1.42, 0))  # (only carries the flashlight)
+		# What they hold goes where the model's own weapon was (hidden), along its handle.
+		held = Node3D.new()
+		var grips := rig.strip_props()
+		if grips.is_empty():
+			model.add_child(held)
+		else:
+			grips[0].add_child(held)
+			held.transform = (grips[0].get_child(0) as Node3D).transform
+		icon_parent = _pivot(held, Vector3(0, 0, 0.2))
+		icon_parent.rotation.x = PI * 0.5
+	else:
+		_build_boxes()
+		held = _pivot(arm_r, Vector3(0, -0.64, 0.14))  # in the hand, a little in front of it
+		held.rotation.x = 0.5  # the top leans forward, like a tool in hand
+		icon_parent = held
+	# Two crossed icons, so it reads from every side.
 	held_mat = StandardMaterial3D.new()
 	held_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	held_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	held_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	held_mat.roughness = 1.0
+	var size := 0.4 if rig != null else 0.5
 	for turn in [0.0, PI * 0.5]:
 		var mi := MeshInstance3D.new()
 		var q := QuadMesh.new()
-		q.size = Vector2(0.5, 0.5)
+		q.size = Vector2(size, size)
 		mi.mesh = q
 		mi.material_override = held_mat
 		mi.rotation.y = turn
-		held.add_child(mi)
-	held.rotation.x = 0.5  # the top leans forward, like a tool in hand
+		icon_parent.add_child(mi)
 	held.visible = false
 	label = Label3D.new()
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -81,6 +93,30 @@ func _ready() -> void:
 	light.position = Vector3(0.2, 0.25, -0.2)
 	head.add_child(light)
 	light.rotation.y = PI
+
+
+## The blocky figure (when the survivor models aren't there). Colours vary per player so friends
+## are easy to tell apart.
+func _build_boxes() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = net_id * 7919
+	var shirt := Color.from_hsv(rng.randf(), 0.55, 0.75)
+	var skin := Color8(232, 190, 150).lerp(Color8(120, 80, 55), rng.randf())
+	var pants := Color8(50, 58, 82)
+	head = _pivot(model, Vector3(0, 1.42, 0))
+	_box(head, Vector3(0.48, 0.48, 0.48), Vector3(0, 0.22, 0), skin)
+	_box(head, Vector3(0.1, 0.06, 0.02), Vector3(-0.11, 0.26, 0.245), Color8(30, 30, 40))
+	_box(head, Vector3(0.1, 0.06, 0.02), Vector3(0.11, 0.26, 0.245), Color8(30, 30, 40))
+	_box(model, Vector3(0.5, 0.72, 0.28), Vector3(0, 1.04, 0), shirt)
+	leg_l = _pivot(model, Vector3(-0.125, 0.68, 0))
+	leg_r = _pivot(model, Vector3(0.125, 0.68, 0))
+	_box(leg_l, Vector3(0.24, 0.68, 0.26), Vector3(0, -0.34, 0), pants)
+	_box(leg_r, Vector3(0.24, 0.68, 0.26), Vector3(0, -0.34, 0), pants)
+	# The figure faces +Z, so its right hand is on the -X side.
+	arm_l = _pivot(model, Vector3(0.37, 1.36, 0))
+	arm_r = _pivot(model, Vector3(-0.37, 1.36, 0))
+	_box(arm_l, Vector3(0.22, 0.7, 0.22), Vector3(0, -0.33, 0), shirt.darkened(0.15))
+	_box(arm_r, Vector3(0.22, 0.7, 0.22), Vector3(0, -0.33, 0), shirt.darkened(0.15))
 
 
 func _box(parent: Node3D, size: Vector3, pos: Vector3, col: Color) -> void:
@@ -113,27 +149,32 @@ func _process(delta: float) -> void:
 	var away: bool = (int(s["flags"]) & Proto.F_AWAY) != 0
 	label.text = o["name"] + (" (away)" if away else "")
 	label.modulate = Color(1, 1, 1, 0.55) if away else Color(1, 1, 1)
-	var pos: Vector3 = s["pos"]
+	show_state(s["pos"], s["yaw"], s["pitch"], s["flags"], o.get("held", 0), delta)
+
+
+## Stand, turn and move the figure as a snapshot says (lineup.gd calls this directly).
+func show_state(pos: Vector3, yaw: float, pitch: float, flags: int, hid: int, delta: float) -> void:
 	global_position = pos
 	ground_off = move_toward(ground_off, ground_target, delta * 2.5)
 	model.position.y = ground_off
 	# The player's camera yaw points down -Z; the model faces +Z, so turn it around.
-	model.rotation.y = s["yaw"] + PI
-	head.rotation.x = -s["pitch"]
-	var flags: int = s["flags"]
+	model.rotation.y = yaw + PI
+	head.rotation.x = -pitch
 	light.visible = (flags & Proto.F_FLASHLIGHT) != 0
-	var hid: int = o.get("held", 0)
 	if hid != held_id:
 		held_id = hid
 		held.visible = hid > 0 and G.tex != null
 		if held.visible:
 			held_mat.albedo_texture = G.tex.icon(hid)
 	var dead := (flags & Proto.F_DEAD) != 0
-	model.rotation.x = lerpf(model.rotation.x, -PI * 0.5 if dead else 0.0, minf(1.0, delta * 6.0))
 	var speed := 0.0
 	if _last_pos != Vector3.INF and delta > 0.0:
 		speed = Vector2(pos.x - _last_pos.x, pos.z - _last_pos.z).length() / delta
 	_last_pos = pos
+	if rig != null:
+		_animate_rig(speed, flags, dead, delta)
+		return
+	model.rotation.x = lerpf(model.rotation.x, -PI * 0.5 if dead else 0.0, minf(1.0, delta * 6.0))
 	_anim += delta * speed * 2.6
 	var mv := minf(1.0, speed / 3.0)
 	leg_l.rotation.x = sin(_anim) * 0.7 * mv
@@ -146,3 +187,22 @@ func _process(delta: float) -> void:
 	else:
 		_swing = 0.0
 		arm_r.rotation.x = sin(_anim) * 0.5 * mv
+
+
+## The survivor's animations: dying, chopping (mining or hitting), or idle, walk and run played
+## at the rate that matches their speed.
+func _animate_rig(speed: float, flags: int, dead: bool, delta: float) -> void:
+	_spd = lerpf(_spd, speed, minf(1.0, delta * 8.0))
+	if dead:
+		if not _dead:
+			rig.play_once("Death")
+	elif (flags & Proto.F_SWING) != 0:
+		rig.move("Slash", 1.5)
+	elif _spd < 0.3:
+		rig.move("Idle")
+	elif _spd < 2.6:
+		rig.move("Walk", clampf(_spd / WALK_SPEED, 0.6, 1.7))
+	else:
+		rig.move("Run", clampf(_spd / RUN_SPEED, 0.7, 1.8))
+	_dead = dead
+	rig.tick(delta)

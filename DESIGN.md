@@ -100,7 +100,8 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 - Forward+ renderer with a Graphics quality setting (Low/Medium/High/Ultra).
 - The natural ground is drawn smooth and rounded; built blocks stay cubes with softened edges. **Collision stays whole blocks**: tunnels, doorways, mining, zombies and the server work exactly as before. The player steps up 1-block ledges by itself.
 - Caves and roofed rooms are dark (only torches and the flashlight light them).
-- **0.11.0 (Marcus: "real zombie/trees/animals/leaves and clouds textures"):** photo textures (free CC0 packs from ambientCG) for the ground and built blocks, round bark trunks, leafy swaying leaves, nicer clouds. Trees stay blocks you can chop. Real zombie, survivor and animal models come next (Quaternius CC0 packs).
+- **0.11.0 (Marcus: "real zombie/trees/animals/leaves and clouds textures"):** photo textures (free CC0 packs from ambientCG) for the ground and built blocks, round bark trunks, leafy swaying leaves, nicer clouds. Trees stay blocks you can chop.
+- **0.12.0 (the rest of that request):** real animated models (Quaternius CC0 packs, which Marcus put on a GitHub pre-release because their Google Drive refused downloads from the cloud): zombies (each type its own look: one of three models, skin colours, size and animations; Blood Moon zombies redder with red glowing eyes), survivors for the other players (four, picked per player, holding the item they have), and a boar made from the pig model (brown, with tusks).
 - **0.10.1 (after Marcus's test):** a Settings screen like other games (brightness, light in caves, FOV, view distance, shadows, effects, anti-aliasing, render scale, V-Sync, frame cap, window, FPS counter, mouse). Creatures are drawn standing on the rounded ground, and zombies and boars fall over and sink away when they die.
 - Details and steps: `docs/V-plan.md`.
 
@@ -181,6 +182,6 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
 - **M3 — Zombie rework** (plan: `docs/M3-plan.md`): proximity-only aggression on normal days (a first version is in 0.7.1), Blood Moon 120-zombie split with grouping, new zombie types, Blood Moon loot.
   - M3.1 (0.9.0): the five new types (Runner, Brute, Crawler, Screamer, Spitter), mixed into nights and Blood Moons by day. Hordes run one region per core; spacing uses a spatial hash; one big horde can be split across cores (multi-core plan steps 3–4).
   - Paused after M3.1 for the graphics overhaul (below); M3.2–M3.4 come after it.
-- **V — Graphics overhaul** (plan: `docs/V-plan.md`): V1 renderer and lighting, V2 smooth terrain and rounded models (0.10.0), V3 CC0 textures, V4 CC0 models (V3/V4 wait for the asset sites to be allowed in the cloud environment).
+- **V — Graphics overhaul** (plan: `docs/V-plan.md`): V1 renderer and lighting, V2 smooth terrain and rounded models (0.10.0), V3 CC0 textures (0.11.0), V4 CC0 animated models (0.12.0).
 - **M4 — Exploration & loot**: distance-based danger scaling, ruins/POIs, chests, loot tables with rarity, 3-day refill, doors with locks/PIN.
 - **M5 — Smarter zombies**: pathfinding toward the weakest part of a base.
