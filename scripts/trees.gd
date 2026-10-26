@@ -16,14 +16,6 @@ const PINES := 5
 const DIR := "res://assets/models/nature/"
 
 static var _meshes := {}
-static var _gens := {}
-
-
-## The world generator for a seed (made once; main thread).
-static func gen_for(seed_v: int) -> WorldGen:
-	if not _gens.has(seed_v):
-		_gens[seed_v] = WorldGen.new(seed_v)
-	return _gens[seed_v]
 
 
 ## The tree growing on column (tx, tz), as world_gen.gd makes it ({} if none): root (its lowest
@@ -33,7 +25,7 @@ static func at(gen: WorldGen, tx: int, tz: int) -> Dictionary:
 	if not gen.tree_at(tx, tz):
 		return {}
 	var th := gen.height_at(tx, tz)
-	if th > WorldGen.H - 14:
+	if th > gen.tree_max_ground():
 		return {}
 	var trunk := 4 + gen.hash2(tz, tx) % 3
 	var h := gen.hash2(tx * 7 + 3, tz * 13 - 5)

@@ -4,7 +4,7 @@ extends RefCounted
 
 const TS := 16
 const COLS := 8
-const NUM_TILES := 48
+const NUM_TILES := 51
 
 var atlas_img: Image
 var atlas: ImageTexture
@@ -457,6 +457,19 @@ func _paint(t: int) -> void:
 				for y in range(2, 5):
 					for x in range(7, 9):
 						_px(t, x, y, _c(200, 176, 80))
+		48:  # snow (M4.7)
+			_fill(t, r, _c(236, 241, 250), 0.02, _c(214, 224, 240), 0.12)
+		49:  # crystal ore
+			_stone(t, r)
+			_ore(t, r, _c(120, 150, 255))
+		50:  # crystal lamp: an iron cage round a glowing crystal
+			for y in TS:
+				for x in TS:
+					var c := Color(0, 0, 0, 0)
+					if x >= 4 and x <= 11 and y >= 3 and y <= 14:
+						c = _c(150, 200, 255) if x >= 6 and x <= 9 and y >= 5 and y <= 12 else _c(70, 70, 76)
+					if c.a > 0.0:
+						_px(t, x, y, _var(r, c, 0.04))
 
 
 func _cobble(t: int, r: RandomNumberGenerator, lo: float, hi: float) -> void:
@@ -741,7 +754,7 @@ func _terrain() -> void:
 	var spotv := _noise(19, FastNoiseLite.TYPE_CELLULAR, 0.03, 1, FastNoiseLite.RETURN_CELL_VALUE)
 	var albs: Array[Image] = []
 	var nrms: Array[Image] = []
-	for layer in 7:
+	for layer in SmoothMesher.LAYERS:
 		var rgba := PackedByteArray()
 		rgba.resize(N * 4)
 		var hgt := PackedByteArray()
@@ -764,7 +777,10 @@ func _terrain() -> void:
 					h = clampf(fb * 0.5 + f * 0.2 + stone * 0.5, 0.0, 1.0)
 					col = Color(0.24, 0.16, 0.1).lerp(Color(0.42, 0.3, 0.19), fb * 0.7 + f * 0.3)
 					col = col.lerp(Color(0.42, 0.38, 0.33).lerp(Color(0.3, 0.27, 0.24), cellv[i] / 255.0), stone)
-				2, 4, 5, 6:  # rock (and the ores and bedrock in it)
+				7:  # snow (M4.7): soft drifts, white with blue shadows
+					h = clampf(fb * 0.7 + f * 0.3, 0.0, 1.0)
+					col = Color(0.78, 0.82, 0.9).lerp(Color(0.95, 0.96, 0.99), h)
+				2, 4, 5, 6, 8:  # rock (and the ores and bedrock in it; 8 the crystal ore, M4.7)
 					var cr := smoothstep(0.0, 0.12, cracks[i] / 255.0)
 					h = clampf(fb * 0.7 + f * 0.15 + cr * 0.25 - (1.0 - cr) * 0.3, 0.0, 1.0)
 					var lo := Color(0.3, 0.3, 0.31)
@@ -774,11 +790,12 @@ func _terrain() -> void:
 						hi = Color(0.3, 0.3, 0.32)
 					col = lo.lerp(hi, fb * 0.75 + f * 0.25)
 					col = col.lerp(col * 0.45, 1.0 - cr)
-					if layer == 4 or layer == 5:
+					if layer == 4 or layer == 5 or layer == 8:
 						var sp := spots[i] / 255.0
 						var on := (1.0 - smoothstep(0.22, 0.36, sp)) * float(spotv[i] > 70)
 						var ore := Color(0.06, 0.06, 0.07).lerp(Color(0.16, 0.16, 0.18), f) if layer == 4 \
-							else Color(0.62, 0.4, 0.24).lerp(Color(0.85, 0.62, 0.42), f)
+							else (Color(0.62, 0.4, 0.24).lerp(Color(0.85, 0.62, 0.42), f) if layer == 5 \
+							else Color(0.35, 0.25, 0.8).lerp(Color(0.5, 0.72, 1.0), f))
 						col = col.lerp(ore, on)
 						h = lerpf(h, 0.85 + f * 0.15, on)
 				3:  # sand: fine grains and wind ripples
@@ -799,7 +816,7 @@ func _terrain() -> void:
 		albs.append(a)
 		var nm := Image.create_from_data(TERRAIN_PX, TERRAIN_PX, false, Image.FORMAT_L8, hgt)
 		nm.convert(Image.FORMAT_RGBA8)
-		nm.bump_map_to_normal_map([3.0, 4.0, 5.0, 2.5, 5.0, 5.0, 6.0][layer])
+		nm.bump_map_to_normal_map([3.0, 4.0, 5.0, 2.5, 5.0, 5.0, 6.0, 1.5, 5.0][layer])
 		for j in N:  # the height map goes into blue, as in the photo textures
 			@warning_ignore("integer_division")
 			var py := j / TERRAIN_PX

@@ -47,12 +47,15 @@ var beacons: Array = []
 var trees: Array = []
 ## Decor rooted in this chunk (M4.6): [Decor model, transform in the chunk].
 var decor: Array = []
-## The smooth ground (SmoothMesher): material weights in the colour and uv/uv2, sky in uv2.y.
+## The smooth ground (SmoothMesher): material weights in the colour, uv, uv2.x and custom0, sky
+## in uv2.y.
 var t_verts := PackedVector3Array()
 var t_norms := PackedVector3Array()
 var t_cols := PackedColorArray()
 var t_uv := PackedVector2Array()
 var t_uv2 := PackedVector2Array()
+## Snow and crystal weights (M4.7): 4 floats per vertex (ARRAY_CUSTOM0, RGBA float).
+var t_custom := PackedFloat32Array()
 var t_idx := PackedInt32Array()
 
 static func face_uv(dir: int, c: Vector3) -> Vector2:

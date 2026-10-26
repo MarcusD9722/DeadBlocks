@@ -4,7 +4,7 @@ extends RefCounted
 ## Every message is one type byte followed by little-endian fields (StreamPeerBuffer).
 ## Bump PROTOCOL whenever a layout changes; client and server must match exactly.
 
-const PROTOCOL := 13
+const PROTOCOL := 14
 const DEFAULT_PORT := 24650
 const MAX_PLAYERS := 8
 ## ENet channels: 0 reliable control messages, 1 unreliable snapshots and movement,
@@ -144,7 +144,7 @@ const MAX_CHAT := 200
 ## so an edit can never be applied twice or on top of newer data.
 const SUB_RADIUS := 9      # chunks around the player the server subscribes
 const UNSUB_RADIUS := 11   # ...and unsubscribes beyond this
-const CHUNK_BYTES := 16384 # 16 x 16 x 64 blocks
+const CHUNK_BYTES := 16 * 16 * WorldGen.H  # (128 tall since M4.7, protocol 14)
 ## Reach the server allows for breaking and placing (the player's is 5 m; slack for lag).
 const REACH := 6.5
 const MOB_REACH := 4.7     # hitting a mob (the player's is 3.2 m)
@@ -207,8 +207,8 @@ static func xor_bytes(a: PackedByteArray, b: PackedByteArray) -> PackedByteArray
 	return out
 
 
-static func terrain_hash(seed_v: int) -> PackedByteArray:
-	var g := WorldGen.new(seed_v)
+static func terrain_hash(seed_v: int, version := WorldGen.VERSION) -> PackedByteArray:
+	var g := WorldGen.new(seed_v, version)
 	var ctx := HashingContext.new()
 	ctx.start(HashingContext.HASH_SHA256)
 	for c in TERRAIN_CHUNKS:

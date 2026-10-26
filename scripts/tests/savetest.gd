@@ -40,13 +40,13 @@ static func run() -> void:
 	var chunks := []
 	for k in [Vector2i(-3, 7), Vector2i(12, -1), Vector2i(0, 0)]:
 		var d := PackedByteArray()
-		d.resize(16384)
+		d.resize(SaveScript.CHUNK_SIZE)
 		for i in d.size():
-			d[i] = rng.randi_range(0, 3) if i % 64 < 30 else 0  # stone-ish below, air above
+			d[i] = rng.randi_range(0, 3) if i < 256 * 70 else 0  # stone-ish below, air above
 		# Block states (M4.2): a few doors' facings and upper halves.
 		var meta := {}
 		for j in 5:
-			meta[rng.randi_range(0, 16383)] = rng.randi_range(1, 7)
+			meta[rng.randi_range(0, SaveScript.CHUNK_SIZE - 1)] = rng.randi_range(1, 7)
 		chunks.append([k, d, meta])
 	var bob := _account("Bob", rng)
 	var reset := _account("Ann", rng)
@@ -132,8 +132,12 @@ static func run() -> void:
 	check(damaged.size() == 2 and s.warnings.size() == 2, "both damaged files are in damaged/ and reported (%s)" % ", ".join(damaged))
 	check(not FileAccess.file_exists(s.path("chunks").path_join("5_5.bin.tmp")), "a leftover .tmp file is removed")
 
-	# A chunk file from before M4.2 (DBC1: no block states) still loads.
-	var d1: PackedByteArray = chunks[2][1]
+	# A chunk file from before M4.2 (DBC1: no block states, 64 blocks tall) still loads, with sky
+	# above it now that chunks are 128 tall (M4.7).
+	var d1: PackedByteArray = (chunks[2][1] as PackedByteArray).slice(0, SaveScript.CHUNK_SIZE_V1)
+	var sky := PackedByteArray()
+	sky.resize(SaveScript.CHUNK_SIZE - SaveScript.CHUNK_SIZE_V1)
+	sky.fill(0)
 	var b1 := StreamPeerBuffer.new()
 	b1.put_data("DBC1".to_ascii_buffer())
 	b1.put_32(40)
@@ -144,9 +148,15 @@ static func run() -> void:
 	var f1 := s.path("chunks").path_join(SaveScript.chunk_file_name(Vector2i(40, 41)))
 	_write(f1, b1.data_array)
 	var old_chunk := SaveScript._read_chunk(f1)
-	check(old_chunk.size() == 3 and old_chunk[0] == Vector2i(40, 41) and old_chunk[1] == d1 and old_chunk[2].is_empty(),
-		"an old chunk file (no block states) loads")
+	check(old_chunk.size() == 3 and old_chunk[0] == Vector2i(40, 41) and old_chunk[1] == d1 + sky and old_chunk[2].is_empty(),
+		"an old chunk file (no block states, 64 tall) loads, 128 tall with sky above")
 	DirAccess.remove_absolute(f1)
+	# And one from 0.14-0.18 (DBC2, 64 tall, with block states).
+	var f2 := s.path("chunks").path_join(SaveScript.chunk_file_name(Vector2i(42, 43)))
+	_write(f2, SaveScript._chunk_bytes(Vector2i(42, 43), d1, {300: 5}))
+	var old2 := SaveScript._read_chunk(f2)
+	check(old2.size() == 3 and old2[1] == d1 + sky and old2[2] == {300: 5}, "a 64-tall chunk with block states loads too")
+	DirAccess.remove_absolute(f2)
 
 	# Backups hold the world.
 	var zip := s.backup("test")
@@ -185,6 +195,12 @@ static func run() -> void:
 	_write(meta_file, SaveScript._json_bytes(terrain))
 	s = _open(dir, 1)
 	check("terrain version" in s.error, "other terrain is refused (%s)" % s.error)
+	s.free()
+	# A world made before M4.7 keeps its terrain (version 1).
+	terrain["worldgen"] = 1
+	_write(meta_file, SaveScript._json_bytes(terrain))
+	s = _open(dir, 1)
+	check(s.error == "" and s.worldgen == 1, "a world from before 0.19.0 keeps its terrain (version %d)" % s.worldgen)
 	s.free()
 	_write(meta_file, good)
 

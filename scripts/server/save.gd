@@ -6,8 +6,9 @@ extends Node
 ##   worlds/<world>/players/<name>.json name, PIN hash, position, look, health, food, kills,
 ##                                      inventory, bed (M2), play time, the explored map and
 ##                                      map pins (M4.4), experience, perks and armor (M4.5)
-##   worlds/<world>/chunks/<x>_<z>.bin  edited chunks: header + SHA-256 + zstd(16 KB of blocks)
-##                                      + block states (M4.2, "DBC2"; "DBC1" files have none)
+##   worlds/<world>/chunks/<x>_<z>.bin  edited chunks: header + SHA-256 + zstd(32 KB of blocks,
+##                                      16 KB before M4.7: read as the lower half) + block states
+##                                      (M4.2, "DBC2"; "DBC1" files have none)
 ##   worlds/<world>/world.lock          refuses a second server on the same world
 ##   worlds/<world>/damaged/            files that failed their check (moved, never loaded)
 ##   backups/<world>-<date>.zip         copies of the world folder
@@ -21,7 +22,12 @@ extends Node
 ## 3 (M4.2): block states in the chunk files (DBC2), storage boxes in world.json.
 ## 4 (M4.4): allies and tribes in world.json, each player's explored map and pins.
 ## 5 (M4.5): each player's experience, perks and the armor they wear.
-const FORMAT := 5
+## 6 (M4.7): chunks 128 blocks tall; world.json's "worldgen" says which terrain the world has
+## (1: the 64-block terrain of 0.1-0.18, 2: mountains and caves; WorldGen).
+const FORMAT := 6
+## A chunk's blocks, and before M4.7 (64 tall).
+const CHUNK_SIZE := 16 * 16 * WorldGen.H
+const CHUNK_SIZE_V1 := 16384
 const CHUNK_MAGIC := "DBC2"
 const CHUNK_MAGIC_V1 := "DBC1"
 const LOCK_STALE_S := 90
@@ -34,6 +40,8 @@ var world_dir := ""
 var autosave_s := 60.0
 ## Set by open(): what the saved world says (or the new world's values).
 var seed_v := 0
+## The world's terrain generator (WorldGen version): old worlds keep theirs.
+var worldgen := WorldGen.VERSION
 var day := 1
 var time := 7.0
 ## world.json's "backpacks" and "boxes" as saved (NetServer reads them).
@@ -105,6 +113,7 @@ func _open_world(new_seed: int, new_world: bool) -> bool:
 	if not FileAccess.file_exists(path("world.json")):
 		is_new = true
 		seed_v = new_seed
+		worldgen = WorldGen.VERSION
 		day = 1
 		time = 7.0
 		return save_world_meta(day, time)
@@ -115,8 +124,9 @@ func _open_world(new_seed: int, new_world: bool) -> bool:
 	if int(meta.get("format", 0)) > FORMAT:
 		error = "This world was saved by a newer version of Dead Blocks (%s). Update the server first." % meta.get("game", "?")
 		return false
-	if int(meta.get("worldgen", 0)) != WorldGen.VERSION:
-		error = "This world was made with terrain version %d, but this server builds version %d: it would look different. Use the matching server version." % [int(meta.get("worldgen", 0)), WorldGen.VERSION]
+	worldgen = int(meta.get("worldgen", 0))
+	if worldgen < 1 or worldgen > WorldGen.VERSION:
+		error = "This world was made with terrain version %d, but this server builds versions 1 to %d: it would look different. Use the matching server version." % [worldgen, WorldGen.VERSION]
 		return false
 	seed_v = int(meta["seed"])
 	day = int(meta.get("day", 1))
@@ -130,7 +140,7 @@ func _open_world(new_seed: int, new_world: bool) -> bool:
 
 
 func save_world_meta(d: int, t: float) -> bool:
-	var meta := {"format": FORMAT, "game": G.VERSION, "worldgen": WorldGen.VERSION, "seed": seed_v,
+	var meta := {"format": FORMAT, "game": G.VERSION, "worldgen": worldgen, "seed": seed_v,
 		"day": d, "time": t, "saved": int(Time.get_unix_time_from_system())}
 	return _write_files([[path("world.json"), _json_bytes(meta)]])
 
@@ -325,7 +335,7 @@ func _run_job(job: Dictionary) -> void:
 		files.append([path("chunks").path_join(chunk_file_name(c[0])), _chunk_bytes(c[0], c[1], c[2])])
 	for key in job["players"]:
 		files.append([player_file(key), _json_bytes(job["players"][key])])
-	var meta := {"format": FORMAT, "game": G.VERSION, "worldgen": WorldGen.VERSION, "seed": seed_v,
+	var meta := {"format": FORMAT, "game": G.VERSION, "worldgen": worldgen, "seed": seed_v,
 		"day": job["day"], "time": job["time"], "saved": int(Time.get_unix_time_from_system())}
 	meta.merge(job["extra"])
 	files.append([path("world.json"), _json_bytes(meta)])
@@ -429,6 +439,7 @@ static func _chunk_bytes(k: Vector2i, data: PackedByteArray, meta: Dictionary) -
 
 
 ## [key, data, meta] from a chunk file (DBC2, or DBC1 from before M4.2), or [] if it is damaged.
+## A 64-block chunk from before M4.7 comes back 128 tall, with sky above.
 static func _read_chunk(file: String) -> Array:
 	var raw := FileAccess.get_file_as_bytes(file)
 	if raw.size() < 48:
@@ -441,12 +452,12 @@ static func _read_chunk(file: String) -> Array:
 		var k1 := Vector2i(b.get_32(), b.get_32())
 		var size1 := b.get_u32()
 		var sha1: PackedByteArray = b.get_data(32)[1]
-		if size1 != 16384:
+		if size1 != CHUNK_SIZE_V1:
 			return []
 		var data1 := raw.slice(48).decompress(size1, FileAccess.COMPRESSION_ZSTD)
 		if data1.size() != size1 or _sha(data1) != sha1:
 			return []
-		return [k1, data1, {}]
+		return [k1, _taller(data1), {}]
 	if magic != CHUNK_MAGIC or raw.size() < 56:
 		return []
 	var k := Vector2i(b.get_32(), b.get_32())
@@ -454,12 +465,13 @@ static func _read_chunk(file: String) -> Array:
 	var zlen := b.get_u32()
 	var count := b.get_u32()
 	var sha: PackedByteArray = b.get_data(32)[1]
-	if size != 16384 or 56 + zlen + count * 3 != raw.size():
+	if (size != CHUNK_SIZE and size != CHUNK_SIZE_V1) or 56 + zlen + count * 3 != raw.size():
 		return []
 	var data := raw.slice(56, 56 + zlen).decompress(size, FileAccess.COMPRESSION_ZSTD)
 	var ms := raw.slice(56 + zlen)
 	if data.size() != size or _sha(data + ms) != sha:
 		return []
+	data = _taller(data)
 	var meta := {}
 	var mb := StreamPeerBuffer.new()
 	mb.data_array = ms
@@ -467,6 +479,16 @@ static func _read_chunk(file: String) -> Array:
 		var idx := mb.get_u16()
 		meta[idx] = mb.get_u8()
 	return [k, data, meta]
+
+
+## A chunk from before M4.7 (64 blocks tall) with sky above, as tall as chunks are now.
+static func _taller(data: PackedByteArray) -> PackedByteArray:
+	if data.size() >= CHUNK_SIZE:
+		return data
+	var sky := PackedByteArray()
+	sky.resize(CHUNK_SIZE - data.size())
+	sky.fill(0)
+	return data + sky
 
 
 func _quarantine(file: String) -> void:

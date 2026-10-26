@@ -10,27 +10,42 @@ const WorldScript := preload("res://scripts/world.gd")
 const CH := 16
 
 static var _seed := 0
+static var _version := WorldGen.VERSION
 static var _trees := 0
 static var _decor := 0
 
 
-static func run(seed_v: int) -> void:
+static func run(seed_v: int, version := WorldGen.VERSION) -> void:
 	SmoothMesher.init_tables()
 	_seed = seed_v
 	var fails := 0
-	var gen := WorldGen.new(seed_v)
 	var base := {}
+	# Generated land of both terrain versions (M4.7: 1, the old 64-block one, and the newest),
+	# and of the newest a mountain, its snow and rock, and the deep ground with its caves.
+	var land := [[1, Vector2i.ZERO, "v1 land"], [version, Vector2i.ZERO, "v%d land" % version]]
+	if version >= 2:
+		land.append([version, _mountain(seed_v, version), "v%d mountain" % version])
+	for l in land:
+		_version = l[0]
+		var gen := WorldGen.new(seed_v, _version)
+		base = {}
+		for z in range(-2, 3):
+			for x in range(-2, 3):
+				base[Vector2i(x, z)] = gen.generate(l[1].x + x, l[1].y + z)
+		_trees = 0
+		_decor = 0
+		fails += _check(l[2], base, {})
+		# The natural trees are drawn as models (M4.6), their blocks left out of the picture; grass,
+		# flowers and stones stand on the drawn ground.
+		var ok: bool = (_trees > 0 and _decor > 100) or l[2].contains("mountain")
+		print("MESHTEST %s %s: %d trees drawn as models, %d plants and stones" % ["PASS" if ok else "FAIL", l[2], _trees, _decor])
+		fails += 0 if ok else 1
+	_version = version
+	base = {}
+	var gen0 := WorldGen.new(seed_v, version)
 	for z in range(-2, 3):
 		for x in range(-2, 3):
-			base[Vector2i(x, z)] = gen.generate(x, z)
-	_trees = 0
-	_decor = 0
-	fails += _check("generated land", base, {})
-	# The natural trees are drawn as models (M4.6), their blocks left out of the picture; grass,
-	# flowers and stones stand on the drawn ground.
-	var ok := _trees > 0 and _decor > 100
-	print("MESHTEST %s generated land: %d trees drawn as models, %d plants and stones" % ["PASS" if ok else "FAIL", _trees, _decor])
-	fails += 0 if ok else 1
+			base[Vector2i(x, z)] = gen0.generate(x, z)
 	# Built and natural blocks mixed at random around the surface (walls, floors, logs, tunnels).
 	var ids := [Blocks.AIR, Blocks.AIR, Blocks.AIR, Blocks.DIRT, Blocks.STONE, Blocks.GRASS, Blocks.PLANKS,
 		Blocks.COBBLE, Blocks.LOG, Blocks.STONE_BRICK, Blocks.LEAVES, Blocks.TORCH, Blocks.BED, Blocks.SAND,
@@ -49,8 +64,8 @@ static func run(seed_v: int) -> void:
 			var d: PackedByteArray = mixed[k]
 			for z in CH:
 				for x in CH:
-					var h := gen.height_at(k.x * CH + x, k.y * CH + z)
-					for y in range(maxi(1, h - 5), mini(63, h + 4)):
+					var h := gen0.height_at(k.x * CH + x, k.y * CH + z)
+					for y in range(maxi(1, h - 5), mini(WorldGen.H - 1, h + 4)):
 						if rng.randf() < 0.35:
 							var i := x + z * CH + y * CH * CH
 							d[i] = ids[rng.randi() % ids.size()]
@@ -60,11 +75,26 @@ static func run(seed_v: int) -> void:
 	print("MESHTEST DONE fails=%d" % fails)
 
 
+## A chunk on a mountain (the highest land within a few hundred blocks), relative to the origin.
+static func _mountain(seed_v: int, version: int) -> Vector2i:
+	var gen := WorldGen.new(seed_v, version)
+	var best := Vector2i.ZERO
+	var bh := 0
+	for z in range(-40, 41, 2):
+		for x in range(-40, 41, 2):
+			var h := gen.height_at(x * 16 + 8, z * 16 + 8)
+			if h > bh:
+				bh = h
+				best = Vector2i(x, z)
+	return best
+
+
 ## Meshes the 3x3 chunks in the middle of `data` (5x5) as a drawn game would, then checks the
 ## middle chunk's surface. Returns the number of failed checks.
 static func _check(what: String, data: Dictionary, metas: Dictionary) -> int:
 	var w = WorldScript.new()
 	w.seed_v = _seed
+	w.gen_version = _version
 	var edges := {}
 	var folded := 0
 	var tris := 0

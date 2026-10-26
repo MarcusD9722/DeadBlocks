@@ -8,6 +8,8 @@ var state := "loading"
 var day := 1
 var time := 7.0
 var seed_v := 0
+## Which terrain generator this game's world uses (WorldGen versions, M4.7).
+var gen_version := WorldGen.VERSION
 var kills := 0
 var horde_active := false
 ## Client: the server's clock is stopped (nobody playing, or our solo game is paused).
@@ -60,15 +62,20 @@ func _ready() -> void:
 		seed_v = int(sv)
 	if G.arg_value("--day-minutes=") != "":
 		day_minutes = maxf(0.1, float(G.arg_value("--day-minutes=")))
+	# The terrain generator: a server's world says which (save.gd); a game that joins hears it from
+	# the server; the title screen's world and the tests take the newest, or --worldgen=N.
+	if G.arg_value("--worldgen=") != "":
+		gen_version = clampi(int(G.arg_value("--worldgen=")), 1, WorldGen.VERSION)
 	if G.mode == "client":
 		seed_v = int(G.session["seed"])
 		day_minutes = float(G.session["day_minutes"])
+		gen_version = int(G.session.get("worldgen", WorldGen.VERSION))
 	G.game = self
 	if G.has_arg("--worldgen-hash") or G.has_arg("--savetest") or G.has_arg("--meshtest"):
 		if G.has_arg("--savetest"):
 			preload("res://scripts/tests/savetest.gd").run()
 		elif G.has_arg("--meshtest"):
-			preload("res://scripts/tests/meshtest.gd").run(seed_v)
+			preload("res://scripts/tests/meshtest.gd").run(seed_v, gen_version)
 		else:
 			preload("res://scripts/tests/worldgen_hash.gd").run(seed_v)
 		state = "quitting"
@@ -102,7 +109,7 @@ func _ready() -> void:
 	world.process_mode = Node.PROCESS_MODE_PAUSABLE
 	add_child(world)
 	G.world = world
-	world.setup(seed_v, G.tex)
+	world.setup(seed_v, G.tex, gen_version)
 
 	mobs = Node3D.new()
 	mobs.name = "Mobs"
@@ -187,6 +194,7 @@ func _ready_server() -> void:
 		get_tree().quit(1)
 		return
 	seed_v = saver.seed_v
+	gen_version = saver.worldgen
 	day = saver.day
 	time = saver.time
 	was_night = is_night()
@@ -194,7 +202,7 @@ func _ready_server() -> void:
 	world.name = "World"
 	add_child(world)
 	G.world = world
-	world.setup(seed_v, null)
+	world.setup(seed_v, null, gen_version)
 	var saved_chunks: Array = saver.load_chunks()
 	for c in saved_chunks:
 		world.preload_chunk(c[0], c[1], c[2])
@@ -235,21 +243,15 @@ func _setup_env() -> void:
 
 
 func _find_spawn() -> Vector3:
-	var g := WorldGen.new(seed_v)
+	var g := WorldGen.new(seed_v, gen_version)
 	for r in range(0, 400, 3):
 		for k in 16:
 			var a := k * TAU / 16.0
 			var x := int(round(cos(a) * r))
 			var z := int(round(sin(a) * r))
-			if g.biome_at(x, z) == 2:
-				continue
-			var h := g.height_at(x, z)
-			if h > 42:
-				continue
-			if g.tree_near(x, z):
-				continue
-			return Vector3(x + 0.5, h + 1.02, z + 0.5)
-	return Vector3(0.5, 60, 0.5)
+			if g.spawn_ok(x, z):
+				return Vector3(x + 0.5, g.height_at(x, z) + 1.02, z + 0.5)
+	return Vector3(0.5, g.height_at(0, 0) + 2, 0.5)
 
 
 # ------------------------------------------------------------ main loop
@@ -882,7 +884,6 @@ static func zombie_type(mood: String, d: int, roll: float) -> String:
 	return "walker"
 
 
-## Admins' /spawn: a mob 8-14 m from a player. A zombie type comes in tonight's mood.
 ## A natural tree comes down (M4.6): ours as we fell it, someone else's from S_TREE. Shown once
 ## per tree (we already show the one we felled when the server tells everyone).
 var _falling := {}
@@ -896,7 +897,7 @@ func tree_falls(root: Vector3i, yaw: float) -> void:
 	_falling[root] = now
 	if G.player != null and G.player.global_position.distance_to(Vector3(root)) > 120.0:
 		return
-	var t := Trees.at(Trees.gen_for(G.world.seed_v), root.x, root.z)
+	var t := Trees.at(G.world.gen(), root.x, root.z)
 	if t.is_empty() or t["root"] != root:
 		return
 	var f := Trees.Falling.new()
@@ -904,6 +905,7 @@ func tree_falls(root: Vector3i, yaw: float) -> void:
 	f.setup(t, yaw, G.sfx)
 
 
+## Admins' /spawn: a mob 8-14 m from a player. A zombie type comes in tonight's mood.
 func spawn_near(what: String, pos: Vector3) -> Node:
 	if what == "boar":
 		return _spawn_animal(pos, 8.0, 14.0)

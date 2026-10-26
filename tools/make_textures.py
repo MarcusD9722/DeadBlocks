@@ -2,13 +2,16 @@
 """Builds the game's texture files in assets/textures/ from CC0 ambientCG materials.
 
 Usage: python3 tools/make_textures.py SOURCE_DIR
+   or: python3 tools/make_textures.py --add-m47-layers   (adds snow and crystal ore to the
+       7-layer terrain strips already in assets/textures)
 SOURCE_DIR holds the unzipped 1K-JPG downloads, one folder per material, e.g.
 SOURCE_DIR/Grass004/Grass004_1K-JPG_Color.jpg (download https://ambientcg.com/get?file=Grass004_1K-JPG.zip).
 The materials used are listed in assets/CREDITS.md.
 
 Outputs (strips of square layers, imported by Godot as Texture2DArrays; see the .import files):
-  terrain_albedo.jpg / terrain_normal.jpg   7 layers of 1024 px: grass, dirt, stone, sand,
-                                            coal ore, iron ore, bedrock (SmoothMesher's layers)
+  terrain_albedo.jpg / terrain_normal.jpg   9 layers of 1024 px: grass, dirt, stone, sand,
+                                            coal ore, iron ore, bedrock, snow and crystal ore
+                                            (SmoothMesher's layers; the last two made here, M4.7)
   blocks_albedo.jpg / blocks_normal.jpg     the built blocks, 512 px (tex.gd BLOCK_LAYERS)
   leaves_albedo.png / leaves_normal.jpg     a tile of leaves with see-through gaps, 512 px
 Normal maps are OpenGL style (green up) with the height map in the blue channel (the shaders
@@ -84,6 +87,92 @@ def ore(stone_alb, stone_nrm, col, seed):
     nrm[:, :, :2] = stone_nrm[:, :, :2] * (1 - w) + bump[:, :, :2] * w
     nrm[:, :, 2] = h
     return alb, nrm
+
+
+def tile_noise(size, scale, rng):
+    """Tileable smooth noise (0-1): white noise blurred through the FFT, `scale` px wide."""
+    w = rng.standard_normal((size, size))
+    fy = np.fft.fftfreq(size)[:, None]
+    fx = np.fft.fftfreq(size)[None, :]
+    g = np.exp(-(fx * fx + fy * fy) * (scale * scale) * 2.0)
+    n = np.real(np.fft.ifft2(np.fft.fft2(w) * g))
+    n -= n.min()
+    return n / max(n.max(), 1e-6)
+
+
+def snow(size, rng):
+    """Fresh snow (M4.7): soft drifts, faint wind ripples and glints, white with blue shadows."""
+    big = tile_noise(size, size * 0.08, rng)
+    mid = tile_noise(size, size * 0.02, rng)
+    fine = tile_noise(size, size * 0.004, rng)
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32) / size
+    ripple = 0.5 + 0.5 * np.sin((xx * 9 + yy * 4 + big * 1.5) * 2 * math.pi)
+    h = np.clip(big * 0.55 + mid * 0.3 + fine * 0.1 + ripple * 0.05, 0, 1)
+    shade = 0.86 + 0.14 * h
+    alb = np.stack([shade * 0.9, shade * 0.93, shade * 0.98], axis=2)
+    glints = (fine > 0.93).astype(np.float32) * (mid > 0.5)
+    alb = np.clip(alb + glints[:, :, None] * 0.08, 0, 1)
+    return alb, height_to_normal(h, 2.2)
+
+
+def crystal_ore(stone_alb, stone_nrm, seed):
+    """Crystal ore (M4.7): stone with clusters of blue-violet crystal, bright at their edges."""
+    size = stone_alb.shape[0]
+    rng = np.random.default_rng(seed)
+    # Clusters of pointed shards (thin diamonds) fanning out from a point.
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    m = np.zeros((size, size), np.float32)
+    facets = np.zeros((size, size), np.float32)
+    for _ in range(22):
+        cx, cy = rng.uniform(0, size, 2)
+        base = rng.uniform(0, 2 * math.pi)
+        for k in range(rng.integers(4, 8)):
+            a = base + rng.normal(0, 0.8)
+            ln = rng.uniform(size * 0.035, size * 0.085)
+            wd = ln * rng.uniform(0.18, 0.3)
+            ox, oy = math.cos(a) * ln * 0.5, math.sin(a) * ln * 0.5
+            dx = (xx - (cx + ox)) % size
+            dy = (yy - (cy + oy)) % size
+            dx = np.where(dx > size / 2, dx - size, dx)
+            dy = np.where(dy > size / 2, dy - size, dy)
+            u = dx * math.cos(a) + dy * math.sin(a)
+            v = -dx * math.sin(a) + dy * math.cos(a)
+            d = np.abs(u) / (ln * 0.5) + np.abs(v) / wd
+            inside = np.clip((1.0 - d) * 6.0, 0, 1)
+            m = np.maximum(m, inside)
+            # One face of each shard lit, the other darker.
+            facets = np.where(inside > 0, np.where(v > 0, 0.95, 0.45) * (1.0 - 0.4 * np.abs(u) / (ln * 0.5)), facets)
+    col = np.array([0.42, 0.62, 1.0], np.float32)
+    deep = np.array([0.36, 0.2, 0.75], np.float32)
+    mix = np.clip(facets, 0, 1)[:, :, None]
+    crystal = (col * mix + deep * (1 - mix)) * (0.7 + 0.5 * m[:, :, None])
+    w = m[:, :, None]
+    alb = np.clip(stone_alb * 0.8 * (1 - w) + crystal * w, 0, 1)
+    h = np.clip(stone_nrm[:, :, 2] * (1 - m) + (0.6 + facets * 0.4) * m, 0, 1)
+    bump = height_to_normal(m * 0.7 + facets * m * 0.3, 4.0)
+    nrm = stone_nrm.copy()
+    nrm[:, :, :2] = stone_nrm[:, :, :2] * (1 - w) + bump[:, :, :2] * w
+    nrm[:, :, 2] = h
+    return alb, nrm
+
+
+def add_m47_layers():
+    """Make the snow and crystal ore layers and add them to the existing 7-layer terrain strips
+    (when the ambientCG downloads aren't at hand)."""
+    T = 1024
+    alb = np.asarray(Image.open(os.path.join(OUT, "terrain_albedo.jpg")).convert("RGB")).astype(np.float32) / 255.0
+    nrm = np.asarray(Image.open(os.path.join(OUT, "terrain_normal.jpg")).convert("RGB")).astype(np.float32) / 255.0
+    n = alb.shape[1] // T
+    if n != 7:
+        print("terrain strips have %d layers already" % n)
+        return
+    albs = [alb[:, i * T:(i + 1) * T] for i in range(n)]
+    nrms = [nrm[:, i * T:(i + 1) * T] for i in range(n)]
+    rng = np.random.default_rng(4747)
+    sn = snow(T, rng)
+    cr = crystal_ore(albs[2], nrms[2], 13)
+    save_strip(albs + [sn[0], cr[0]], "terrain_albedo.jpg", 90)
+    save_strip(nrms + [sn[1], cr[1]], "terrain_normal.jpg", 88)
 
 
 def frame(alb, nrm, width, dark):
@@ -240,7 +329,8 @@ def main():
     bedrock = material("Rock035", T)
     coal = ore(stone[0], stone[1], (0.06, 0.06, 0.065), 11)
     iron = ore(stone[0], stone[1], (0.74, 0.48, 0.3), 12)
-    terrain = [grass, dirt, stone, sand, coal, iron, (bedrock[0] * 0.75, bedrock[1])]
+    terrain = [grass, dirt, stone, sand, coal, iron, (bedrock[0] * 0.75, bedrock[1]),
+        snow(T, np.random.default_rng(4747)), crystal_ore(stone[0], stone[1], 13)]
     save_strip([t[0] for t in terrain], "terrain_albedo.jpg", 90)
     save_strip([t[1] for t in terrain], "terrain_normal.jpg", 88)
     # Built blocks (order = tex.gd BLOCK_LAYERS).
@@ -328,4 +418,7 @@ def main():
     print("wrote leaves")
 
 
-main()
+if len(sys.argv) > 1 and sys.argv[1] == "--add-m47-layers":
+    add_m47_layers()
+else:
+    main()

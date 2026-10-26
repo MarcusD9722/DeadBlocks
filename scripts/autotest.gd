@@ -85,7 +85,7 @@ func _play() -> void:
 			await get_tree().process_frame
 			p._update_target()
 			var tree: Dictionary = p.target_tree
-			var cells := Trees.cells(Trees.gen_for(w.seed_v), tree) if not tree.is_empty() else []
+			var cells := Trees.cells(w.gen(), tree) if not tree.is_empty() else []
 			check(cells.any(func(c): return c[0] == p.target.get("pos")), "we look at a tree (%s)" % [tree])
 			if not tree.is_empty():
 				check(Trees.fell_time(tree, 0) > Rules.break_time(Blocks.LOG, 0) and int(tree["trunk"]) >= 4,
@@ -194,7 +194,20 @@ func _play() -> void:
 	if stone_p.y < -900:
 		# Dig a shaft beside us down to the stone under the dirt.
 		await _hold(Items.WOOD_PICK)
+		# (Beside us where the stone is closest under the ground: since M4.7 a cave can run
+		# under the spawn, and stone below it is out of reach.)
 		var col := _base() + Vector3i(1, 0, 0)
+		var best := 99
+		for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1), Vector3i(1, 0, 1), Vector3i(-1, 0, -1)]:
+			for i in range(1, 8):
+				var id2: int = w.get_blockv(_base() + d + Vector3i(0, -i, 0))
+				if id2 == Blocks.STONE:
+					if i < best:
+						best = i
+						col = _base() + d
+					break
+				if id2 == Blocks.AIR:
+					break  # (a cave)
 		for i in range(1, 8):
 			var b := col + Vector3i(0, -i, 0)
 			var id: int = w.get_blockv(b)

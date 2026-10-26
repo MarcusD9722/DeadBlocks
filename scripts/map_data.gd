@@ -27,11 +27,13 @@ var _task := -1
 var _task_in: Array = []   # [[key, block data or empty], ...]
 var _task_out: Array = []  # [[key, 16x16 RGBA8 bytes], ...]
 var _seed := 0
+var _gen_version := WorldGen.VERSION
 var _dirty_t := 0.0
 
 
 func _ready() -> void:
 	_seed = G.game.seed_v
+	_gen_version = G.world.gen_version
 	G.net.map_grew.connect(_on_grew)
 	_on_grew(G.net.explored.keys())
 
@@ -86,7 +88,7 @@ func _process(delta: float) -> void:
 	if _task_in.is_empty():
 		return
 	_task_out = []
-	_task = WorkerThreadPool.add_task(_paint_batch.bind(_task_in, _task_out, _seed), false, "map")
+	_task = WorkerThreadPool.add_task(_paint_batch.bind(_task_in, _task_out, _seed, _gen_version), false, "map")
 
 
 func _take(k: Vector2i) -> void:
@@ -97,13 +99,13 @@ func _take(k: Vector2i) -> void:
 
 
 ## Worker thread: each chunk's 16 x 16 pixels.
-static func _paint_batch(list: Array, out: Array, seed_v: int) -> void:
+static func _paint_batch(list: Array, out: Array, seed_v: int, version: int) -> void:
 	var gen: WorldGen = null
 	for e in list:
 		var tops: PackedByteArray = e[1]
 		if (e[1] as PackedByteArray).is_empty():
 			if gen == null:
-				gen = WorldGen.new(seed_v)
+				gen = WorldGen.new(seed_v, version)
 			tops = seed_tops(gen, e[0])
 		else:
 			tops = block_tops(e[1])
@@ -166,6 +168,8 @@ static func seed_tops(gen: WorldGen, k: Vector2i) -> PackedByteArray:
 			var bio := gen.biome_at(wx, wz)
 			var i := x + z * 16
 			out[i * 2] = Blocks.SAND if bio == 2 else Blocks.GRASS
+			if gen.version >= 2 and h >= WorldGen.ROCK_LINE:
+				out[i * 2] = Blocks.SNOW if h >= WorldGen.SNOW_LINE else Blocks.STONE  # (mountains)
 			out[i * 2 + 1] = h
 			if bio != 2 and gen.hash2(wx + 913, wz - 271) % 1000 < 9:
 				out[i * 2] = Blocks.BERRY_BUSH
@@ -176,7 +180,7 @@ static func seed_tops(gen: WorldGen, k: Vector2i) -> PackedByteArray:
 			if not gen.tree_at(tx, tz):
 				continue
 			var th := gen.height_at(tx, tz)
-			if th > WorldGen.H - 14:
+			if th > gen.tree_max_ground():
 				continue
 			var top := th + 4 + gen.hash2(tz, tx) % 3
 			for lz in range(-2, 3):
@@ -209,7 +213,7 @@ static func pixels(tops: PackedByteArray) -> PackedByteArray:
 			if z == 0:
 				hn = 2 * h - hn
 			var shade := 1.0 + clampf(((h - hw) + (h - hn)) * 0.07, -0.3, 0.3)
-			shade *= 0.8 + clampf((h - 18) / 30.0, 0.0, 1.0) * 0.35
+			shade *= 0.8 + clampf((h - 18) / 90.0, 0.0, 1.0) * 0.4  # (higher ground lighter, mountains too)
 			var c := color_of(tops[i * 2]) * shade
 			px[i * 4] = clampi(int(c.r * 255.0), 0, 255)
 			px[i * 4 + 1] = clampi(int(c.g * 255.0), 0, 255)
@@ -226,8 +230,12 @@ static func color_of(id: int) -> Color:
 			return Color(0.48, 0.37, 0.25)
 		Blocks.SAND:
 			return Color(0.84, 0.77, 0.53)
-		Blocks.STONE, Blocks.COBBLE, Blocks.COAL_ORE, Blocks.IRON_ORE, Blocks.BEDROCK:
+		Blocks.STONE, Blocks.COBBLE, Blocks.COAL_ORE, Blocks.IRON_ORE, Blocks.BEDROCK, Blocks.CRYSTAL_ORE:
 			return Color(0.52, 0.52, 0.5)
+		Blocks.SNOW:
+			return Color(0.93, 0.95, 0.98)
+		Blocks.CRYSTAL_LAMP:
+			return Color(0.6, 0.85, 1.0)
 		Blocks.LOG:
 			return Color(0.42, 0.3, 0.17)
 		Blocks.LEAVES:

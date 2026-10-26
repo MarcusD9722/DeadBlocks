@@ -60,7 +60,11 @@ const STEEL_HATCH := 57
 const STEEL_HATCH_OPEN := 58
 const WOOD_BOX := 59
 const IRON_BOX := 60
-const COUNT := 61
+## M4.7: snow on the mountain tops, the rare crystal ore deep down, and the lamp made from it.
+const SNOW := 61
+const CRYSTAL_ORE := 62
+const CRYSTAL_LAMP := 63
+const COUNT := 64
 
 const SH_NONE := 0
 const SH_CUBE := 1
@@ -122,7 +126,8 @@ const _BASE := [
 ]
 ## SH_BOX blocks: [low corner, high corner] inside the cell.
 const BOX := {BACKPACK: [Vector3(0.2, 0.0, 0.26), Vector3(0.8, 0.62, 0.74)], BED: [Vector3.ZERO, Vector3(1.0, 0.5, 1.0)],
-	WOOD_BOX: [Vector3(0.06, 0.0, 0.1), Vector3(0.94, 0.82, 0.9)], IRON_BOX: [Vector3(0.06, 0.0, 0.1), Vector3(0.94, 0.82, 0.9)]}
+	WOOD_BOX: [Vector3(0.06, 0.0, 0.1), Vector3(0.94, 0.82, 0.9)], IRON_BOX: [Vector3(0.06, 0.0, 0.1), Vector3(0.94, 0.82, 0.9)],
+	CRYSTAL_LAMP: [Vector3(0.3, 0.0, 0.3), Vector3(0.7, 0.62, 0.7)]}
 
 ## The crafting stations (E opens one) and the name their recipes use (crafting.gd).
 const STATIONS := {WORKBENCH: "workbench", FORGE: "forge", CAMPFIRE: "campfire", BLOOD_FORGE: "bloodforge"}
@@ -175,6 +180,9 @@ static func _static_init() -> void:
 		_add(["%s Hatch (open)" % m[0], [tile, tile, tile], SH_HATCH, false, false, false, m[3], m[4], m[5], m[2]])
 	_add(["Wooden Box", [42, 41, 42], SH_BOX, true, false, false, 2.0, "axe", 0, 80])
 	_add(["Iron Box", [44, 43, 44], SH_BOX, true, false, false, 8.0, "pick", 2, 300])
+	_add(["Snow", [48, 48, 48], SH_CUBE, true, true, true, 0.7, "shovel", 0, 25])
+	_add(["Crystal Ore", [49, 49, 49], SH_CUBE, true, true, true, 12.0, "pick", 3, 200])
+	_add(["Crystal Lamp", [50, 50, 50], SH_BOX, true, false, false, 1.5, "pick", 0, 40])
 	assert(NAMES.size() == COUNT)
 	for c in OPENS:
 		CLOSED[OPENS[c]] = c

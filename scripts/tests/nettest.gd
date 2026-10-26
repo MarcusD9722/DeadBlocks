@@ -584,7 +584,7 @@ func _tree_seen(other: String) -> void:
 
 ## The nearest standing natural tree within r blocks ({} if none).
 func _near_tree(r: int) -> Dictionary:
-	var gen := Trees.gen_for(G.world.seed_v)
+	var gen: WorldGen = G.world.gen()
 	var pp: Vector3 = G.player.global_position
 	var best := {}
 	var bd := 1e9

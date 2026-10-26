@@ -14,8 +14,11 @@ extends RefCounted
 ## normals and sky light along a chunk border come out the same in both chunks.
 
 const CH := 16
-const H := 64
+const H := WorldGen.H
 const CH2 := 256
+## The columns' bit masks are two 64-bit words (M4.7): layers 0-63, and from B1 up (63-126), so
+## every cell of two layers fits in one word (cells 0-62 in the first, 63-125 in the second).
+const B1 := 63
 const P := 4
 const W := CH + 2 * P   # columns across, neighbours included
 const NC := W - 1       # vertex cells across
@@ -36,6 +39,10 @@ const L_SAND := 3
 const L_COAL := 4
 const L_IRON := 5
 const L_BEDROCK := 6
+## M4.7 (their weights go in the vertex's CUSTOM0).
+const L_SNOW := 7
+const L_CRYSTAL := 8
+const LAYERS := 9
 
 ## Per block id: drawn smooth (natural ground).
 static var NAT := []
@@ -57,10 +64,12 @@ static func init_tables() -> void:
 	FIELD.resize(Blocks.COUNT)
 	LAYER.resize(Blocks.COUNT)
 	for id in Blocks.COUNT:
-		NAT[id] = id in [Blocks.GRASS, Blocks.DIRT, Blocks.STONE, Blocks.SAND, Blocks.COAL_ORE, Blocks.IRON_ORE, Blocks.BEDROCK]
+		NAT[id] = id in [Blocks.GRASS, Blocks.DIRT, Blocks.STONE, Blocks.SAND, Blocks.COAL_ORE, Blocks.IRON_ORE, Blocks.BEDROCK,
+			Blocks.SNOW, Blocks.CRYSTAL_ORE]
 		FIELD[id] = Blocks.FULL[id] and id != Blocks.LEAVES and id != Blocks.LOG  # (drawn round / leafy)
 		LAYER[id] = {Blocks.GRASS: L_GRASS, Blocks.DIRT: L_DIRT, Blocks.STONE: L_STONE, Blocks.SAND: L_SAND,
-			Blocks.COAL_ORE: L_COAL, Blocks.IRON_ORE: L_IRON, Blocks.BEDROCK: L_BEDROCK}.get(id, -1)
+			Blocks.COAL_ORE: L_COAL, Blocks.IRON_ORE: L_IRON, Blocks.BEDROCK: L_BEDROCK, Blocks.SNOW: L_SNOW,
+			Blocks.CRYSTAL_ORE: L_CRYSTAL}.get(id, -1)
 	for i in 64:
 		_bit[1 << i] = i
 	var corners: Array[Vector3] = []
@@ -106,11 +115,15 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 	var opq: Array = Blocks.OPAQUE
 	var fm := PackedInt64Array()
 	var nm := PackedInt64Array()
+	var fm1 := PackedInt64Array()
+	var nm1 := PackedInt64Array()
 	var top := PackedInt32Array()
 	var colc := PackedInt32Array()
 	var colb := PackedInt32Array()
 	fm.resize(W * W)
 	nm.resize(W * W)
+	fm1.resize(W * W)
+	nm1.resize(W * W)
 	top.resize(W * W)
 	colc.resize(W * W)
 	colb.resize(W * W)
@@ -136,6 +149,8 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 			var base := (lx & 15) + (lz & 15) * CH
 			var f := 0
 			var n := 0
+			var f1 := 0
+			var n1 := 0
 			var t := 0
 			var i := base
 			for y in ytop[ci]:
@@ -143,15 +158,23 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 				i += CH2
 				if b == 0:
 					continue
-				if field[b]:
-					f |= 1 << y
-				if nat[b]:
-					n |= 1 << y
+				if y < 64:
+					if field[b]:
+						f |= 1 << y
+					if nat[b]:
+						n |= 1 << y
+				if y >= B1:
+					if field[b]:
+						f1 |= 1 << (y - B1)
+					if nat[b]:
+						n1 |= 1 << (y - B1)
 				if opq[b]:
 					t = y + 1
 			var col := px + pz * W
 			fm[col] = f
 			nm[col] = n
+			fm1[col] = f1
+			nm1[col] = n1
 			top[col] = t
 			colc[col] = ci
 			colb[col] = base
@@ -187,40 +210,45 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 	var bits: Dictionary = _bit
 	var disp: Array = _disp
 	var grad: Array = _grad
-	for ck in NC:
-		for ci in NC:
-			var c0 := ci + ck * W
-			var a := fm[c0]
-			var b := fm[c0 + 1]
-			var c := fm[c0 + W]
-			var e := fm[c0 + W + 1]
-			var all_ := a & b & c & e
-			all_ &= all_ >> 1
-			var any_ := a | b | c | e
-			any_ |= any_ >> 1
-			var na := nm[c0] | nm[c0 + 1] | nm[c0 + W] | nm[c0 + W + 1]
-			na |= na >> 1
-			var cells := any_ & ~all_ & na & MASK63
-			# Next to a built block (natural blocks only are drawn smooth): the vertex stays on the
-			# block corner, so the ground meets the cube's edge with no gap.
-			var built := (a & ~nm[c0]) | (b & ~nm[c0 + 1]) | (c & ~nm[c0 + W]) | (e & ~nm[c0 + W + 1])
-			built |= built >> 1
-			while cells != 0:
-				var lb := cells & -cells
-				cells ^= lb
-				var y: int = bits[lb]
-				var m := ((a >> y) & 1) | (((b >> y) & 1) << 1) | (((c >> y) & 1) << 2) | (((e >> y) & 1) << 3) \
-					| (((a >> y) & 2) << 3) | (((b >> y) & 2) << 4) | (((c >> y) & 2) << 5) | (((e >> y) & 2) << 6)
-				var lat := Vector3(ci - P + 1, y + 1, ck - P + 1)
-				var key := ci + ck * NC + y * NC2
-				keys[key] = vpos.size()
-				var pin := (built >> y) & 1
-				vpos.append(lat if pin else lat + disp[m])
-				vpin.append(pin)
-				vlat.append(lat)
-				vgrad.append(grad[m])
-				vmask.append(m)
-				vkey.append(key)
+	for band in 2:
+		var bf: PackedInt64Array = fm if band == 0 else fm1
+		var bn: PackedInt64Array = nm if band == 0 else nm1
+		var base_y := 0 if band == 0 else B1
+		for ck in NC:
+			for ci in NC:
+				var c0 := ci + ck * W
+				var a := bf[c0]
+				var b := bf[c0 + 1]
+				var c := bf[c0 + W]
+				var e := bf[c0 + W + 1]
+				var all_ := a & b & c & e
+				all_ &= all_ >> 1
+				var any_ := a | b | c | e
+				any_ |= any_ >> 1
+				var na := bn[c0] | bn[c0 + 1] | bn[c0 + W] | bn[c0 + W + 1]
+				na |= na >> 1
+				var cells := any_ & ~all_ & na & MASK63
+				# Next to a built block (natural blocks only are drawn smooth): the vertex stays on the
+				# block corner, so the ground meets the cube's edge with no gap.
+				var built := (a & ~bn[c0]) | (b & ~bn[c0 + 1]) | (c & ~bn[c0 + W]) | (e & ~bn[c0 + W + 1])
+				built |= built >> 1
+				while cells != 0:
+					var lb := cells & -cells
+					cells ^= lb
+					var j: int = bits[lb]
+					var y := base_y + j
+					var m := ((a >> j) & 1) | (((b >> j) & 1) << 1) | (((c >> j) & 1) << 2) | (((e >> j) & 1) << 3) \
+						| (((a >> j) & 2) << 3) | (((b >> j) & 2) << 4) | (((c >> j) & 2) << 5) | (((e >> j) & 2) << 6)
+					var lat := Vector3(ci - P + 1, y + 1, ck - P + 1)
+					var key := ci + ck * NC + y * NC2
+					keys[key] = vpos.size()
+					var pin := (built >> j) & 1
+					vpos.append(lat if pin else lat + disp[m])
+					vpin.append(pin)
+					vlat.append(lat)
+					vgrad.append(grad[m])
+					vmask.append(m)
+					vkey.append(key)
 	var nv := vpos.size()
 
 	# Smoothing: each vertex moves part of the way to the middle of its neighbours, within limits.
@@ -320,7 +348,7 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 				k1 = key + 1
 				k2 = key + 1 + NC2
 				k3 = key + NC2
-			if not ((nm[sx + sz * W] >> sy) & 1):
+			if not _nat_bit(nm, nm1, sx + sz * W, sy):
 				continue  # a built block: its cube face is drawn instead
 			if k2 >= keys.size():
 				continue
@@ -369,7 +397,9 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 	uv2.resize(nu)
 	var layers: Array = LAYER
 	var wts := PackedFloat32Array()
-	wts.resize(7)
+	wts.resize(LAYERS)
+	var cust := PackedFloat32Array()  # snow and crystal (M4.7), as RGBA floats per vertex
+	cust.resize(nu * 4)
 	for u in nu:
 		var v := used[u]
 		var key := vkey[v]
@@ -381,10 +411,10 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 		for corner in 8:
 			var col := ci + (corner & 1) + (ck + ((corner >> 1) & 1)) * W
 			var yy := y + ((corner >> 2) & 1)
-			if (nm[col] >> yy) & 1:
+			if _nat_bit(nm, nm1, col, yy):
 				var d: PackedByteArray = nb[colc[col]]
 				var l: int = layers[d[colb[col] + yy * CH2]]
-				var add := 3.0 if l == L_COAL or l == L_IRON else 1.0
+				var add := 3.0 if l == L_COAL or l == L_IRON or l == L_CRYSTAL else 1.0
 				wts[l] += add
 				total += add
 		if total <= 0.0:
@@ -398,6 +428,8 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 		cols[u] = Color(wts[0] * inv, wts[1] * inv, wts[2] * inv, wts[3] * inv)
 		uv[u] = Vector2(wts[4] * inv, wts[5] * inv)
 		uv2[u] = Vector2(wts[6] * inv, clampf(1.0 - (open - (y + 1)) / SKY_DEPTH, 0.0, 1.0))
+		cust[u * 4] = wts[7] * inv
+		cust[u * 4 + 1] = wts[8] * inv
 	var idx := PackedInt32Array()
 	idx.resize(quads.size() / 4 * 6)
 	var t := 0
@@ -427,11 +459,19 @@ static func build(nb: Array, buf) -> PackedFloat32Array:
 	buf.t_cols = cols
 	buf.t_uv = uv
 	buf.t_uv2 = uv2
+	buf.t_custom = cust
 	buf.t_idx = idx
 	return sky
 
 
 ## Sky light (0-1) at a block cell of this chunk (x, z may be -P..CH+P-1), from build's heights.
+## Is the block at layer y of a column natural ground (nm: layers 0-63, nm1: from B1 up)?
+static func _nat_bit(nm: PackedInt64Array, nm1: PackedInt64Array, col: int, y: int) -> bool:
+	if y < 64:
+		return (nm[col] >> y) & 1 == 1
+	return (nm1[col] >> (y - B1)) & 1 == 1
+
+
 static func sky_at(sky: PackedFloat32Array, x: int, y: int, z: int) -> float:
 	var px := clampi(x + P, 0, W - 1)
 	var pz := clampi(z + P, 0, W - 1)

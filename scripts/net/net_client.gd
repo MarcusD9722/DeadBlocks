@@ -42,6 +42,8 @@ var password_key := PackedByteArray()
 ## Tests only: pretend to be another version, or to build different terrain.
 var fake_version := ""
 var fake_terrain := false
+## The terrain version the server's world has (its login challenge; M4.7).
+var server_worldgen := WorldGen.VERSION
 ## idle -> connecting -> waiting_welcome -> online
 var state := "idle"
 var reject_reason := ""
@@ -561,8 +563,9 @@ func _on_auth(_id: int, data: PackedByteArray) -> void:
 			Proto.put_bytes32(h, Proto.hmac(pin_key, nonce))
 			Proto.put_bytes32(h, Proto.xor_bytes(pin_key, Proto.hmac(password_key, nonce + "reg".to_utf8_buffer())))
 			var terrain := PackedByteArray()
-			if wg_version == WorldGen.VERSION and not fake_terrain:
-				terrain = Proto.terrain_hash(seed_v)
+			server_worldgen = wg_version
+			if wg_version >= 1 and wg_version <= WorldGen.VERSION and not fake_terrain:
+				terrain = Proto.terrain_hash(seed_v, wg_version)
 			Proto.put_bytes32(h, terrain)
 			mp.send_auth(1, h.data_array)
 			_status("Logging in...", false)
@@ -704,6 +707,7 @@ func _on_packet(_id: int, data: PackedByteArray) -> void:
 			w["yaw"] = b.get_float()
 			w["spawn"] = Proto.get_vec3(b)
 			w["admin"] = b.get_u8() == 1
+			w["worldgen"] = server_worldgen  # (from the login challenge: which terrain the world has)
 			var n := b.get_u8()
 			for i in n:
 				var id := b.get_u16()

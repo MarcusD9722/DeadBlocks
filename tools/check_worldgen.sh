@@ -13,8 +13,8 @@ if ! command -v qemu-aarch64-static >/dev/null || [ ! -d /usr/aarch64-linux-gnu 
 	exit 0
 fi
 [ -x "$ARM" ] || { echo "WORLDGEN FAIL: $ARM not found (run tools/build_release.sh)"; exit 1; }
-pc=$("$GODOT" --headless --path . -- --worldgen-hash --seed=4242 2>&1 | sed -n 's/^WORLDGEN chunks=.* hash=//p')
-pi=$(qemu-aarch64-static -L /usr/aarch64-linux-gnu "$ARM" --headless -- --worldgen-hash --seed=4242 2>&1 | sed -n 's/^WORLDGEN chunks=.* hash=//p')
+pc=$("$GODOT" --headless --path . -- --worldgen-hash --seed=4242 2>&1 | sed -n 's/^WORLDGEN v[0-9]* chunks=.* hash=//p' | tr '\n' ' ')
+pi=$(qemu-aarch64-static -L /usr/aarch64-linux-gnu "$ARM" --headless -- --worldgen-hash --seed=4242 2>&1 | sed -n 's/^WORLDGEN v[0-9]* chunks=.* hash=//p' | tr '\n' ' ')
 echo "pc (x86_64 editor): $pc"
 echo "pi (arm64 export):  $pi"
 if [ -n "$pc" ] && [ "$pc" = "$pi" ]; then

@@ -115,7 +115,7 @@ func start() -> bool:
 		respawn_radius = maxf(0.0, float(G.arg_value("--respawn-radius=")))
 	_host_seen_ms = Time.get_ticks_msec()
 	test_log = G.has_arg("--test-log")
-	_terrain = Proto.terrain_hash(G.game.seed_v)
+	_terrain = Proto.terrain_hash(G.game.seed_v, G.game.gen_version)
 	G.world.record_edits = true
 	_rng.randomize()
 	_players_node = Node3D.new()
@@ -216,7 +216,7 @@ func _on_authenticating(id: int) -> void:
 	b.put_utf8_string(G.VERSION)
 	b.put_data(nonce)
 	b.put_64(G.game.seed_v)
-	b.put_u16(WorldGen.VERSION)
+	b.put_u16(G.game.gen_version)  # (an old world keeps its terrain: M4.7)
 	mp.send_auth(id, b.data_array)
 
 
@@ -719,7 +719,7 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 	var tool: int = sp.inv.id_at(slot)
 	var speed := Skills.mine_speed(sp.perks)
 	# Chopping a natural tree's trunk or leaves fells the whole tree (M4.6).
-	var tree := Trees.tree_of(Trees.gen_for(w.seed_v), p, w.get_blockv)
+	var tree := Trees.tree_of(w.gen(), p, w.get_blockv)
 	var bt := Trees.fell_time(tree, tool, speed) if not tree.is_empty() else Rules.break_time(id, tool, speed)
 	var now := Time.get_ticks_msec()
 	# Mining takes time; allow plenty of slack for lag, but not instant mining. (A bag is picked
@@ -729,7 +729,7 @@ func _req_break(sp, p: Vector3i, expect: int, slot: int) -> void:
 	if why != "":
 		_refuse(sp, p, why)
 		if not tree.is_empty():
-			for c in Trees.cells(Trees.gen_for(w.seed_v), tree):
+			for c in Trees.cells(w.gen(), tree):
 				sp.fixes.append(c[0])  # (the client took the whole tree off its screen)
 		return
 	sp.last_break_ms = now
@@ -763,9 +763,9 @@ func _req_place(sp, p: Vector3i, id: int, slot: int, meta := 0) -> void:
 		why = "not in that slot"
 	elif why == "" and (id == Blocks.BACKPACK or Blocks.CLOSED.has(id)):
 		why = "not placeable"
-	elif why == "" and (p.y < 1 or p.y >= 63 or w.get_blockv(p) != Blocks.AIR):
+	elif why == "" and (p.y < 1 or p.y >= WorldGen.H - 1 or w.get_blockv(p) != Blocks.AIR):
 		why = "space taken"
-	elif why == "" and Blocks.is_door(id) and (p.y >= 62 or w.get_blockv(p + Vector3i.UP) != Blocks.AIR):
+	elif why == "" and Blocks.is_door(id) and (p.y >= WorldGen.H - 2 or w.get_blockv(p + Vector3i.UP) != Blocks.AIR):
 		why = "no room for the door"
 	meta = _clean_meta(id, meta)
 	var touching := false
@@ -1134,7 +1134,7 @@ func _req_shoot(sp, slot: int, power: float, aim: Vector3) -> void:
 ## `yaw` (S_TREE; except the player who felled it, whose game shows it already).
 func fell_tree(t: Dictionary, yaw: float, except := 0) -> void:
 	var w = G.world
-	for c in Trees.cells(Trees.gen_for(w.seed_v), t):
+	for c in Trees.cells(w.gen(), t):
 		if w.get_blockv(c[0]) == (Blocks.LOG if c[1] else Blocks.LEAVES):
 			w.set_block(c[0], Blocks.AIR)
 	var m := Proto.writer(Proto.S_TREE)
@@ -1146,7 +1146,7 @@ func fell_tree(t: Dictionary, yaw: float, except := 0) -> void:
 ## Zombies broke the log at p: if it was a standing tree's, the rest of the tree falls.
 func _trunk_broken(p: Vector3i) -> void:
 	var w = G.world
-	var gen := Trees.gen_for(w.seed_v)
+	var gen: WorldGen = w.gen()
 	var t := Trees.at(gen, p.x, p.z)
 	if t.is_empty() or p.y < t["root"].y or p.y >= int(t["top"]):
 		return
@@ -1317,11 +1317,11 @@ func _backpack_cell(sp) -> Vector3i:
 	if from.y < 1.0 and sp.last_ground != Vector3.INF:
 		from = sp.last_ground
 	var w = G.world
-	var base := Vector3i(floori(from.x), clampi(floori(from.y + 0.3), 1, 62), floori(from.z))
+	var base := Vector3i(floori(from.x), clampi(floori(from.y + 0.3), 1, WorldGen.H - 2), floori(from.z))
 	for on_ground in [true, false]:
 		for off in _near_cells:
 			var c: Vector3i = base + off
-			if c.y < 1 or c.y > 62 or not w.has_block_data(c) or w.get_blockv(c) != Blocks.AIR:
+			if c.y < 1 or c.y > WorldGen.H - 2 or not w.has_block_data(c) or w.get_blockv(c) != Blocks.AIR:
 				continue
 			if on_ground and not Blocks.is_solid(w.get_blockv(c + Vector3i.DOWN)):
 				continue
@@ -1505,13 +1505,13 @@ func _random_spot() -> Vector3:
 	if respawn_radius <= 0.0:
 		return G.game.spawn_pos
 	if _gen == null:
-		_gen = WorldGen.new(G.game.seed_v)
+		_gen = WorldGen.new(G.game.seed_v, G.game.gen_version)
 	for attempt in 80:
 		var a := _rng.randf() * TAU
 		var r := respawn_radius * sqrt(_rng.randf())
 		var x := floori(cos(a) * r)
 		var z := floori(sin(a) * r)
-		if _gen.biome_at(x, z) == 2 or _gen.height_at(x, z) > 42 or _gen.tree_near(x, z):
+		if not _gen.spawn_ok(x, z):
 			continue
 		var spot := _open_ground(x, z)
 		if spot != Vector3.INF:

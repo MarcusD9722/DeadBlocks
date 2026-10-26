@@ -2,7 +2,7 @@ extends Node3D
 ## Chunked block world. Terrain generation and meshing run on worker threads.
 
 const CH := 16
-const H := 64
+const H := WorldGen.H
 const CH2 := 256
 const BEACON_H := 48.0
 ## Collision layer of the drawn ground (clients only; nothing collides with it, it is only for
@@ -48,6 +48,9 @@ var sync_mesh := false
 var defer_bodies := false
 var _deferred_faces := {}  # chunk key -> collision faces
 var seed_v := 0
+## Which terrain generator this world was made with (WorldGen versions; M4.7).
+var gen_version := WorldGen.VERSION
+var _gen: WorldGen = null
 var chunks := {}
 var order: Array[Vector2i] = []
 var mesh_set := {}
@@ -98,8 +101,9 @@ var sub_seq := {}        # chunk key -> last edit batch the chunk's data already
 var pending := {}        # chunk key -> [[batch seq, block index, id], ...] for chunks without data yet
 
 
-func setup(s: int, tex) -> void:
+func setup(s: int, tex, version := WorldGen.VERSION) -> void:
 	seed_v = s
+	gen_version = version
 	render = not G.server_mode
 	if G.server_mode:
 		# 5 chunks (80 m) covers the 72 m zombie despawn distance.
@@ -351,8 +355,15 @@ func _neighbours(k: Vector2i) -> Array:
 	return nb
 
 
+## This world's terrain generator (made once; the main thread's). Worker threads make their own.
+func gen() -> WorldGen:
+	if _gen == null:
+		_gen = WorldGen.new(seed_v, gen_version)
+	return _gen
+
+
 func _task_gen(k: Vector2i) -> void:
-	var g := WorldGen.new(seed_v)
+	var g := WorldGen.new(seed_v, gen_version)
 	var d := g.generate(k.x, k.y)
 	call_deferred("_gen_done", k, d)
 
@@ -395,7 +406,10 @@ func _build_collision(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArr
 	var out := PackedVector3Array()
 	var sol: Array = Blocks.FULL
 	var shp: Array = Blocks.SHAPE
+	var scan := _busy_layers(d, px, nx, pz, nz)
 	for y in H:
+		if scan[y] == 0:
+			continue
 		var yo := y * CH2
 		for z in CH:
 			var zo := z * CH + yo
@@ -423,6 +437,29 @@ func _build_collision(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArr
 	return out
 
 
+## Which layers of a chunk can have a face to draw or collide with (1) and which can't (0): one
+## all air, or one with no air in it whose layers above and below and the four neighbours' same
+## layer have none either (deep solid ground). (A non-full block always stands next to air.)
+static func _busy_layers(d: PackedByteArray, px: PackedByteArray, nx: PackedByteArray, pz: PackedByteArray, nz: PackedByteArray) -> PackedByteArray:
+	var air := PackedInt32Array()
+	air.resize(H)
+	for y in H:
+		air[y] = d.slice(y * CH2, (y + 1) * CH2).count(0)
+	var out := PackedByteArray()
+	out.resize(H)
+	for y in H:
+		if air[y] == CH2:
+			continue
+		var busy := air[y] > 0 or y == H - 1 or (y > 0 and air[y - 1] > 0) or air[y + 1] > 0
+		if not busy:
+			for n in [px, nx, pz, nz]:
+				if not (n as PackedByteArray).is_empty() and (n as PackedByteArray).slice(y * CH2, (y + 1) * CH2).count(0) > 0:
+					busy = true
+					break
+		out[y] = 1 if busy else 0
+	return out
+
+
 ## Two collision triangles for one block face, with the same corners and winding as MeshBuf.face
 ## (of the box lo..hi inside the cell, for SH_BOX blocks).
 func _quad(out: PackedVector3Array, o: Vector3, dir: int, lo := Vector3.ZERO, hi := Vector3.ONE) -> void:
@@ -441,7 +478,7 @@ func _build(nb: Array) -> MeshBuf:
 	var meta: Dictionary = nb[9]
 	# Collision is whole blocks, the same as on the server (the rounding is only drawn).
 	buf.faces = _build_collision(nb[4], nb[5], nb[3], nb[7], nb[1], meta)
-	var gen := WorldGen.new(seed_v)  # (a worker thread: its own)
+	var gen := WorldGen.new(seed_v, gen_version)  # (a worker thread: its own)
 	nb = _without_trees(nb, buf, gen)  # (the trees are drawn as models)
 	var sky := SmoothMesher.build(nb, buf)
 	var bins := _ground_bins(buf)
@@ -455,7 +492,10 @@ func _build(nb: Array) -> MeshBuf:
 	var tiles: Array = Blocks.TILES
 	var nat: Array = SmoothMesher.NAT
 	var dirs: Array = MeshBuf.DIRS
+	var scan := _busy_layers(d, px, nx, pz, nz)
 	for y in H:
+		if scan[y] == 0:
+			continue
 		var yo := y * CH2
 		for z in CH:
 			var zo := z * CH + yo
@@ -555,9 +595,12 @@ func _decorate(nb: Array, buf: MeshBuf, bins: Array, gen: WorldGen) -> void:
 	var d: PackedByteArray = nb[4]
 	var bx := k_x(nb)
 	var bz := k_z(nb)
+	var ytop := H - 1
+	while ytop > 0 and d.slice(ytop * CH2, (ytop + 1) * CH2).count(0) == CH2:
+		ytop -= 1
 	for z in CH:
 		for x in CH:
-			var y := H - 1
+			var y := mini(ytop + 1, H - 1)
 			while y > 0 and d[x + z * CH + y * CH2] == 0:
 				y -= 1
 			var top := d[x + z * CH + y * CH2]
@@ -742,8 +785,9 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		ta[Mesh.ARRAY_COLOR] = buf.t_cols
 		ta[Mesh.ARRAY_TEX_UV] = buf.t_uv
 		ta[Mesh.ARRAY_TEX_UV2] = buf.t_uv2
+		ta[Mesh.ARRAY_CUSTOM0] = buf.t_custom
 		ta[Mesh.ARRAY_INDEX] = buf.t_idx
-		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ta)
+		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ta, [], {}, Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
 		am.surface_set_material(am.get_surface_count() - 1, terrain_material)
 	if buf.verts.size() > 0:
 		var arr := []

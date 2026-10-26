@@ -238,7 +238,7 @@ func _cpu_name() -> String:
 
 ## Single-threaded cost of making one chunk, so machines can be compared directly.
 func _micro() -> void:
-	var g := WorldGen.new(G.game.seed_v)
+	var g := WorldGen.new(G.game.seed_v, G.game.gen_version)
 	var w = G.world
 	var n := 24
 	var base := 4000

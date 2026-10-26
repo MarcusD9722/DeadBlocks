@@ -456,7 +456,7 @@ func _update_target() -> void:
 		if tp != _tree_for or int(target["id"]) != _tree_id:
 			_tree_for = tp
 			_tree_id = target["id"]
-			target_tree = Trees.tree_of(Trees.gen_for(G.world.seed_v), tp, G.world.get_blockv)
+			target_tree = Trees.tree_of(G.world.gen(), tp, G.world.get_blockv)
 		outline.visible = target_tree.is_empty()  # (a tree is a model, not blocks)
 		outline.global_position = Vector3(tp) + Vector3(0.5, 0.5, 0.5)
 	else:
@@ -564,7 +564,7 @@ func break_block(p: Vector3i, id: int) -> void:
 func fell(tree: Dictionary, p: Vector3i, id: int) -> void:
 	_shake_tree(Vector3i(0, -999, 0), 0.0)
 	var w = G.world
-	for c in Trees.cells(Trees.gen_for(w.seed_v), tree):
+	for c in Trees.cells(w.gen(), tree):
 		if w.get_blockv(c[0]) == (Blocks.LOG if c[1] else Blocks.LEAVES):
 			w.set_block(c[0], Blocks.AIR)
 	var away: Vector3 = Vector3(tree["root"]) + Vector3(0.5, 0.0, 0.5) - global_position
@@ -749,10 +749,10 @@ func place(id: int) -> bool:
 ## Place block `id` (from the selected slot) at p, if nothing is in the way. meta: its state
 ## (facing, upper half); -1 works it out from where we look.
 func try_place(p: Vector3i, id: int, meta := -1) -> bool:
-	if G.world.get_blockv(p) != Blocks.AIR or p.y < 1 or p.y >= 63:
+	if G.world.get_blockv(p) != Blocks.AIR or p.y < 1 or p.y >= WorldGen.H - 1:
 		return false
 	var door := Blocks.is_door(id)
-	if door and (p.y >= 62 or G.world.get_blockv(p + Vector3i.UP) != Blocks.AIR):
+	if door and (p.y >= WorldGen.H - 2 or G.world.get_blockv(p + Vector3i.UP) != Blocks.AIR):
 		G.hud.msg("A door needs two blocks of room.")
 		return false
 	if meta < 0:
