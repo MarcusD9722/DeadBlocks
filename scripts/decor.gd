@@ -18,7 +18,7 @@ const MODELS := [
 	["Mushroom_Common", 0.42, false],
 	["Pebble_Round_1", 0.75, false], ["Pebble_Round_2", 0.75, false], ["Pebble_Round_3", 0.75, false],
 	["Pebble_Round_4", 0.75, false], ["Pebble_Round_5", 0.75, false],
-	["Bush_Common", 0.5, true], ["Rock_Medium_1", 0.3, true], ["Rock_Medium_2", 0.32, true],
+	["Bush_Common_Flowers", 0.5, true], ["Rock_Medium_1", 0.3, true], ["Rock_Medium_2", 0.32, true],
 	["Rock_Medium_3", 0.28, true],
 	["", 1.0, true],  # the berry bush (made in code, BERRY)
 	["", 1.0, true],  # the crystal lamp (a block, made in code, LAMP; M4.7)
