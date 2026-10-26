@@ -885,6 +885,22 @@ func _apply_trees(c: Chunk, buf: MeshBuf) -> void:
 		c.trees.append(mmi)
 
 
+## The clouds' shadows on the ground and blocks (M4.7, gfx.gd every frame): the noise picture,
+## how far it has drifted, how dark a shadow is (0 at night) and how much of the sky is cloud.
+var _cloud_tex_set := false
+
+func set_cloud_shadow(tex: Texture2D, shift: Vector2, shade: float, cover: float) -> void:
+	for m in [material, terrain_material]:
+		if not (m is ShaderMaterial):
+			continue
+		if not _cloud_tex_set:
+			(m as ShaderMaterial).set_shader_parameter("cloud_tex", tex)
+		(m as ShaderMaterial).set_shader_parameter("cloud_shift", shift)
+		(m as ShaderMaterial).set_shader_parameter("cloud_shade", shade)
+		(m as ShaderMaterial).set_shader_parameter("cloud_cover", cover)
+	_cloud_tex_set = true
+
+
 ## The chunk's decor (M4.6): one MultiMesh per Decor model; the small things are drawn only
 ## within plant_range (Settings: Grass and flowers), the big ones further.
 func _apply_decor(c: Chunk, buf: MeshBuf) -> void:

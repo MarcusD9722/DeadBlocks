@@ -47,7 +47,13 @@ func _run() -> void:
 	for m in get_tree().get_nodes_in_group("mobs"):
 		m.queue_free()
 	var sp: Vector3 = g.spawn_pos
-	_base = Vector3i(floori(sp.x) + 60, 50, floori(sp.z))
+	# (In the air: 50 was above the old 64-block land; since M4.7 above the highest ground along
+	# the arenas, which run along +z from here.)
+	var top := 0
+	for dz in range(-10, 220, 4):
+		for dx in range(-10, 50, 4):
+			top = maxi(top, w.gen().height_at(floori(sp.x) + 60 + dx, floori(sp.z) + dz))
+	_base = Vector3i(floori(sp.x) + 60, clampi(maxi(50, top + 12), 50, WorldGen.H - 20), floori(sp.z))
 	g.extra_stream_points = [Vector3(_base) + Vector3(20, 0, 0)]
 	var t0 := Time.get_ticks_msec()
 	await _wait(1.0)

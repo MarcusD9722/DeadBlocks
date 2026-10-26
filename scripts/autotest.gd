@@ -193,11 +193,11 @@ func _play() -> void:
 	# come out of the dark where one is well under the ground (game.cave_spot finds their spot).
 	check(w.gen_version == WorldGen.VERSION and WorldGen.H == 128, "a new world has the newest terrain, 128 blocks tall (version %d)" % w.gen_version)
 	var cave := Vector3.INF
-	var here := _base()
+	var spawn_at := _base()
 	for r in range(0, 48, 2):
 		for k in 12:
-			var cx := here.x + roundi(cos(k * TAU / 12.0) * r)
-			var cz := here.z + roundi(sin(k * TAU / 12.0) * r)
+			var cx := spawn_at.x + roundi(cos(k * TAU / 12.0) * r)
+			var cz := spawn_at.z + roundi(sin(k * TAU / 12.0) * r)
 			var top: int = w.surface_y(cx, cz)
 			for y in range(4, top - 10):
 				if w.get_block(cx, y, cz) == Blocks.AIR and w.get_block(cx, y + 1, cz) == Blocks.AIR and Blocks.is_solid(w.get_block(cx, y - 1, cz)):
@@ -227,6 +227,8 @@ func _play() -> void:
 		var col := _base() + Vector3i(1, 0, 0)
 		var best := 99
 		for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1), Vector3i(1, 0, 1), Vector3i(-1, 0, -1)]:
+			if not w.get_blockv(_base() + d + Vector3i(0, -1, 0)) in [Blocks.GRASS, Blocks.DIRT]:
+				continue  # (not where something stands: our bed)
 			for i in range(1, 8):
 				var id2: int = w.get_blockv(_base() + d + Vector3i(0, -i, 0))
 				if id2 == Blocks.STONE:
@@ -236,15 +238,29 @@ func _play() -> void:
 					break
 				if id2 == Blocks.AIR:
 					break  # (a cave)
-		for i in range(1, 8):
-			var b := col + Vector3i(0, -i, 0)
-			var id: int = w.get_blockv(b)
-			if id == Blocks.STONE:
-				break
-			if id != Blocks.AIR:
-				_look_at(Vector3(b) + Vector3(0.5, 0.5, 0.5))
-				p.break_block(b, id)
-				await _wait(p._break_time(id) + 0.4)
+		if best > 5:
+			# Every column beside us opens into a cave above the stone: put a stone down instead.
+			G.net.send_chat("/give stone 1")
+			await _until(func(): return _count(Blocks.STONE) >= 1, 10.0)
+			await _hold(Blocks.STONE)
+			p.set_look(0.0, -1.1)
+			await _wait(0.3)
+			p._update_target()
+			if p.target.get("hit", false):
+				var put: Vector3i = p.target["pos"] + p.target["normal"]
+				p.place(Blocks.STONE)
+				await _until(func(): return w.get_blockv(put) == Blocks.STONE, 5.0)
+			await _hold(Items.WOOD_PICK)
+		else:
+			for i in range(1, 8):
+				var b := col + Vector3i(0, -i, 0)
+				var id: int = w.get_blockv(b)
+				if id == Blocks.STONE:
+					break
+				if id != Blocks.AIR:
+					_look_at(Vector3(b) + Vector3(0.5, 0.5, 0.5))
+					p.break_block(b, id)
+					await _wait(p._break_time(id) + 0.4)
 		stone_p = _find_block(Blocks.STONE, 6, 6.3)
 		if stone_p.y < -900:
 			print("AUTOTEST no stone: we stand at %s, the shaft at %s holds %s" % [p.global_position, col,

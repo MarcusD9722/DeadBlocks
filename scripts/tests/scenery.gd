@@ -72,6 +72,8 @@ func _run() -> void:
 	_clock(18.9)
 	_place(p, Vector3(best) + Vector3(0.5, 1.02, 0.5), 0.9, -0.12)
 	await _shot("03_dusk")
+	if G.arg_value("--only=").contains("mountain"):
+		await _mountain(p, w, best)
 	# Zombies in front of us for the night shots.
 	var zs := []
 	for i in 4:
@@ -112,6 +114,33 @@ func _run() -> void:
 	await _held(p, w, best)
 	await _settings()
 	get_tree().quit()
+
+
+## M4.7: the highest land within 400 m, seen from 70 m away at noon (snow, bare rock, clouds and
+## their shadows).
+func _mountain(p, w, best: Vector3i) -> void:
+	var gen: WorldGen = w.gen()
+	var top := Vector2i(best.x, best.z)
+	var th := 0
+	for dz in range(-400, 401, 8):
+		for dx in range(-400, 401, 8):
+			var h := gen.height_at(best.x + dx, best.z + dz)
+			if h > th:
+				th = h
+				top = Vector2i(best.x + dx, best.z + dz)
+	var from := Vector2(top) + Vector2(70, 0).rotated(0.6)
+	var fy := gen.height_at(floori(from.x), floori(from.y))
+	_clock(12.0)
+	var look := Vector3(top.x, th, top.y) - Vector3(from.x, fy + 2, from.y)
+	_place(p, Vector3(from.x, maxf(fy + 1.02, th - 30.0), from.y), atan2(-look.x, -look.z), 0.15)
+	print("SCENERY mountain top %d at %s, looking from %s" % [th, top, from])
+	var t0 := Time.get_ticks_msec()
+	while not w.is_ready_at(Vector3(top.x, th, top.y)) and Time.get_ticks_msec() - t0 < 240000:
+		await _wait(1.0)
+	await _wait(6.0)
+	await _shot("19_mountain")
+	_clock(18.9)
+	await _shot("19_mountain_dusk")
 
 
 func _place(p, at: Vector3, yaw: float, pitch: float) -> void:

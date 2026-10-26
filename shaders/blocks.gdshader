@@ -11,6 +11,11 @@ uniform sampler2DArray normal_tex : hint_normal, filter_linear_mipmap_anisotropi
 uniform float bevel = 0.11;   // metres of rounding at each block edge
 uniform float min_light = 0.12;  // ambient light left in caves (Settings: light in caves)
 uniform bool own_space = false;  // the rounded edges by the model's own cells (an icon, M4.6)
+// Cloud shadows (M4.7): the clouds' own noise drifting over the land (gfx.gd moves it).
+uniform sampler2D cloud_tex : hint_default_black, filter_linear_mipmap, repeat_enable;
+uniform vec2 cloud_shift = vec2(0.0);   // how far the clouds have drifted (metres)
+uniform float cloud_shade = 0.0;        // how much a cloud's shadow darkens (0 at night)
+uniform float cloud_cover = 0.5;
 
 varying vec3 wpos;
 varying vec3 wnrm;
@@ -23,6 +28,17 @@ void vertex() {
 	lpos = VERTEX;
 	lnrm = NORMAL;
 }
+
+// How much a cloud overhead shades this spot (0 none, cloud_shade under a thick one).
+float cloud_shadow(vec3 p) {
+	if (cloud_shade <= 0.0) {
+		return 0.0;
+	}
+	float n = texture(cloud_tex, (p.xz + cloud_shift) / 700.0).r;
+	float lo = 1.0 - cloud_cover;
+	return smoothstep(lo - 0.04, lo + 0.16, n) * cloud_shade;
+}
+
 
 float edge(float f) {
 	// -1..0 near the low border, 0 in the middle, 0..1 near the high border.
@@ -73,7 +89,7 @@ void fragment() {
 		wn = normalize(wn + e * 0.9);
 		alb *= 1.0 - k * k * 0.18;  // a hint of shade in the rounded edge
 	}
-	ALBEDO = alb * COLOR.rgb;
+	ALBEDO = alb * COLOR.rgb * (1.0 - cloud_shadow(wpos) * COLOR.a);
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 	ROUGHNESS = 0.82;
 	SPECULAR = 0.35;

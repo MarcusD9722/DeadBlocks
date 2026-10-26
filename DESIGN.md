@@ -46,6 +46,7 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
   - **Screamer** — calls more zombies to its location.
   - **Spitter** — ranged acid that damages blocks.
 - Hordes scale with player progression (day count and gear).
+- Built in 0.19.0 (M4.7, the fair Blood Moon of `docs/M3-plan.md`): 120 at most shared by the players alive, players within 40 m share one horde, 40% / 70% / 100% on days 7 / 14 / 21+, spawned 20-35 m out from each group's edge. Gear doesn't count yet.
 - **Reward for surviving**: horde zombies drop Blood Moon materials needed for top-tier crafting.
 
 ### Physics
@@ -141,7 +142,7 @@ CLAUDE.md covers how the code works; this file covers what the game should be.
 
 ## Open items
 - Owner to check whether the home connection is behind CGNAT (router WAN IP vs. public IP). This decides port forwarding vs. a relay such as playit.gg or Tailscale.
-- World height is currently 64 blocks; may need raising for bunkers and multi-floor ruins.
+- World height is 128 blocks since 0.19.0 (M4.7). New worlds get mountains with snow, caves (tunnels, caverns, ravines) and ores by depth with the rare crystal at the bottom, and zombies come out of the dark in caves; **old worlds keep their terrain** (terrain version 1, the lowest 64 blocks) with more sky to build in.
 
 ## Server performance (M0)
 Measured with `tools/run_bench.sh` (seed 4242, 60 s per scenario). "Load" is the share of one CPU core the game's main thread uses; the server falls behind above ~85%.
@@ -219,5 +220,6 @@ M1.1 (server mode: no visuals, collision-only chunks, radius 5, spatial-hash spa
   - M4.4 (0.16.0, built): the character screen (I with tabs: Inventory, Map, Players, Tribe; LB / RB), the world map (M, uncovered as you travel, kept by the server, pins), ally requests, tribes with tribe chat and tribe beds, allies and tribe on the map, as waypoints and with name tags through walls.
   - M4.5 (0.17.0, built): experience and levels (bar above the hotbar), skill points, nine perks (Skills tab), armor in five tiers and four slots (Armor tab), shown on other players.
   - M4.6 (0.18.0, built): trees as 3D models that fall when chopped, grass, flowers and rocks scattered over the land, 3D icons for every item and block, a cleaner HUD and menus.
-  - Planned (order revised after 0.14.0 with Marcus's second list): M4.7 the deep world and a living world (taller, caves, cave zombies, clouds, more animals, weather, ambient sound); M4.8 roads, towns, loot containers; M4.9 villages, farming, villagers, traders.
+  - M4.7 (0.19.0, built): the deep world (128 blocks tall, mountains with snow, caves, ravines, ores by depth and the rare crystal: lamps and arrows), zombies in caves, the fair Blood Moon, rounder clouds with shadows on the ground. Old worlds keep their terrain.
+  - Planned (order revised after 0.14.0 with Marcus's second list): M4.7b (0.20.0) a living world (more animals, birds, weather, ambient sound, music; split off M4.7); M4.8 (0.21.0) roads, towns, loot containers; M4.9 (0.22.0) villages, farming, villagers, traders.
 - **M5 — Smarter zombies**: pathfinding toward the weakest part of a base.

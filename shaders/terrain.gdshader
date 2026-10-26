@@ -11,6 +11,11 @@ uniform sampler2DArray normal_tex : hint_normal, filter_linear_mipmap_anisotropi
 uniform float blend_depth = 0.3;
 uniform float normal_strength = 1.0;
 uniform float min_light = 0.12;  // ambient light left in caves (Settings: light in caves)
+// Cloud shadows (M4.7): the clouds' own noise drifting over the land (gfx.gd moves it).
+uniform sampler2D cloud_tex : hint_default_black, filter_linear_mipmap, repeat_enable;
+uniform vec2 cloud_shift = vec2(0.0);   // how far the clouds have drifted (metres)
+uniform float cloud_shade = 0.0;        // how much a cloud's shadow darkens (0 at night)
+uniform float cloud_cover = 0.5;
 
 const int LAYERS = 9;
 const float ROUGH[9] = float[9](0.95, 0.95, 0.82, 0.92, 0.62, 0.7, 0.85, 0.75, 0.35);
@@ -26,6 +31,17 @@ void vertex() {
 	wnrm = normalize(mat3(MODEL_MATRIX) * NORMAL);
 	extra = CUSTOM0.xy;
 }
+
+// How much a cloud overhead shades this spot (0 none, cloud_shade under a thick one).
+float cloud_shadow(vec3 p) {
+	if (cloud_shade <= 0.0) {
+		return 0.0;
+	}
+	float n = texture(cloud_tex, (p.xz + cloud_shift) / 700.0).r;
+	float lo = 1.0 - cloud_cover;
+	return smoothstep(lo - 0.04, lo + 0.16, n) * cloud_shade;
+}
+
 
 // A tangent-space normal from a normal map's red and green (blue holds the height).
 vec3 unpack_n(vec3 t) {
@@ -98,7 +114,8 @@ void fragment() {
 	}
 	col /= max(total, 0.0001);
 	nw = normalize(nw);
-	ALBEDO = col;
+	// (Under cover, in a cave, no cloud's shadow: the sky's light is gone already.)
+	ALBEDO = col * (1.0 - cloud_shadow(wpos) * UV2.y);
 	// The crystal ore's bright bits (blue-violet in its picture) shine faintly.
 	float cb = max(col.b - max(col.r, col.g) * 0.8, 0.0);
 	EMISSION = col * cb * 2.5 * glow / max(total, 0.0001);

@@ -39,9 +39,10 @@ themselves, so a release is the GitHub release plus `update.sh` on the Pi.
 | **M4.4** (0.16.0) | **Character screen and map**: I opens tabs (Inventory, Players, Tribe); M opens the world map, uncovered as you travel; ally requests and tribes, allies marked on the map and with waypoints | The tabs are the frame the next step fills; the map is wanted before the world grows |
 | **M4.5** (0.17.0) | **Progress**: experience bar, levels, skill points and a first skill tree (Skills tab); armor and clothes (Armor tab) | Fills the character screen; gives zombie kills a purpose |
 | **M4.6** (0.18.0, built) | **The look, away from Minecraft**: trees, bushes, grass and rocks as 3D models, items as 3D models on the ground, new icons, a cleaner HUD and menus | Before the deep world, so new worlds are made with it |
-| **M4.7** (0.19.0) | Deep world: twice as tall, mountains, cave systems, ores by depth, zombies in caves, better clouds; the fair Blood Moon (old M3.2); a **living world**: more animals, birds, weather, ambient sound | New terrain is a new world, so it waits until the crafting, building and look it serves are in |
-| **M4.8** (0.20.0) | Roads and towns: roads between towns, wrecked cars, run-down houses, shops and farms, loot containers with rarity and refills, sleeping zombies; then the Pi benchmark (old M3.4) | Needs the containers (M4.2) and the new terrain (M4.7) |
-| **M4.9** (0.21.0) | Villages, farming and traders: settlements with fields, seeds and crops, new foods, villagers, traders who buy and sell | Needs towns and roads to sit on, and loot to trade |
+| **M4.7** (0.19.0, built) | Deep world: twice as tall, mountains, cave systems, ores by depth, zombies in caves, better clouds; the fair Blood Moon (old M3.2) | New terrain is a new world, so it waits until the crafting, building and look it serves are in |
+| **M4.7b** (0.20.0) | A **living world**: more animals, birds, weather, ambient sound and music (split off M4.7, it was too big for one release) | Fills the new land |
+| **M4.8** (0.21.0) | Roads and towns: roads between towns, wrecked cars, run-down houses, shops and farms, loot containers with rarity and refills, sleeping zombies; then the Pi benchmark (old M3.4) | Needs the containers (M4.2) and the new terrain (M4.7) |
+| **M4.9** (0.22.0) | Villages, farming and traders: settlements with fields, seeds and crops, new foods, villagers, traders who buy and sell | Needs towns and roads to sit on, and loot to trade |
 
 The order is a proposal: any step can move up if Marcus wants it sooner (the map, the character
 screen and progress need nothing from the world steps, and the towns could come before the deep
@@ -52,7 +53,7 @@ The old M3.3 (Blood Moon loot) is folded into M4.1. M5 (smarter zombies) stays a
 ## Existing worlds (default)
 - Up to M4.6 everything works in today's worlds, the Pi's included (old worlds' block trees did
   turn into the new tree models in M4.6).
-- M4.7 changes the terrain. Old worlds keep their terrain (the world remembers which generator made
+- M4.7 changed the terrain. Old worlds keep their terrain (the world remembers which generator made
   it, and the server sends that to the games), so the Pi world goes on as it is. Mountains, caves,
   roads, towns and villages appear only in a **new world** (`dbctl` / `--new-world`, the old one
   goes to backups).
@@ -440,18 +441,61 @@ Three branches; a rank costs a point, rank 1 can be learned at any level, rank 2
 - The autotest fells a tree: it falls, the server gives all its logs, sticks and fibre, and the
   whole tree (leaves too) is gone.
 
-## M4.7 Deep world and a living world (0.19.0) — outline
-- The world becomes **128 blocks tall**: real mountains with snow tops, valleys, and deep ground.
-- **Caves** like Minecraft's: long winding tunnels, big caverns, ravines, underground lakes;
-  coal near the top, iron deeper, a new rare ore at the bottom.
-- **Zombies spawn in dark caves** (more of them deeper).
-- **Clouds**: thicker, rounder, lit from inside at sunset, moving shadows on the ground.
-- The fair Blood Moon from the M3 plan: the horde shared out by groups of players, spawned at each
-  group's edge.
-- **A living world**: more animals (deer, wolves, bears, birds), weather (rain, fog, storms),
-  ambient sound (wind, birds, insects at night) and some music.
+## M4.7 Deep world (0.19.0) — built
 
-## M4.8 Roads and towns (0.20.0) — outline
+### Old worlds keep theirs
+- The world is **128 blocks tall** now. The terrain generator has versions: **1** is the land of
+  0.1-0.18 (the lowest 64 blocks, exactly as before; a test checks it against 0.18.0), **2** is
+  the new one. A world remembers its version (world.json, save format 6) and the server tells
+  the games that join it, so **the Pi's world goes on as it is** (with more sky to build in) and
+  only a **new world** (`dbctl` / `--new-world`, Play solo's "Start a new world") gets mountains
+  and caves. Chunks from before are read with sky above.
+
+### The new land (version 2)
+- Rolling land around height 62, hills, and **ridged mountains** up to about 120: bare rock from
+  86 up and on steep slopes, **snow** from about 97. Deserts stay out of the mountains; trees
+  don't grow on rock, snow or steep ground.
+- **Caves**: long winding tunnels (some fork, some open at the surface), rooms where some begin,
+  now and then a **big cavern** deep down, and rarely a **ravine** cut open to the sky. No
+  underground lakes yet: they need water, which comes with the weather (M4.7b).
+- **Ores by depth**, in veins: coal from 20 to 104, iron from 5 to 62, and the new **crystal**
+  from 3 to 16 (in about 2 chunks of 5; it needs an iron pickaxe and glows a little).
+- **Crystal** (1-2 per ore, 12 experience) makes, at the Workbench: the **Crystal Lamp** (1 crystal
+  + 1 Iron Ingot → 2; a cold, bright light that reaches further than a torch) and **Crystal
+  Arrows** (2 sticks + 1 crystal + 1 plant fibre → 6; 26 damage, the strongest arrows).
+
+### Zombies
+- **Zombies in the caves**: a player well under the ground (8 blocks or more of it above them)
+  gets zombies out of the dark, day and night, 12-28 m away in the cave itself: 2 near the
+  surface, up to 7 deep down. They keep their night mood when the day comes.
+- **The fair Blood Moon** (old M3.2): 120 zombies at most, shared out evenly between the players
+  alive; players within 40 m of each other share one horde (their shares add up). Day 7 brings
+  40%, day 14 70%, day 21 on all of it (solo: 48, 84, 120; before, about 30). Each second a group
+  short of its number gets up to two more, 20-35 m out from its edge. When someone leaves or
+  dies, the shares are worked out again.
+
+### Clouds
+- Rounder, thicker clouds: billowing edges, darker where they are thick, bright rims towards the
+  sun; at sunset they glow warm from inside.
+- **Their shadows drift over the land** (the ground and built blocks; not in caves or at night).
+
+### Network and saving
+- Protocol 14 (chunks 32 KB, crystal arrows); save format 6.
+
+### Tests
+- The worldgen hash test checks version 1 is still 0.18.0's terrain, and prints both versions'
+  hashes (the PC-vs-Pi check compares them).
+- The mesh test meshes version 1 land, version 2 land and a mountain.
+- The save test reads 64-tall chunk files (with and without block states) as 128 tall, and an old
+  world keeps its terrain version.
+- The autotest: a new world is version 2 and 128 tall; a cave near the spawn, where zombies would
+  find a dark spot; the Blood Moon's shares for 1, 2 and 3 players; the horde comes.
+
+## M4.7b A living world (0.20.0) — outline
+- More animals (deer, wolves, bears, birds), weather (rain, fog, storms; water and underground
+  lakes with it), ambient sound (wind, birds, insects at night) and some music.
+
+## M4.8 Roads and towns (0.21.0) — outline
 - **Roads** connect towns across the world; **wrecked cars** along them can be searched.
 - **Towns**: run-down houses, shops (a gas station, a grocery, a hardware store), farms and barns.
   Buildings have loot in boxes, cabinets, fridges and crates; better loot further from the center.
@@ -459,7 +503,7 @@ Three branches; a rank costs a point, rank 1 can be learned at any level, rank 2
 - Sleeping zombies inside buildings.
 - Then the Pi benchmark with the new world (the old M3.4).
 
-## M4.9 Villages, farming and traders (0.21.0) — outline
+## M4.9 Villages, farming and traders (0.22.0) — outline
 - **Villages**: walled settlements of survivors with fields, safe from zombies, with villagers
   going about their day.
 - **Farming**: seeds from villages and loot; till ground with a hoe, crops grow over in-game days

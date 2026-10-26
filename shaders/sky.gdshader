@@ -1,6 +1,7 @@
 shader_type sky;
 // The sky (gfx.gd sets every uniform from the clock): a colour gradient, the sun and the moon,
-// stars at night and two layers of drifting clouds.
+// stars at night and drifting clouds: since M4.7 rounder and thicker (billowing edges, darker
+// where they are thick, bright rims), glowing warm from inside at sunset.
 
 uniform vec3 top_color : source_color = vec3(0.3, 0.52, 0.9);
 uniform vec3 horizon_color : source_color = vec3(0.66, 0.78, 0.92);
@@ -16,6 +17,7 @@ uniform float cloud_cover = 0.5;
 uniform vec2 cloud_offset = vec2(0.0);
 uniform vec3 cloud_light : source_color = vec3(1.0);
 uniform vec3 cloud_dark : source_color = vec3(0.55, 0.6, 0.7);
+uniform float cloud_glow = 0.0;                // sunset: the clouds glow from inside (0..1)
 
 float hash3(vec3 p) {
 	p = fract(p * 0.3183099 + 0.1);
@@ -88,20 +90,27 @@ void sky() {
 	if (h > 0.0) {
 		// Clouds on a high flat layer: swirled noise for their shapes, a look one step towards
 		// the sun for shading (thick towards the sun = darker), bright thin edges near the sun.
-		vec2 uv = d.xz / (h + 0.08) * 0.75 + cloud_offset;
+		vec2 uv = d.xz / (h + 0.08) * 0.6 + cloud_offset;
 		float fade = smoothstep(0.0, 0.22, h);
 		float n = clouds(uv);
+		// Billowing edges: small round lumps added where a cloud thins out.
+		float lumps = vnoise(uv * 7.0 + cloud_offset * 3.0) * 0.6 + vnoise(uv * 15.0) * 0.4;
 		float lo = 1.0 - cloud_cover;
-		float c = smoothstep(lo - 0.06, lo + 0.22, n) * fade;
+		n += (lumps - 0.5) * 0.09 * (1.0 - smoothstep(lo, lo + 0.25, n));
+		float c = smoothstep(lo - 0.02, lo + 0.13, n) * fade;
 		if (c > 0.001) {
 			vec2 to_sun = normalize(sun_dir.xz + vec2(1e-4)) * 0.06;
 			float n2 = clouds(uv + to_sun);
-			float shade = clamp(0.75 - (n2 - n) * 5.0 + (n - lo) * 0.4, 0.15, 1.1);
+			// Thick middles are darker underneath, thin parts let the light through.
+			float thick = clamp((n - lo) * 3.2, 0.0, 1.0);
+			float shade = clamp(0.92 - (n2 - n) * 5.0 - thick * 0.42, 0.12, 1.1);
 			vec3 cc = mix(cloud_dark, cloud_light, shade);
-			float rim = (1.0 - smoothstep(lo, lo + 0.18, n)) * pow(max(sd, 0.0), 6.0);
-			cc += sun_color * rim * 1.6 * sun_glow;
+			float rim = (1.0 - smoothstep(lo, lo + 0.16, n)) * pow(max(sd, 0.0), 6.0);
+			cc += sun_color * rim * 1.8 * sun_glow;
 			cc += sun_color * pow(max(sd, 0.0), 16.0) * 0.35 * sun_glow;
-			col = mix(col, cc, c * 0.95);
+			// At sunset the clouds glow warm from inside, most where they are thin and towards the sun.
+			cc += sun_color * cloud_glow * (0.35 + 0.65 * pow(max(sd, 0.0), 3.0)) * (1.0 - thick * 0.7) * 0.9;
+			col = mix(col, cc, c * 0.97);
 		}
 	}
 	COLOR = col;

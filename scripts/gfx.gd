@@ -43,6 +43,8 @@ var env: Environment
 var sky_mat: ShaderMaterial
 var sun: DirectionalLight3D
 var _cloud_t := 0.0
+## The clouds' noise for their shadows on the ground (M4.7; the terrain and block shaders).
+var cloud_tex: NoiseTexture2D = null
 var _sky_wait := 0.0
 var _lut_for := -1
 ## Forward+ (the effects below exist) rather than the OpenGL fallback.
@@ -266,6 +268,22 @@ static func moon_basis(t: float) -> Basis:
 
 ## The light, sky and fog for clock time t (hours) on a day. Called every frame; the sky's own
 ## uniforms change a few times a second only (each change updates the sky's light).
+## A seamless noise picture for the clouds' shadows: blobs a couple of hundred metres across.
+static func _make_cloud_tex() -> NoiseTexture2D:
+	var n := FastNoiseLite.new()
+	n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	n.seed = 23
+	n.frequency = 0.012
+	n.fractal_octaves = 4
+	var t := NoiseTexture2D.new()
+	t.width = 256
+	t.height = 256
+	t.seamless = true
+	t.generate_mipmaps = true
+	t.noise = n
+	return t
+
+
 func update_sky(t: float, blood: bool, delta: float) -> void:
 	var day_f := clampf(smoothstep(5.0, 7.0, t) - smoothstep(18.5, 20.5, t), 0.0, 1.0)
 	var dusk_f := maxf(0.0, 1.0 - absf(t - 19.0) / 1.6) + maxf(0.0, 1.0 - absf(t - 6.0) / 1.6)
@@ -305,6 +323,13 @@ func update_sky(t: float, blood: bool, delta: float) -> void:
 	env.volumetric_fog_albedo = fog_col
 	env.volumetric_fog_density = lerpf(0.014 if blood else 0.01, 0.006, day_f) + dusk_f * 0.006
 	_cloud_t += delta
+	# The clouds' shadows drift over the land every frame (only while the sun is up), the same way
+	# the clouds go.
+	if G.world != null and is_instance_valid(G.world) and G.world.render:
+		if cloud_tex == null:
+			cloud_tex = _make_cloud_tex()
+		var shade := clampf(sb.z.y * 3.0, 0.0, 1.0) * day_f * 0.3
+		G.world.set_cloud_shadow(cloud_tex, Vector2(_cloud_t * 2.6, _cloud_t * 0.98), shade, 0.62 if blood else 0.5)
 	_sky_wait -= delta
 	if _sky_wait > 0.0:
 		return
@@ -320,6 +345,7 @@ func update_sky(t: float, blood: bool, delta: float) -> void:
 	sky_mat.set_shader_parameter("moon_size", 0.9975 if blood else 0.9991)
 	sky_mat.set_shader_parameter("stars", 1.0 - day_f)
 	sky_mat.set_shader_parameter("cloud_cover", 0.62 if blood else 0.5)
+	sky_mat.set_shader_parameter("cloud_glow", clampf(dusk_f, 0.0, 1.0) * (0.4 if blood else 1.0))
 	sky_mat.set_shader_parameter("cloud_offset", Vector2(_cloud_t * 0.004, _cloud_t * 0.0015))
 	var cl := Color(1.0, 0.98, 0.95).lerp(Color(1.0, 0.7, 0.5), dusk_f)
 	var night_cl := Color(0.25, 0.04, 0.04) if blood else Color(0.09, 0.1, 0.16)
