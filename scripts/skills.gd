@@ -16,7 +16,7 @@ const RANK_LEVEL := [1, 3, 6, 10, 15]
 ## Blood Moon x2), and for the other things that give some.
 const ZOMBIE_XP := {"walker": 10, "runner": 20, "brute": 50, "crawler": 15, "screamer": 25, "spitter": 25}
 const BOAR_XP := 15
-const ORE_XP := {Blocks.COAL_ORE: 3, Blocks.IRON_ORE: 5}
+const ORE_XP := {Blocks.COAL_ORE: 3, Blocks.IRON_ORE: 5, Blocks.CRYSTAL_ORE: 12}
 const UPGRADE_XP := 3
 const TREE_XP := 2
 

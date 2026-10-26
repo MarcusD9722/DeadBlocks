@@ -98,6 +98,9 @@ const RECIPES := [
 	{"out": Items.ARMOR_FIRST + 17, "n": 1, "needs": {Items.BLOOD_INGOT: 8, Items.BOAR_HIDE: 1}, "st": "bloodforge"},
 	{"out": Items.ARMOR_FIRST + 18, "n": 1, "needs": {Items.BLOOD_INGOT: 6, Items.BOAR_HIDE: 1}, "st": "bloodforge"},
 	{"out": Items.ARMOR_FIRST + 19, "n": 1, "needs": {Items.BLOOD_INGOT: 3, Items.BOAR_HIDE: 1}, "st": "bloodforge"},
+	# M4.7: what the crystal from deep down makes, at the workbench.
+	{"out": Blocks.CRYSTAL_LAMP, "n": 2, "needs": {Items.CRYSTAL: 1, Items.IRON_INGOT: 1}, "st": "workbench"},
+	{"out": Items.CRYSTAL_ARROW, "n": 6, "needs": {Items.STICK: 2, Items.CRYSTAL: 1, Items.FIBER: 1}, "st": "workbench"},
 ]
 
 

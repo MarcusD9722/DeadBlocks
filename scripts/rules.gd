@@ -30,6 +30,8 @@ static func collect(id: int, tool: int, rng: RandomNumberGenerator) -> Dictionar
 			drops = [[Blocks.COBBLE, 1]]
 		Blocks.COAL_ORE:
 			drops = [[Items.COAL, rng.randi_range(1, 2)]]
+		Blocks.CRYSTAL_ORE:
+			drops = [[Items.CRYSTAL, rng.randi_range(1, 2)]]
 		Blocks.LEAVES:
 			var r := rng.randf()
 			if r < 0.28:

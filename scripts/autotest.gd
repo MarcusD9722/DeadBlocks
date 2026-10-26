@@ -189,6 +189,34 @@ func _play() -> void:
 		await _wait(0.4)
 		await _shot("08_bed")
 
+	# M4.7: the deep world. The land reaches higher than 64 now and has caves under it; zombies
+	# come out of the dark where one is well under the ground (game.cave_spot finds their spot).
+	check(w.gen_version == WorldGen.VERSION and WorldGen.H == 128, "a new world has the newest terrain, 128 blocks tall (version %d)" % w.gen_version)
+	var cave := Vector3.INF
+	var here := _base()
+	for r in range(0, 48, 2):
+		for k in 12:
+			var cx := here.x + roundi(cos(k * TAU / 12.0) * r)
+			var cz := here.z + roundi(sin(k * TAU / 12.0) * r)
+			var top: int = w.surface_y(cx, cz)
+			for y in range(4, top - 10):
+				if w.get_block(cx, y, cz) == Blocks.AIR and w.get_block(cx, y + 1, cz) == Blocks.AIR and Blocks.is_solid(w.get_block(cx, y - 1, cz)):
+					cave = Vector3(cx + 0.5, y, cz + 0.5)
+					break
+			if cave != Vector3.INF:
+				break
+		if cave != Vector3.INF:
+			break
+	check(cave != Vector3.INF, "a cave within 48 m of the spawn (%s)" % cave)
+	if cave != Vector3.INF:
+		var spots := []
+		for i in 6:
+			spots.append(g.cave_spot(cave))
+		var good: Array = spots.filter(func(sp): return sp != Vector3.INF)
+		var ok: bool = not good.is_empty() and good.all(func(sp): return w.surface_y(floori(sp.x), floori(sp.z)) >= floori(sp.y) + 6 \
+			and w.get_block(floori(sp.x), floori(sp.y), floori(sp.z)) == Blocks.AIR and Blocks.is_solid(w.get_block(floori(sp.x), floori(sp.y) - 1, floori(sp.z))))
+		check(ok, "zombies would come out of the dark there: %d of 6 tries found a spot under the ground (%s)" % [good.size(), good.slice(0, 2)])
+
 	# Stone with the pickaxe gives cobblestone.
 	var stone_p := _find_block(Blocks.STONE, 6, 6.3)
 	if stone_p.y < -900:
@@ -330,10 +358,16 @@ func _play() -> void:
 		await _wait(0.8)
 		await _shot("10_backpack_beam")
 
-	# Blood Moon, then dawn.
+	# Blood Moon, then dawn. The fair Blood Moon (M4.7): 120 zombies shared out by the players
+	# alive, players within 40 m sharing one horde; 40% on day 7, 70% on day 14, all from day 21.
+	var gs := func(ps: Array, d: int) -> Array: return g.horde_plan(ps, d).map(func(e): return e["want"])
+	check(gs.call([Vector3.ZERO], 7) == [48] and gs.call([Vector3.ZERO], 21) == [120], "solo: 48 on day 7, 120 from day 21 (%s)" % [gs.call([Vector3.ZERO], 7)])
+	var three := [Vector3.ZERO, Vector3(30, 0, 0), Vector3(200, 0, 0)]
+	check(gs.call(three, 14) == [56, 28] or gs.call(three, 14) == [28, 56], "three players, two of them together, on day 14: 56 and 28 (%s)" % [gs.call(three, 14)])
+	check(gs.call([Vector3.ZERO, Vector3(30, 0, 0)], 14) == [84], "one leaves: the other two share it again (%s)" % [gs.call([Vector3.ZERO, Vector3(30, 0, 0)], 14)])
 	G.net.send_chat("/bloodmoon")
 	check(await _until(func(): return g.horde_active, 20.0), "F7 / /bloodmoon: the Blood Moon starts (day %d)" % g.day)
-	check(await _until(func(): return _blood_ids().size() >= 4, 25.0), "the horde comes (%d)" % _blood_ids().size())
+	check(await _until(func(): return _blood_ids().size() >= 12, 30.0), "the horde comes (%d)" % _blood_ids().size())
 	p.set_look(PI, -0.05)
 	await _wait(0.3)
 	await _shot("06_blood_moon")

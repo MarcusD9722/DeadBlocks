@@ -12,7 +12,7 @@ const ITEMS := {
 	Items.STICK: true, Items.FIBER: true, Items.COAL: false, Items.IRON_INGOT: false,
 	Items.STEEL_INGOT: false, Items.BLOOD_INGOT: false, Items.RAW_MEAT: false,
 	Items.COOKED_MEAT: false, Items.BERRIES: false, Items.BANDAGE: false,
-	Items.BLOOD_SHARD: true, Items.BOAR_HIDE: false,
+	Items.BLOOD_SHARD: true, Items.BOAR_HIDE: false, Items.CRYSTAL: true,
 }
 
 static var _block_mat: ShaderMaterial = null
@@ -76,6 +76,10 @@ static func parts(id: int) -> Array:
 			out.append([ToolModels._mesh(func(st): _lump(st, Vector3(-0.03, -0.07, -0.01), Vector3(0.016, 0.04, 0.016), 6)), "shard"])
 		Items.BOAR_HIDE:
 			out.append([ToolModels._mesh(func(st): _pelt(st)), "hide"])
+		Items.CRYSTAL:
+			out.append([ToolModels._mesh(func(st): _lump(st, Vector3(0.0, 0.0, 0.0), Vector3(0.026, 0.1, 0.026), 7)), "crystal"])
+			out.append([ToolModels._mesh(func(st): _lump(st, Vector3(0.03, -0.05, 0.012), Vector3(0.017, 0.058, 0.017), 8)), "crystal"])
+			out.append([ToolModels._mesh(func(st): _lump(st, Vector3(-0.026, -0.06, -0.012), Vector3(0.015, 0.045, 0.015), 9)), "crystal"])
 	return out
 
 
@@ -174,12 +178,15 @@ static func block_has_model(id: int) -> bool:
 ## The natural ground's blocks take the ground's pictures (Tex.terrain_albedo layers, as
 ## SmoothMesher.LAYER): [top, sides, bottom].
 const GROUND := {Blocks.GRASS: [0, 1, 1], Blocks.DIRT: [1, 1, 1], Blocks.STONE: [2, 2, 2], Blocks.SAND: [3, 3, 3],
-	Blocks.COAL_ORE: [4, 4, 4], Blocks.IRON_ORE: [5, 5, 5], Blocks.BEDROCK: [6, 6, 6]}
+	Blocks.COAL_ORE: [4, 4, 4], Blocks.IRON_ORE: [5, 5, 5], Blocks.BEDROCK: [6, 6, 6], Blocks.SNOW: [7, 7, 7],
+	Blocks.CRYSTAL_ORE: [8, 8, 8]}
 static var _ground_mats := {}
 
 
 ## The block as meshes with the world's block material (a door two cells tall); `tex`: G.tex.
 static func block_parts(id: int, tex) -> Array:
+	if id == Blocks.CRYSTAL_LAMP:
+		return [[Decor.mesh(Decor.LAMP), null]]  # (the lamp's model, its materials on it)
 	if GROUND.has(id):
 		var out := []
 		for g in 3:

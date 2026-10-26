@@ -18,6 +18,7 @@ var was_night := false
 var warned := {}
 var spawn_timer := 2.0
 var animal_timer := 1.0
+var cave_timer := 3.0
 var spawn_pos := Vector3.ZERO
 ## Positions the world keeps loaded besides the local player (benchmark explorers now, remote players later).
 var extra_stream_points: Array = []
@@ -762,8 +763,8 @@ func _on_dawn() -> void:
 				near = true
 		if not near:
 			z.queue_free()
-		elif z.kind != "day":
-			z.become_day()
+		elif z.kind != "day" and not z.cave:
+			z.become_day()  # (the cave's own stay as they are: it is always night down there)
 
 
 ## HUD message and sound, skipped on the dedicated server (no HUD, no audio).
@@ -826,28 +827,139 @@ func _server_spawner(delta: float) -> void:
 	var night := is_night()
 	var cap := 2
 	var interval := 9.0
-	if horde_active:
-		cap = 22 + mini(day, 28)
-		interval = 1.0
-	elif night:
+	if night:
 		cap = mini(5 + day, 16)
 		interval = 3.0
-	if spawn_timer <= 0.0:
+	if horde_active:
+		if spawn_timer <= 0.0:
+			spawn_timer = 1.0
+			_horde_spawner(ps, zs)
+	elif spawn_timer <= 0.0:
 		spawn_timer = interval
 		var total := zs.size()
 		for p in ps:
 			if total >= MAX_ZOMBIES:
 				break
 			if _count_near(zs, p, 72.0) < cap:
-				var mood := "horde" if horde_active else ("night" if night else "day")
+				var mood := "night" if night else "day"
 				if spawn_zombie(mood, Vector3.INF, p, zombie_type(mood, day, randf())) != null:
 					total += 1
+	# M4.7: zombies in the dark caves, day and night, more of them the deeper you are.
+	cave_timer -= delta
+	if cave_timer <= 0.0:
+		cave_timer = 4.0
+		for p in ps:
+			_cave_spawner(p, zs)
 	if animal_timer <= 0.0:
 		animal_timer = 6.0
 		if not night:
 			for p in ps:
 				if _count_near(animals, p, 80.0) < 6:
 					_spawn_animal(p)
+
+
+## The fair Blood Moon (docs/M3-plan.md, built in M4.7): 120 zombies at most, shared out evenly
+## between the players alive; players within 40 m of each other are one group and share one
+## horde (their shares add up). The first Blood Moon (day 7) brings 40% of it, day 14 70%,
+## day 21 on all of it. Each second, every group short of its number gets up to two more, spawned
+## 20-35 m out from the group's edge.
+func _horde_spawner(ps: Array, zs: Array) -> void:
+	var total := zs.size()
+	for g in horde_plan(ps, day):
+		var c: Vector3 = g["center"]
+		var r: float = g["radius"]
+		var want: int = g["want"]
+		var have := 0
+		for z in zs:
+			if is_instance_valid(z) and z.kind == "horde" and Vector3(z.global_position.x - c.x, 0.0, z.global_position.z - c.z).length() <= r + 45.0:
+				have += 1
+		for k in mini(2, want - have):
+			if total >= MAX_ZOMBIES:
+				return
+			var at := _find_ground(r + 20.0, r + 35.0, false, c)
+			if at != Vector3.INF and spawn_zombie("horde", at, Vector3.INF, zombie_type("horde", day, randf())) != null:
+				total += 1
+
+
+## The Blood Moon's groups and how many zombies each should have on `d`: [{"center", "radius"
+## (the group's edge from its center), "want"}, ...] for the players alive at ps.
+static func horde_plan(ps: Array, d: int) -> Array:
+	var out := []
+	if ps.is_empty():
+		return out
+	var scale := 0.4 if d < 14 else (0.7 if d < 21 else 1.0)
+	var share := float(MAX_ZOMBIES) / ps.size() * scale
+	for g in player_groups(ps, 40.0):
+		var c := Vector3.ZERO
+		for p in g:
+			c += p
+		c /= g.size()
+		var r := 0.0
+		for p in g:
+			r = maxf(r, Vector3(p.x - c.x, 0.0, p.z - c.z).length())
+		out.append({"center": c, "radius": r, "want": roundi(share * g.size())})
+	return out
+
+
+## Players within `link` metres of each other (through others too) as groups: [[pos, ...], ...].
+static func player_groups(ps: Array, link: float) -> Array:
+	var group := PackedInt32Array()
+	group.resize(ps.size())
+	for i in ps.size():
+		group[i] = i
+	var changed := true
+	while changed:
+		changed = false
+		for i in ps.size():
+			for j in ps.size():
+				if group[j] < group[i] and (ps[i] as Vector3).distance_to(ps[j]) <= link:
+					group[i] = group[j]
+					changed = true
+	var out := {}
+	for i in ps.size():
+		if not out.has(group[i]):
+			out[group[i]] = []
+		out[group[i]].append(ps[i])
+	return out.values()
+
+
+## A player down in a cave (well under the ground above them) gets zombies out of the dark:
+## 2 at once near the surface, up to 7 deep down, spawned 12-28 m away in the cave itself.
+func _cave_spawner(p: Vector3, zs: Array) -> void:
+	var pc := Vector3i(floori(p.x), floori(p.y), floori(p.z))
+	var under: int = world.surface_y(pc.x, pc.z) - pc.y
+	if under < 8 or zs.size() >= MAX_ZOMBIES:
+		return
+	var cap := clampi(2 + int(under / 12.0) + (1 if p.y < 30.0 else 0), 2, 7)
+	if _count_near(zs, p, 32.0) >= cap:
+		return
+	var spot := cave_spot(p)
+	if spot != Vector3.INF:
+		var z := spawn_zombie("night", spot, Vector3.INF, zombie_type("night", day, randf()))
+		if z != null:
+			z.cave = true
+
+
+## A dark spot in a cave 12-28 m from p (level with it, give or take 10 blocks): air for two
+## blocks over solid ground, with the ground's surface well above. INF if none is found.
+func cave_spot(p: Vector3) -> Vector3:
+	for attempt in 12:
+		var a := randf() * TAU
+		var d := randf_range(12.0, 28.0)
+		var x := floori(p.x + cos(a) * d)
+		var z := floori(p.z + sin(a) * d)
+		var top: int = world.surface_y(x, z)
+		var y0 := clampi(floori(p.y) - 10, 2, WorldGen.H - 3)
+		var y1 := clampi(floori(p.y) + 10, 2, WorldGen.H - 3)
+		for y in range(y0, y1 + 1):
+			if y + 6 > top:
+				break
+			var at := Vector3(x + 0.5, y + 0.02, z + 0.5)
+			if not world.is_ready_at(at):
+				break
+			if Blocks.is_solid(world.get_block(x, y - 1, z)) and world.get_block(x, y, z) == Blocks.AIR and world.get_block(x, y + 1, z) == Blocks.AIR:
+				return at
+	return Vector3.INF
 
 
 static func _near_any(pos: Vector3, ps: Array, dist: float) -> bool:

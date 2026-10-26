@@ -510,6 +510,10 @@ func _build(nb: Array) -> MeshBuf:
 					var yaw := float(gen.hash2(x + k_x(nb), z + k_z(nb)) % 628) / 100.0
 					buf.decor.append([Decor.BERRY, Transform3D(Basis(Vector3.UP, yaw), Vector3(x + 0.5, y if is_nan(gy) else gy, z + 0.5))])
 					continue
+				if b == Blocks.CRYSTAL_LAMP:
+					buf.decor.append([Decor.LAMP, Transform3D(Basis.IDENTITY, Vector3(x + 0.5, y, z + 0.5))])
+					buf.lights.append(Vector3i(x, y, z))
+					continue
 				if shp[b] == 2:
 					buf.cross(x, y, z, tl[1], SmoothMesher.sky_at(sky, x, y, z))
 					if b == Blocks.TORCH or b == Blocks.CAMPFIRE:
@@ -827,8 +831,14 @@ func apply_mesh(c: Chunk, k: Vector2i, buf: MeshBuf) -> void:
 		o.omni_range = 8.0
 		o.light_energy = 0.9
 		o.omni_attenuation = 1.6
+		var lamp: bool = c.data.size() > 0 and c.data[lp.x + lp.z * CH + lp.y * CH2] == Blocks.CRYSTAL_LAMP
+		if lamp:
+			# A crystal lamp (M4.7): a cold, bright light that reaches further than a torch.
+			o.light_color = Color(0.6, 0.78, 1.0)
+			o.omni_range = 12.0
+			o.light_energy = 1.25
 		c.node.add_child(o)
-		o.position = Vector3(lp) + Vector3(0.5, 0.8, 0.5)
+		o.position = Vector3(lp) + (Vector3(0.5, 0.9, 0.5) if lamp else Vector3(0.5, 0.8, 0.5))
 		c.lights.append(o)
 	_apply_trees(c, buf)
 	_apply_decor(c, buf)
@@ -903,10 +913,10 @@ func _apply_decor(c: Chunk, buf: MeshBuf) -> void:
 		var mmi := MultiMeshInstance3D.new()
 		mmi.multimesh = mm
 		var big := Decor.is_big(model)
-		if not big:
+		if not big or model == Decor.LAMP:
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		c.node.add_child(mmi)
-		var e := [mmi, big, model == Decor.BERRY]
+		var e := [mmi, big, model == Decor.BERRY or model == Decor.LAMP]
 		_decor_range(e)
 		c.decor.append(e)
 

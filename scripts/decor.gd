@@ -21,6 +21,7 @@ const MODELS := [
 	["Bush_Common", 0.5, true], ["Rock_Medium_1", 0.3, true], ["Rock_Medium_2", 0.32, true],
 	["Rock_Medium_3", 0.28, true],
 	["", 1.0, true],  # the berry bush (made in code, BERRY)
+	["", 1.0, true],  # the crystal lamp (a block, made in code, LAMP; M4.7)
 ]
 const GRASS := 0
 const FLOWER := 4
@@ -32,6 +33,7 @@ const PEBBLE := 14
 const BUSH := 19
 const ROCK := 20
 const BERRY := 23
+const LAMP := 24
 const DIR := "res://assets/models/nature/"
 
 static var _meshes := {}
@@ -111,7 +113,7 @@ static func is_big(model: int) -> bool:
 static func mesh(model: int) -> Mesh:
 	if _meshes.has(model):
 		return _meshes[model]
-	var m: Mesh = _berry_bush() if model == BERRY else Trees.merged_mesh(DIR + MODELS[model][0] + ".gltf")
+	var m: Mesh = _berry_bush() if model == BERRY else (_lamp() if model == LAMP else Trees.merged_mesh(DIR + MODELS[model][0] + ".gltf"))
 	_meshes[model] = m
 	return m
 
@@ -151,4 +153,33 @@ static func _berry_bush() -> Mesh:
 	m.roughness = 0.3
 	m.metallic_specular = 0.7
 	out.surface_set_material(out.get_surface_count() - 1, m)
+	return out
+
+
+## The crystal lamp block (M4.7): a small iron cage on the floor round a glowing crystal.
+static func _lamp() -> Mesh:
+	var out := ArrayMesh.new()
+	var iron := SurfaceTool.new()
+	iron.begin(Mesh.PRIMITIVE_TRIANGLES)
+	ToolModels._rod(iron, Vector3(0, 0.0, 0), Vector3(0, 0.05, 0), 0.19, 0.19, Vector3.RIGHT, 0.3)
+	ToolModels._rod(iron, Vector3(0, 0.54, 0), Vector3(0, 0.6, 0), 0.16, 0.12, Vector3.RIGHT, 0.4)
+	ToolModels._rod(iron, Vector3(0, 0.6, 0), Vector3(0, 0.66, 0), 0.03, 0.03)
+	for k in 4:
+		var a := TAU * k / 4.0 + PI * 0.25
+		var c := Vector3(cos(a), 0.0, sin(a)) * 0.15
+		ToolModels._rod(iron, c + Vector3(0, 0.04, 0), c + Vector3(0, 0.56, 0), 0.016, 0.016)
+	iron.commit(out)
+	out.surface_set_material(0, ToolModels.material("iron"))
+	var glow := SurfaceTool.new()
+	glow.begin(Mesh.PRIMITIVE_TRIANGLES)
+	ItemModels._lump(glow, Vector3(0, 0.3, 0), Vector3(0.07, 0.2, 0.07), 11)
+	ItemModels._lump(glow, Vector3(0.05, 0.18, 0.03), Vector3(0.04, 0.1, 0.04), 12)
+	glow.commit(out)
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.5, 0.7, 1.0)
+	m.emission_enabled = true
+	m.emission = Color(0.45, 0.68, 1.0)
+	m.emission_energy_multiplier = 2.2
+	m.roughness = 0.15
+	out.surface_set_material(1, m)
 	return out

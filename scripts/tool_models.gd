@@ -45,6 +45,9 @@ const MATS := {
 	"shard": ["", 0, 1.0, Color(0.62, 0.03, 0.07), 0.3, 0.14, 0.0, Color(0.4, 0.0, 0.04)],
 	"hide": ["", 0, 1.0, Color(0.44, 0.29, 0.17), 0.0, 0.92, 0.6, Color(0, 0, 0)],
 	"darkhide": ["", 0, 1.0, Color(0.3, 0.19, 0.11), 0.0, 0.95, 0.6, Color(0, 0, 0)],
+	# M4.7: the crystal from deep down (it glows), and the blue fletching of its arrows.
+	"crystal": ["", 0, 1.0, Color(0.42, 0.6, 1.0), 0.3, 0.12, 0.0, Color(0.22, 0.38, 0.95)],
+	"bluefeather": ["", 0, 1.0, Color(0.25, 0.4, 0.85), 0.0, 1.0, 0.4, Color(0, 0, 0)],
 }
 ## A head's material by tier (0 = hand, 1 wood ... 5 Blood Steel).
 const TIER_MAT := ["wood", "wood", "stone", "iron", "steel", "blood"]
@@ -262,11 +265,12 @@ static func _build(id: int) -> Array:
 			parts.append([_mesh(func(st): _crossbow_stock(st)), "wood"])
 			parts.append([_mesh(func(st): _crossbow_prod(st)), "iron"])
 			return parts
-		Items.STONE_ARROW, Items.IRON_ARROW:
-			var tip := "flint" if id == Items.STONE_ARROW else "iron"
+		Items.STONE_ARROW, Items.IRON_ARROW, Items.CRYSTAL_ARROW:
+			var tip := "flint" if id == Items.STONE_ARROW else ("iron" if id == Items.IRON_ARROW else "crystal")
+			var vanes := "feather" if id == Items.STONE_ARROW else ("redfeather" if id == Items.IRON_ARROW else "bluefeather")
 			parts.append([_mesh(func(st): _rod(st, Vector3(0, 0, 0.35), Vector3(0, 0, -0.31), 0.0042, 0.0042)), "lightwood"])
-			parts.append([_mesh(func(st): _arrow_head(st, -0.3, 0.06, 0.013 if id == Items.STONE_ARROW else 0.011)), tip])
-			parts.append([_mesh(func(st): _vanes(st, 0.2, 0.33, 0.013, 3)), "feather" if id == Items.STONE_ARROW else "redfeather"])
+			parts.append([_mesh(func(st): _arrow_head(st, -0.3, 0.06, 0.013 if id != Items.IRON_ARROW else 0.011)), tip])
+			parts.append([_mesh(func(st): _vanes(st, 0.2, 0.33, 0.013, 3)), vanes])
 			return parts
 		Items.IRON_BOLT:
 			parts.append([_mesh(func(st): _rod(st, Vector3(0, 0, 0.15), Vector3(0, 0, -0.12), 0.0055, 0.0055)), "lightwood"])
@@ -813,7 +817,8 @@ static func _block_model(id: int, tex) -> Node3D:
 	for part in ItemModels.block_parts(id, tex):
 		var mi := MeshInstance3D.new()
 		mi.mesh = part[0]
-		mi.material_override = part[1]
+		if part[1] != null:
+			mi.material_override = part[1]
 		root.add_child(mi)
 	return root
 

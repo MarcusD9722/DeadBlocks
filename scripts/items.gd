@@ -52,6 +52,9 @@ const IRON_BOLT := 144
 ## M4.5: hide from boars (leather armor), and armor: ARMOR_FIRST + tier * 4 + slot, the tiers
 ## padded, leather, iron, steel, Blood Steel and the slots head, chest, legs, feet.
 const BOAR_HIDE := 145
+## M4.7: crystal from the crystal ore deep down, and the arrows tipped with it.
+const CRYSTAL := 146
+const CRYSTAL_ARROW := 147
 const ARMOR_FIRST := 150
 const ARMOR_SLOTS := ["head", "chest", "legs", "feet"]
 const ARMOR_SLOT_NAMES := ["Head", "Chest", "Legs", "Feet"]
@@ -62,7 +65,7 @@ const ARMOR_SET := [10.0, 22.0, 38.0, 52.0, 66.0]
 const ARMOR_SHARE := [0.2, 0.4, 0.25, 0.15]
 
 ## What can fly (thrown or shot): its index here is the projectile's type on the network.
-const PROJECTILES := [STONE_ARROW, IRON_ARROW, IRON_BOLT, WOOD_SPEAR, STONE_SPEAR, IRON_SPEAR]
+const PROJECTILES := [STONE_ARROW, IRON_ARROW, IRON_BOLT, WOOD_SPEAR, STONE_SPEAR, IRON_SPEAR, CRYSTAL_ARROW]
 ## Seconds to draw the bow fully; the crossbow's reload; holding a spear back to throw it hard.
 const BOW_DRAW_S := 0.9
 const CROSSBOW_RELOAD_S := 1.6
@@ -127,6 +130,8 @@ const DATA := {
 	143: {"name": "Iron Arrow", "ammo_of": "arrow", "dmg": 18.0},
 	144: {"name": "Iron Bolt", "ammo_of": "bolt", "dmg": 28.0},
 	145: {"name": "Boar Hide"},
+	146: {"name": "Crystal"},
+	147: {"name": "Crystal Arrow", "ammo_of": "arrow", "dmg": 26.0},
 	# Armor (M4.5): "armor" is the slot (0 head, 1 chest, 2 legs, 3 feet), "atier" the tier.
 	150: {"name": "Padded Hood", "armor": 0, "atier": 0},
 	151: {"name": "Padded Vest", "armor": 1, "atier": 0},

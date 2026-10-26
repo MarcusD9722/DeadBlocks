@@ -60,6 +60,8 @@ var notice_range := 10.0
 var chase_range := 20.0
 ## Noticed a player (came close, was hit, or was spawned by /spawn) and is after them.
 var hunting := false
+## Came out of the dark in a cave (M4.7): it keeps its night mood when the day comes.
+var cave := false
 var player_dmg := 8.0
 var block_dmg := 10.0
 var blood := false

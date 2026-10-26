@@ -607,6 +607,14 @@ func _item_icon(id: int) -> Image:
 					if dx * dx + dy * dy < 1.0:
 						img.set_pixel(x, y, _c(132, 92, 60) if (x + y) % 3 else _c(110, 74, 48))
 			_disc(img, 7, 7, 1.6, _c(160, 118, 80))
+		Items.CRYSTAL:
+			# A blue-violet crystal shard (M4.7).
+			for y in range(2, 15):
+				var w := 2.8 - absf(y - 8.0) * 0.38
+				for x in range(16):
+					var dx := x + 0.5 - (8.0 + (y - 8) * 0.15)
+					if absf(dx) < w:
+						img.set_pixel(x, y, _c(150, 190, 255) if dx < 0.0 else _c(90, 110, 220))
 		_ when Items.armor_slot(id) >= 0:
 			var col: Color = [_c(196, 176, 126), _c(124, 80, 48), _c(196, 200, 208), _c(150, 172, 194), _c(176, 30, 42)][Items.armor_tier(id)]
 			match Items.armor_slot(id):
@@ -670,8 +678,8 @@ func _item_icon(id: int) -> Image:
 				_line(img, 5, 3, 13, 11, _c(110, 112, 118), 1)
 			elif Items.info(id).has("ammo_of"):
 				_line(img, 3, 13, 12, 4, _c(196, 170, 120), 1)
-				_line(img, 11, 5, 13, 3, _c(90, 90, 98) if id == Items.STONE_ARROW else _c(170, 172, 180), 2)
-				_line(img, 2, 12, 4, 14, _c(230, 228, 220) if id != Items.IRON_ARROW else _c(200, 50, 40), 2)
+				_line(img, 11, 5, 13, 3, _c(90, 90, 98) if id == Items.STONE_ARROW else (_c(170, 172, 180) if id != Items.CRYSTAL_ARROW else _c(130, 170, 255)), 2)
+				_line(img, 2, 12, 4, 14, _c(230, 228, 220) if id == Items.STONE_ARROW else (_c(200, 50, 40) if id == Items.IRON_ARROW else _c(70, 100, 210)), 2)
 			elif id == Items.WOOD_CLUB:
 				_line(img, 3, 13, 11, 5, _c(130, 96, 56), 3)
 				_disc(img, 11.5, 4.5, 2.7, _c(152, 114, 68))
